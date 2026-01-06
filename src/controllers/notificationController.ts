@@ -1,525 +1,324 @@
-import { Response } from 'express';
-import MedicalRecord from '../models/medicalRecord';
+import { Request, Response } from 'express';
 import { AuthRequest } from '../middlewares/authmiddleware';
+import { notificationService } from '../utils/notificationService';
 import Notification from '../models/notification';
+import NotificationDevice from '../models/notificationDevice';
+import User from '../models/user';
 
-
-// Mark notification as read
-export const markNotificationAsRead = async (req: AuthRequest, res: Response): Promise<void> => {
-  try {
-    const { notificationId } = req.params;
-
-    if (!req.user) {
-      res.status(401).json({
-        success: false,
-        message: 'Authentication required'
-      });
-      return;
-    }
-
-    const notification = await Notification.findOneAndUpdate(
-      { 
-        _id: notificationId, 
-        user_id: req.user._id 
-      },
-      { 
-        is_read: true,
-        read_at: new Date()
-      },
-      { new: true }
-    );
-
-    if (!notification) {
-      res.status(404).json({
-        success: false,
-        message: 'Notification not found'
-      });
-      return;
-    }
-
-    res.status(200).json({
-      success: true,
-      message: 'Notification marked as read',
-      data: notification
-    });
-
-  } catch (error) {
-    console.error('❌ Error marking notification as read:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
-  }
-};
-
-// Get unread notifications count
-export const getUnreadNotificationsCount = async (req: AuthRequest, res: Response): Promise<void> => {
-  try {
-    if (!req.user) {
-      res.status(401).json({
-        success: false,
-        message: 'Authentication required'
-      });
-      return;
-    }
-
-    const count = await Notification.countDocuments({
-      user_id: req.user._id,
-      is_read: false
-    });
-
-    res.status(200).json({
-      success: true,
-      data: { count }
-    });
-
-  } catch (error) {
-    console.error('❌ Error getting unread notifications count:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
-  }
-};
-
-// Get all notifications for user
+// ================================
+// GET USER NOTIFICATIONS
+// ================================
 export const getUserNotifications = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
-      res.status(401).json({
-        success: false,
-        message: 'Authentication required'
-      });
+      res.status(401).json({ success: false, message: 'Authentication required' });
       return;
     }
 
-    const { page = 1, limit = 20, type } = req.query;
-    const skip = (parseInt(page as string) - 1) * parseInt(limit as string);
+    const { page = 1, limit = 20, read, type, category, priority, start_date, end_date } = req.query;
 
-    const filter: any = { user_id: req.user._id };
-    if (type) {
-      filter.type = type;
-    }
-
-    const notifications = await Notification.find(filter)
-      .sort({ created_at: -1 })
-      .skip(skip)
-      .limit(parseInt(limit as string))
-      .populate('related_record')
-      .populate('user_id', 'name avatar');
-
-    const total = await Notification.countDocuments(filter);
-
-    res.status(200).json({
-      success: true,
-      data: notifications,
-      pagination: {
-        page: parseInt(page as string),
-        limit: parseInt(limit as string),
-        total,
-        pages: Math.ceil(total / parseInt(limit as string))
-      }
+    const result = await notificationService.getUserNotifications(req.user._id, {
+      page: Number(page),
+      limit: Number(limit),
+      read: read as any,
+      type: type as string,
+      category: category as string,
+      priority: priority as string,
+      start_date: start_date ? new Date(start_date as string) : undefined,
+      end_date: end_date ? new Date(end_date as string) : undefined,
     });
 
+    res.status(200).json({ success: true, data: result.notifications, pagination: result.pagination });
   } catch (error) {
-    console.error('❌ Error getting user notifications:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
+    console.error('❌ Error getting notifications:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
 
-// Complete treatment step (for patient)
-export const completeTreatmentStep = async (req: AuthRequest, res: Response): Promise<void> => {
+// ================================
+// GET NOTIFICATION BY ID
+// ================================
+export const getNotificationById = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { recordId, stepNumber } = req.params;
-    const { patientMessage } = req.body;
-
     if (!req.user) {
-      res.status(401).json({
-        success: false,
-        message: 'Authentication required'
-      });
+      res.status(401).json({ success: false, message: 'Authentication required' });
       return;
     }
 
-    const medicalRecord = await MedicalRecord.findById(recordId);
-    if (!medicalRecord) {
-      res.status(404).json({
-        success: false,
-        message: 'Medical record not found'
-      });
+    const { notificationId } = req.params;
+
+    const notification = await Notification.findOne({ _id: notificationId, user_id: req.user._id });
+    if (!notification) {
+      res.status(404).json({ success: false, message: 'Notification not found' });
       return;
     }
 
-    // Check if user has permission
-    if (medicalRecord.user_id.toString() !== req.user._id.toString()) {
-      res.status(403).json({
-        success: false,
-        message: 'Access denied to this medical record'
-      });
-      return;
-    }
+    if (!notification.read) await notification.markAsRead();
 
-    const step = medicalRecord.treatment_plan.find(s => s.stepNumber === parseInt(stepNumber));
-    if (!step) {
-      res.status(404).json({
-        success: false,
-        message: 'Treatment step not found'
-      });
-      return;
-    }
-
-    if (step.status !== 'in-progress') {
-      res.status(400).json({
-        success: false,
-        message: 'Step is not in progress'
-      });
-      return;
-    }
-
-    // Update step status
-    step.status = 'completed';
-    step.completedAt = new Date();
-    step.patient_message = patientMessage;
-
-    await medicalRecord.save();
-
-    res.status(200).json({
-      success: true,
-      message: 'Step completed successfully',
-      data: {
-        step,
-        record: {
-          _id: medicalRecord._id,
-          consultation_status: medicalRecord.consultation_status,
-          current_step: medicalRecord.current_step
-        }
-      }
-    });
-
+    res.status(200).json({ success: true, data: notification.toNotificationResponse() });
   } catch (error) {
-    console.error('❌ Error completing treatment step:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
+    console.error('❌ Error getting notification:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
 
-// Approve treatment step (for doctor)
-export const approveTreatmentStep = async (req: AuthRequest, res: Response): Promise<void> => {
+// ================================
+// GET UNREAD COUNT
+// ================================
+export const getUnreadCount = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { recordId, stepNumber } = req.params;
-    const { doctorNotes } = req.body;
-
     if (!req.user) {
-      res.status(401).json({
-        success: false,
-        message: 'Authentication required'
-      });
+      res.status(401).json({ success: false, message: 'Authentication required' });
       return;
     }
 
-    const medicalRecord = await MedicalRecord.findById(recordId);
-    if (!medicalRecord) {
-      res.status(404).json({
-        success: false,
-        message: 'Medical record not found'
-      });
-      return;
-    }
-
-    // Check if user is the assigned doctor
-    if (medicalRecord.doctor_id.toString() !== req.user._id.toString()) {
-      res.status(403).json({
-        success: false,
-        message: 'Access denied to this medical record'
-      });
-      return;
-    }
-
-    const step = medicalRecord.treatment_plan.find(s => s.stepNumber === parseInt(stepNumber));
-    if (!step) {
-      res.status(404).json({
-        success: false,
-        message: 'Treatment step not found'
-      });
-      return;
-    }
-
-    if (step.status !== 'completed') {
-      res.status(400).json({
-        success: false,
-        message: 'Step is not completed'
-      });
-      return;
-    }
-
-    // Update step status and doctor notes
-    step.status = 'approved';
-    step.doctorNotes = doctorNotes;
-    step.approved_at = new Date();
-    step.approved_by = req.user._id;
-    step.approval_requested = false;
-
-    // Activate next step if exists
-    const nextStep = medicalRecord.treatment_plan.find(s => s.stepNumber === parseInt(stepNumber) + 1);
-    if (nextStep && nextStep.status === 'pending') {
-      nextStep.status = 'in-progress';
-      medicalRecord.current_step = parseInt(stepNumber) + 1;
-    }
-
-    // Check if all steps are completed
-    const allStepsCompleted = medicalRecord.treatment_plan.every(s => 
-      s.status === 'approved' || s.status === 'completed'
-    );
-
-    if (allStepsCompleted) {
-      medicalRecord.consultation_status = 'completed';
-      medicalRecord.status = 'resolved';
-    }
-
-    await medicalRecord.save();
-
-    res.status(200).json({
-      success: true,
-      message: 'Step approved successfully',
-      data: {
-        step,
-        record: {
-          _id: medicalRecord._id,
-          consultation_status: medicalRecord.consultation_status,
-          current_step: medicalRecord.current_step,
-          status: medicalRecord.status
-        }
-      }
-    });
-
+    const count = await notificationService.getUnreadCount(req.user._id);
+    res.status(200).json({ success: true, data: { count } });
   } catch (error) {
-    console.error('❌ Error approving treatment step:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
+    console.error('❌ Error getting unread count:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
 
-// Activate treatment step
-export const activateTreatmentStep = async (req: AuthRequest, res: Response): Promise<void> => {
+// ================================
+// MARK AS READ
+// ================================
+export const markAsRead = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { recordId, stepNumber } = req.params;
-
     if (!req.user) {
-      res.status(401).json({
-        success: false,
-        message: 'Authentication required'
-      });
+      res.status(401).json({ success: false, message: 'Authentication required' });
       return;
     }
 
-    const medicalRecord = await MedicalRecord.findById(recordId);
-    if (!medicalRecord) {
-      res.status(404).json({
-        success: false,
-        message: 'Medical record not found'
-      });
+    const { notificationId } = req.params;
+
+    const notification = await notificationService.markAsRead(notificationId, req.user._id);
+    if (!notification) {
+      res.status(404).json({ success: false, message: 'Notification not found' });
       return;
     }
 
-    // Check if user has permission (patient can activate their own steps)
-    if (medicalRecord.user_id.toString() !== req.user._id.toString()) {
-      res.status(403).json({
-        success: false,
-        message: 'Access denied to this medical record'
-      });
-      return;
-    }
-
-    const step = medicalRecord.treatment_plan.find(s => s.stepNumber === parseInt(stepNumber));
-    if (!step) {
-      res.status(404).json({
-        success: false,
-        message: 'Treatment step not found'
-      });
-      return;
-    }
-
-    if (step.status !== 'pending') {
-      res.status(400).json({
-        success: false,
-        message: 'Step is not pending'
-      });
-      return;
-    }
-
-    // Update step status
-    step.status = 'in-progress';
-    medicalRecord.current_step = parseInt(stepNumber);
-
-    await medicalRecord.save();
-
-    res.status(200).json({
-      success: true,
-      message: 'Step activated successfully',
-      data: {
-        step,
-        record: {
-          _id: medicalRecord._id,
-          current_step: medicalRecord.current_step
-        }
-      }
-    });
-
+    res.status(200).json({ success: true, message: 'Notification marked as read', data: notification.toNotificationResponse() });
   } catch (error) {
-    console.error('❌ Error activating treatment step:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
+    console.error('❌ Error marking notification as read:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
 
-// Add new treatment step (doctor only)
-export const addTreatmentStep = async (req: AuthRequest, res: Response): Promise<void> => {
+
+export const markAllAsRead = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { recordId } = req.params;
-    const stepData = req.body;
-
     if (!req.user) {
-      res.status(401).json({
-        success: false,
-        message: 'Authentication required'
-      });
+      res.status(401).json({ success: false, message: 'Authentication required' });
       return;
     }
 
-    const medicalRecord = await MedicalRecord.findById(recordId);
-    if (!medicalRecord) {
-      res.status(404).json({
-        success: false,
-        message: 'Medical record not found'
-      });
-      return;
-    }
-
-    // Check if user is the assigned doctor
-    if (medicalRecord.doctor_id.toString() !== req.user._id.toString()) {
-      res.status(403).json({
-        success: false,
-        message: 'Only the assigned doctor can add treatment steps'
-      });
-      return;
-    }
-
-    // Add new step
-    const newStepNumber = medicalRecord.treatment_plan.length + 1;
-    const newStep = {
-      stepNumber: newStepNumber,
-      title: stepData.title || 'New Treatment Step',
-      description: stepData.description || 'Please update this description',
-      medication: stepData.medication,
-      dosage: stepData.dosage,
-      duration: stepData.duration,
-      instructions: stepData.instructions,
-      status: newStepNumber === 1 ? 'in-progress' : 'pending'
-    };
-
-    medicalRecord.treatment_plan.push(newStep);
-
-    // Update current step if this is the first step
-    if (newStepNumber === 1) {
-      medicalRecord.current_step = 1;
-    }
-
-    await medicalRecord.save();
-
-    res.status(201).json({
-      success: true,
-      message: 'Treatment step added successfully',
-      data: {
-        step: newStep,
-        record: {
-          _id: medicalRecord._id,
-          current_step: medicalRecord.current_step
-        }
-      }
+    const count = await notificationService.markAllAsRead(req.user._id);
+        const updatedNotifications = await Notification.find({ 
+      user_id: req.user._id 
+    }).sort({ created_at: -1 }).limit(20).lean();
+    
+    res.status(200).json({ 
+      success: true, 
+      message: `${count} notifications marked as read`, 
+      data: { 
+        count,
+        notifications: updatedNotifications
+      } 
     });
-
   } catch (error) {
-    console.error('❌ Error adding treatment step:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
+    console.error('❌ Error marking all notifications as read:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
 
-// Complete consultation
-export const completeConsultation = async (req: AuthRequest, res: Response): Promise<void> => {
+
+export const registerDevice = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { recordId } = req.params;
-
     if (!req.user) {
-      res.status(401).json({
-        success: false,
-        message: 'Authentication required'
-      });
+      res.status(401).json({ success: false, message: 'Authentication required' });
       return;
     }
 
-    const medicalRecord = await MedicalRecord.findById(recordId);
-    if (!medicalRecord) {
-      res.status(404).json({
-        success: false,
-        message: 'Medical record not found'
-      });
+    const { device_token, device_type, platform, browser } = req.body;
+
+    if (!device_token || !device_type) {
+      res.status(400).json({ success: false, message: 'Device token and type are required' });
       return;
     }
 
-    // Check if user is the assigned doctor
-    if (medicalRecord.doctor_id.toString() !== req.user._id.toString()) {
-      res.status(403).json({
-        success: false,
-        message: 'Only the assigned doctor can complete consultations'
-      });
-      return;
-    }
-
-    if (medicalRecord.consultation_status === 'completed') {
-      res.status(400).json({
-        success: false,
-        message: 'Consultation is already completed'
-      });
-      return;
-    }
-
-    // Update consultation status
-    medicalRecord.consultation_status = 'completed';
-    medicalRecord.status = 'resolved';
-    medicalRecord.updated_at = new Date();
-
-    await medicalRecord.save();
-
-    res.status(200).json({
-      success: true,
-      message: 'Consultation completed successfully',
-      data: {
-        record: {
-          _id: medicalRecord._id,
-          consultation_status: medicalRecord.consultation_status,
-          status: medicalRecord.status,
-          updated_at: medicalRecord.updated_at
-        }
-      }
-    });
-
+    const device = await notificationService.registerDevice(req.user._id, device_token, device_type, platform, browser);
+    res.status(200).json({ success: true, message: 'Device registered successfully', data: device });
   } catch (error) {
-    console.error('❌ Error completing consultation:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error'
+    console.error('❌ Error registering device:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+// ================================
+// UNREGISTER DEVICE
+// ================================
+export const unregisterDevice = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { device_token } = req.body;
+
+    if (!device_token) {
+      res.status(400).json({ success: false, message: 'Device token is required' });
+      return;
+    }
+
+    await notificationService.unregisterDevice(device_token);
+    res.status(200).json({ success: true, message: 'Device unregistered successfully' });
+  } catch (error) {
+    console.error('❌ Error unregistering device:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+// ================================
+// GET USER DEVICES
+// ================================
+export const getUserDevices = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ success: false, message: 'Authentication required' });
+      return;
+    }
+
+    const devices = await NotificationDevice.find({ user_id: req.user._id, is_active: true }).sort({ updated_at: -1 });
+    res.status(200).json({ success: true, data: devices });
+  } catch (error) {
+    console.error('❌ Error getting user devices:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+// ================================
+// DELETE NOTIFICATION
+// ================================
+export const deleteNotification = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ success: false, message: 'Authentication required' });
+      return;
+    }
+
+    const { notificationId } = req.params;
+
+    const notification = await Notification.findOneAndDelete({ _id: notificationId, user_id: req.user._id });
+    if (!notification) {
+      res.status(404).json({ success: false, message: 'Notification not found' });
+      return;
+    }
+
+    res.status(200).json({ success: true, message: 'Notification deleted successfully' });
+  } catch (error) {
+    console.error('❌ Error deleting notification:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+// ================================
+// CLEAR ALL NOTIFICATIONS
+// ================================
+export const clearAllNotifications = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ success: false, message: 'Authentication required' });
+      return;
+    }
+
+    const result = await Notification.deleteMany({ user_id: req.user._id });
+    res.status(200).json({ success: true, message: 'All notifications cleared', data: { deletedCount: result.deletedCount } });
+  } catch (error) {
+    console.error('❌ Error clearing all notifications:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+// ================================
+// GET NOTIFICATION STATS
+// ================================
+export const getNotificationStats = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ success: false, message: 'Authentication required' });
+      return;
+    }
+
+    const { days = 30 } = req.query;
+    const stats = await notificationService.getStatistics(req.user._id, Number(days));
+
+    res.status(200).json({ success: true, data: stats });
+  } catch (error) {
+    console.error('❌ Error getting notification stats:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+// ================================
+// CREATE TEST NOTIFICATION
+// ================================
+export const createTestNotification = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user || req.user.role !== 'admin') {
+      res.status(403).json({ success: false, message: 'Admin access required' });
+      return;
+    }
+
+    const { user_id, template_key, title, message, type, channels, variables } = req.body;
+
+    const notification = await notificationService.sendNotification({
+      user_id: user_id || req.user._id,
+      template_key,
+      title: title || 'Test Notification',
+      message: message || 'This is a test notification',
+      type: type || 'system',
+      channels: channels || ['in_app', 'email'],
+      variables: variables || {},
+      metadata: { test: true },
     });
+
+    res.status(200).json({ success: true, message: 'Test notification sent', data: notification });
+  } catch (error) {
+    console.error('❌ Error creating test notification:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+// ================================
+// HANDLE CLICK ACTION
+// ================================
+export const clickNotificationAction = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ success: false, message: 'Authentication required' });
+      return;
+    }
+
+    const { notificationId } = req.params;
+
+    const notification = await Notification.findOne({ _id: notificationId, user_id: req.user._id });
+    if (!notification) {
+      res.status(404).json({ success: false, message: 'Notification not found' });
+      return;
+    }
+
+    await notification.markAsClicked();
+
+    if (notification.action_url) {
+      res.status(200).json({
+        success: true,
+        data: {
+          action_url: notification.action_url,
+          action_label: notification.action_label,
+        },
+      });
+    } else {
+      res.status(200).json({ success: true, message: 'Notification action clicked' });
+    }
+  } catch (error) {
+    console.error('❌ Error clicking notification action:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };

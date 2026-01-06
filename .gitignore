@@ -13,6 +13,13 @@ build/
 .env.local
 .env.*.local
 
+# Uploads
+src/uploads/
+mongo_backup/
+
+# macOS
+.DS_Store
+
 # Logs
 *.log
 logs/

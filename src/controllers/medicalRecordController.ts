@@ -1,10 +1,34 @@
 import MedicalRecord from '../models/medicalRecord';
 import Notification from '../models/notification';
-import {AuthRequest} from '../middlewares/authMiddleware';
-import { Response } from 'express';
+import {AuthRequest} from '../middlewares/authmiddleware';
+
+// Get medical records for the logged-in user (patient or doctor)
+export const getMyRecords = async (req: AuthRequest, res: any) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
+
+    const records = await MedicalRecord.find({
+      $or: [
+        { user_id: req.user._id },
+        { doctor_id: req.user._id }
+      ]
+    })
+    .populate('doctor_id', 'name email avatar specialty_id')
+    .populate('user_id', 'name email avatar phoneNumber dateOfBirth gender')
+    .populate('appointment_id')
+    .sort({ updated_at: -1 });
+
+    res.status(200).json(records);
+  } catch (error) {
+    console.error('Error fetching my records:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
 
 // Start treatment: initialize processes
-export const startTreatment = async (req: AuthRequest, res: Response) => {
+export const startTreatment = async (req: AuthRequest, res: any) => {
   const { id } = req.params;
   try {
     const record = await MedicalRecord.findById(id);
@@ -26,12 +50,13 @@ export const startTreatment = async (req: AuthRequest, res: Response) => {
 };
 
 // Patient marks process as completed
-export const completeProcess = async (req, res) => {
+export const completeProcess = async (req: any, res: any) => {
   const { id, processId } = req.params;
   try {
     const record = await MedicalRecord.findById(id);
     if (!record) return res.status(404).json({ error: 'Record not found' });
 
+    // @ts-ignore
     const process = record.processes.id(processId);
     if (!process) return res.status(404).json({ error: 'Process not found' });
 
@@ -53,13 +78,14 @@ export const completeProcess = async (req, res) => {
 };
 
 // Doctor confirms process with notes
-export const confirmProcess = async (req, res) => {
+export const confirmProcess = async (req: any, res: any) => {
   const { id, processId } = req.params;
   const { notes } = req.body;
   try {
     const record = await MedicalRecord.findById(id);
     if (!record) return res.status(404).json({ error: 'Record not found' });
 
+    // @ts-ignore
     const process = record.processes.id(processId);
     if (!process) return res.status(404).json({ error: 'Process not found' });
 
@@ -81,9 +107,10 @@ export const confirmProcess = async (req, res) => {
   }
 };
 
-export const requestStepApproval = async (req: AuthRequest, res: Response): Promise<void> => {
+export const requestStepApproval = async (req: AuthRequest, res: any): Promise<void> => {
   try {
-    const { recordId, stepNumber } = req.params;
+    // FIX: Changed recordId to id to match route parameter /:id/...
+    const { id, stepNumber } = req.params;
     const { message, patientName } = req.body;
 
     if (!req.user) {
@@ -104,7 +131,7 @@ export const requestStepApproval = async (req: AuthRequest, res: Response): Prom
     }
 
     // Find medical record
-    const medicalRecord = await MedicalRecord.findById(recordId)
+    const medicalRecord = await MedicalRecord.findById(id)
       .populate('doctor_id', 'name email')
       .populate('user_id', 'name email');
 
@@ -173,9 +200,6 @@ export const requestStepApproval = async (req: AuthRequest, res: Response): Prom
 
     await medicalRecord.save();
 
-    // TODO: Send push notification to doctor
-    // You can integrate with Firebase Cloud Messaging or other push services here
-
     console.log(`📬 Approval request sent to doctor ${medicalRecord.doctor_id.name} for step ${stepNumber}`);
 
     res.status(200).json({
@@ -187,7 +211,8 @@ export const requestStepApproval = async (req: AuthRequest, res: Response): Prom
           id: notification._id,
           title: notification.title,
           message: notification.message
-        }
+        },
+        record: medicalRecord // Return updated record
       }
     });
 
@@ -201,7 +226,7 @@ export const requestStepApproval = async (req: AuthRequest, res: Response): Prom
 };
 
 // Get approval requests for doctor
-export const getApprovalRequests = async (req: AuthRequest, res: Response): Promise<void> => {
+export const getApprovalRequests = async (req: AuthRequest, res: any): Promise<void> => {
   try {
     if (!req.user) {
       res.status(401).json({
@@ -264,16 +289,17 @@ export const getApprovalRequests = async (req: AuthRequest, res: Response): Prom
   }
 };
 
-export const activateTreatmentStep = async (req: AuthRequest, res: Response): Promise<void> => {
+export const activateTreatmentStep = async (req: AuthRequest, res: any): Promise<void> => {
   try {
-    const { recordId, stepNumber } = req.params;
+    // FIX: Changed recordId to id to match route parameter /:id/...
+    const { id, stepNumber } = req.params;
 
     if (!req.user) {
       res.status(401).json({ success: false, message: 'Authentication required' });
       return;
     }
 
-    const medicalRecord = await MedicalRecord.findById(recordId);
+    const medicalRecord = await MedicalRecord.findById(id);
     if (!medicalRecord) {
       res.status(404).json({ success: false, message: 'Medical record not found' });
       return;
@@ -292,6 +318,15 @@ export const activateTreatmentStep = async (req: AuthRequest, res: Response): Pr
     }
 
     if (step.status !== 'pending') {
+      // If already in progress, just return success so frontend stays in sync
+      if (step.status === 'in-progress') {
+         res.status(200).json({
+            success: true,
+            message: 'Step is already in progress',
+            data: { step, record: medicalRecord }
+         });
+         return;
+      }
       res.status(400).json({ success: false, message: 'Step is not pending' });
       return;
     }
@@ -304,7 +339,7 @@ export const activateTreatmentStep = async (req: AuthRequest, res: Response): Pr
     res.status(200).json({
       success: true,
       message: 'Step activated successfully',
-      data: { step, record: { _id: medicalRecord._id, current_step: medicalRecord.current_step } }
+      data: { step, record: medicalRecord }
     });
   } catch (error) {
     console.error('❌ Error activating treatment step:', error);
@@ -312,49 +347,28 @@ export const activateTreatmentStep = async (req: AuthRequest, res: Response): Pr
   }
 };
 
-// medicalRecordController.ts - SỬA HÀM completeTreatmentStep
-export const completeTreatmentStep = async (req: AuthRequest, res: Response): Promise<void> => {
+export const completeTreatmentStep = async (req: AuthRequest, res: any): Promise<void> => {
   try {
-    // SỬA: Đọc đúng parameter name từ routes
-    const { id: recordId, stepNumber } = req.params;
+    // Params: id (record ID), stepNumber
+    const { id, stepNumber } = req.params;
     const { patientMessage } = req.body;
 
-    console.log('🔍 [BACKEND] Complete step request details:', {
-      recordId,
-      stepNumber,
-      patientMessage,
-      params: req.params,
-      user: req.user ? req.user._id : 'No user'
-    });
+    console.log('🔍 [BACKEND] Complete step request:', { id, stepNumber });
 
     if (!req.user) {
-      console.log('❌ [BACKEND] No user in request');
       res.status(401).json({ success: false, message: 'Authentication required' });
       return;
     }
 
-    // Validate recordId
-    if (!recordId || recordId === 'undefined') {
-      console.log('❌ [BACKEND] Invalid recordId:', recordId);
-      res.status(400).json({ success: false, message: 'Invalid record ID' });
-      return;
-    }
-
-    console.log('🔍 [BACKEND] Looking for medical record:', recordId);
-    const medicalRecord = await MedicalRecord.findById(recordId);
+    const medicalRecord = await MedicalRecord.findById(id);
     
     if (!medicalRecord) {
-      console.log('❌ [BACKEND] Medical record not found with ID:', recordId);
       res.status(404).json({ success: false, message: 'Medical record not found' });
       return;
     }
 
-    console.log('✅ [BACKEND] Medical record found:', medicalRecord._id);
-    console.log('🔍 [BACKEND] Treatment plan steps:', medicalRecord.treatment_plan?.length);
-
     // Check permission
     if (medicalRecord.user_id.toString() !== req.user._id.toString()) {
-      console.log('❌ [BACKEND] Access denied. User:', req.user._id, 'Record user:', medicalRecord.user_id);
       res.status(403).json({ success: false, message: 'Access denied' });
       return;
     }
@@ -363,16 +377,21 @@ export const completeTreatmentStep = async (req: AuthRequest, res: Response): Pr
     const step = medicalRecord.treatment_plan.find(s => s.stepNumber === stepNumberInt);
     
     if (!step) {
-      console.log('❌ [BACKEND] Treatment step not found. Step number:', stepNumberInt);
-      console.log('🔍 [BACKEND] Available steps:', medicalRecord.treatment_plan.map(s => s.stepNumber));
       res.status(404).json({ success: false, message: 'Treatment step not found' });
       return;
     }
 
-    console.log('✅ [BACKEND] Step found:', step.title, 'Status:', step.status);
-
     if (step.status !== 'in-progress') {
-      console.log('❌ [BACKEND] Step is not in progress. Current status:', step.status);
+        // If already completed, handle gracefully
+        if (step.status === 'completed' || step.status === 'approved') {
+             res.status(200).json({
+                success: true,
+                message: 'Step already completed',
+                data: { step, record: medicalRecord }
+            });
+            return;
+        }
+      console.log(`❌ [BACKEND] Invalid Status: ${step.status} for step ${stepNumber}`);
       res.status(400).json({ success: false, message: 'Step is not in progress' });
       return;
     }
@@ -381,10 +400,12 @@ export const completeTreatmentStep = async (req: AuthRequest, res: Response): Pr
     step.status = 'completed';
     step.completedAt = new Date();
     step.patient_message = patientMessage || "I have completed this step";
+    // Auto-trigger approval request flag here if you want seamless flow, 
+    // OR keep it separate as per your UI flow (which seems to have a specific modal for request)
+    step.approval_requested = true; 
+    step.approval_requested_at = new Date();
     
-    console.log('💾 [BACKEND] Saving medical record...');
     await medicalRecord.save();
-    console.log('✅ [BACKEND] Step completed successfully');
 
     // Notify doctor
     try {
@@ -396,7 +417,6 @@ export const completeTreatmentStep = async (req: AuthRequest, res: Response): Pr
         related_record: medicalRecord._id,
         priority: 'medium'
       });
-      console.log('📬 [BACKEND] Notification created for doctor');
     } catch (notifError) {
       console.error('⚠️ [BACKEND] Failed to create notification:', notifError);
     }
@@ -410,7 +430,7 @@ export const completeTreatmentStep = async (req: AuthRequest, res: Response): Pr
       }
     });
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('❌ [BACKEND] Error completing treatment step:', error);
     res.status(500).json({ 
       success: false, 
@@ -420,10 +440,11 @@ export const completeTreatmentStep = async (req: AuthRequest, res: Response): Pr
   }
 };
 
-export const changeTreatmentPlanStatus = async (req: AuthRequest, res: Response): Promise<void> => {
+export const changeTreatmentPlanStatus = async (req: AuthRequest, res: any): Promise<void> => {
   try {
     const { recordId, processId } = req.params;
     const { action } = req.body;
+    
     if (!req.user) {
       res.status(401).json({ success: false, message: 'Authentication required' });
       return;
@@ -441,6 +462,7 @@ export const changeTreatmentPlanStatus = async (req: AuthRequest, res: Response)
       return;
     }
 
+    // Find step by ID (mongoose subdocument id) or match logic if needed
     const step = medicalRecord.treatment_plan.id(processId);
     if (!step) {
       res.status(404).json({ success: false, message: 'Treatment step not found' });

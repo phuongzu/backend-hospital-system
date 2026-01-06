@@ -7,6 +7,49 @@ import MedicalRecord from '../models/medicalRecord';
 import { AuthRequest } from '../middlewares/authmiddleware';
 import Review from '../models/review';
 import UserInfo from '../models/UserInfor';
+import { notificationService } from '../utils/notificationService'; // THÊM IMPORT
+import { emailService } from '../utils/emailService'; // THÊM IMPORT
+import { smsService } from '../utils/smsService'; // THÊM IMPORT
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
+
+const uploadDir = path.join(__dirname, '..', 'uploads', 'avatars');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const userId = (req as any).user?._id;
+    const timestamp = Date.now();
+    const originalExt = path.extname(file.originalname);
+    
+    // Tên file đơn giản: avatar_userId_timestamp.ext
+    const simpleFilename = `avatar_${userId}_${timestamp}${originalExt}`;
+    cb(null, simpleFilename);
+  }
+});
+
+
+const upload = multer({ 
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = /jpeg|jpg|png|gif|webp/;
+    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = allowedTypes.test(file.mimetype);
+    
+    if (mimetype && extname) {
+      cb(null, true);
+    } else {
+      cb(new Error('Chỉ chấp nhận file ảnh (jpeg, jpg, png, gif, webp)'));
+    }
+  }
+});
 
 
 const handleError = (res, error, message = 'Internal server error') => {
@@ -17,6 +60,94 @@ const handleError = (res, error, message = 'Internal server error') => {
     error: process.env.NODE_ENV === 'development' ? error.message : undefined
   });
 };
+
+// ========== HELPER FUNCTIONS ==========
+
+// Get alternative time slots
+const getAlternativeTimeSlots = async (doctorId: string, date: Date): Promise<string[]> => {
+  try {
+    const allTimeSlots = [
+      '09:00', '09:30', '10:00', '10:30', '11:00', '11:30',
+      '14:00', '14:30', '15:00', '15:30', '16:00', '16:30'
+    ];
+
+    const bookedAppointments = await Appointment.find({
+      doctor_id: doctorId,
+      appointment_date: date,
+      status: { $in: ['pending', 'confirmed'] }
+    }).select('time_slot');
+
+    const bookedSlots = bookedAppointments.map(app => app.time_slot);
+    return allTimeSlots.filter(slot => !bookedSlots.includes(slot));
+  } catch (error) {
+    console.error('Error getting alternative slots:', error);
+    return [];
+  }
+};
+
+// Calculate end time based on start time and duration
+const calculateEndTime = (startTime: string, durationMinutes: number): string => {
+  const [hours, minutes] = startTime.split(':').map(Number);
+  const startDate = new Date();
+  startDate.setHours(hours, minutes, 0, 0);
+  
+  const endDate = new Date(startDate.getTime() + durationMinutes * 60000);
+  
+  const endHours = endDate.getHours().toString().padStart(2, '0');
+  const endMinutes = endDate.getMinutes().toString().padStart(2, '0');
+  
+  return `${endHours}:${endMinutes}`;
+};
+
+// Determine urgency based on symptoms and reason
+const determineUrgency = (symptoms: string[], reason: string): string => {
+  const urgentKeywords = ['emergency', 'severe', 'pain', 'bleeding', 'fever', 'chest pain', 'shortness of breath'];
+  const reasonLower = reason.toLowerCase();
+  
+  if (urgentKeywords.some(keyword => reasonLower.includes(keyword))) {
+    return 'high';
+  }
+  
+  if (symptoms && symptoms.length > 0) {
+    const symptomText = symptoms.join(' ').toLowerCase();
+    if (urgentKeywords.some(keyword => symptomText.includes(keyword))) {
+      return 'medium';
+    }
+  }
+  
+  return 'low';
+};
+
+// Determine priority for medical record
+const determinePriority = (symptoms: string[], reason: string): string => {
+  const urgency = determineUrgency(symptoms, reason);
+  
+  switch (urgency) {
+    case 'high':
+      return 'urgent';
+    case 'medium':
+      return 'high';
+    default:
+      return 'medium';
+  }
+};
+
+// Get preparation instructions based on specialty
+const getPreparationInstructions = (specialtyId?: string): string => {
+  const instructions: Record<string, string> = {
+    'cardiology': 'Please bring any previous ECG or echocardiogram reports. Avoid caffeine 24 hours before appointment.',
+    'gastroenterology': 'Come fasting for at least 8 hours before your appointment.',
+    'neurology': 'Bring any previous MRI or CT scan reports. List all current medications.',
+    'orthopedics': 'Wear comfortable clothing. Bring any X-ray or MRI reports.',
+    'dermatology': 'Do not apply creams or lotions to the affected area before appointment.',
+    'default': 'Bring your ID and insurance card. Arrive 15 minutes early to complete paperwork.'
+  };
+
+  // In real implementation, you would map specialtyId to specialty name
+  return instructions[specialtyId || 'default'];
+};
+
+// ========== CONTROLLER FUNCTIONS ==========
 
 // Fixed Emergency Contact Update
 export const updateEmergencyContact = async (req: AuthRequest, res: Response): Promise<void> => {
@@ -138,8 +269,6 @@ export const postEmergencyContact = async (req: AuthRequest, res: Response): Pro
     handleError(res, error, 'Error adding emergency contact');
   }
 };
-
-
 
 // Fixed Medications Update
 export const updateMedications = async (req: AuthRequest, res: Response): Promise<void> => {
@@ -516,7 +645,6 @@ export const calculateBMI = (height: number, weight: number): number => {
   return 0;
 };
 
-
 export const getAppointmentAvailability = async (req: Request, res: Response) => {
   try {
     const { doctor_id, date } = req.query;
@@ -568,94 +696,431 @@ export const getAppointmentAvailability = async (req: Request, res: Response) =>
   }
 };
 
-export const bookAppointment = async (req: Request, res: Response) => {
+export const bookAppointment = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { doctor_id, user_id, specialty_id, appointment_date, time_slot, reason, notes } = req.body;
+    const { 
+      doctor_id, 
+      specialty_id, 
+      appointment_date, 
+      time_slot, 
+      reason, 
+      notes,
+      symptoms,
+      preferred_language,
+      insurance_info,
+      emergency_contact_required 
+    } = req.body;
     
-    console.log('Booking appointment request:', req.body);
+    const user_id = req.user?._id;
+    const user_name = req.user?.name;
+    const user_email = req.user?.email;
+    const user_phone = req.user?.phoneNumber;
+
+    console.log('=== BOOK APPOINTMENT ===');
+    console.log('Request from user:', { user_id, user_name, user_email });
+    console.log('Appointment details:', { 
+      doctor_id, 
+      appointment_date, 
+      time_slot, 
+      reason 
+    });
 
     // Validate required fields
-    if (!doctor_id || !user_id || !appointment_date || !time_slot) {
-      return res.status(400).json({ 
-        message: 'Missing required fields',
-        required: ['doctor_id', 'user_id', 'appointment_date', 'time_slot']
+    if (!doctor_id || !appointment_date || !time_slot) {
+      res.status(400).json({ 
+        success: false,
+        message: 'Doctor ID, appointment date, and time slot are required',
+        required_fields: ['doctor_id', 'appointment_date', 'time_slot']
       });
+      return;
     }
 
-    // Validate ObjectId formats
-    if (!mongoose.Types.ObjectId.isValid(doctor_id)) {
-      return res.status(400).json({ message: 'Invalid doctor ID format' });
+    // Validate date format
+    const appointmentDate = new Date(appointment_date);
+    if (isNaN(appointmentDate.getTime())) {
+      res.status(400).json({ 
+        success: false,
+        message: 'Invalid appointment date format'
+      });
+      return;
     }
 
-    if (!mongoose.Types.ObjectId.isValid(user_id)) {
-      return res.status(400).json({ message: 'Invalid user ID format' });
+    // Check if appointment date is in the future
+    const now = new Date();
+    if (appointmentDate <= now) {
+      res.status(400).json({ 
+        success: false,
+        message: 'Appointment date must be in the future'
+      });
+      return;
     }
 
-    // Check if doctor exists
-    const doctor = await Doctor.findById(doctor_id);
+    // Check if doctor exists and is available
+    const doctor = await Doctor.findById(doctor_id)
+      .populate('user_id', 'name email phoneNumber status')
+      .populate('specialty_id', 'name description');
+
     if (!doctor) {
-      return res.status(404).json({ message: 'Doctor not found' });
+      res.status(404).json({ 
+        success: false,
+        message: 'Doctor not found' 
+      });
+      return;
     }
 
-    // Check if user exists
-    const user = await User.findById(user_id);
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
+    // Check if doctor is available (status working)
+    if (doctor.user_id?.status !== 'working') {
+      res.status(400).json({ 
+        success: false,
+        message: `Doctor is currently ${doctor.user_id?.status}. Please choose another doctor.`
+      });
+      return;
     }
 
-    // Check for conflicting appointments
+    // Check if doctor is available for appointments
+    if (doctor.isAvailable === false) {
+      res.status(400).json({ 
+        success: false,
+        message: 'Doctor is not accepting new appointments at this time'
+      });
+      return;
+    }
     const existingAppointment = await Appointment.findOne({
       doctor_id,
-      appointment_date,
+      appointment_date: appointmentDate,
       time_slot,
       status: { $in: ['pending', 'confirmed'] }
     });
 
     if (existingAppointment) {
-      return res.status(409).json({ 
+      res.status(409).json({ 
+        success: false,
         message: 'Time slot not available',
-        conflict: true
+        data: {
+          conflict: true,
+          suggested_slots: await getAlternativeTimeSlots(doctor_id, appointmentDate)
+        }
       });
+      return;
     }
+
+    // Calculate appointment end time (default 30 minutes)
+    const appointmentEndTime = calculateEndTime(time_slot, 30); // SỬA: gọi hàm trực tiếp
 
     // Create new appointment
     const appointment = new Appointment({
       doctor_id,
       user_id,
       specialty_id: specialty_id || doctor.specialty_id,
-      appointment_date: new Date(appointment_date),
+      appointment_date: appointmentDate,
       time_slot,
+      appointment_end_time: appointmentEndTime,
       reason: reason || 'General consultation',
       notes: notes || '',
+      symptoms: symptoms || [],
+      preferred_language: preferred_language || 'en',
+      insurance_info: insurance_info || {},
+      emergency_contact_required: emergency_contact_required || false,
       status: 'pending',
       created_at: new Date(),
+      metadata: {
+        booked_via: 'patient_portal',
+        user_agent: req.headers['user-agent'],
+        ip_address: req.ip
+      }
     });
 
     await appointment.save();
 
-    // Populate the appointment data for response
+    // Populate appointment data
     const populatedAppointment = await Appointment.findById(appointment._id)
-      .populate('doctor_id', 'name email phoneNumber specialty_id')
-      .populate('user_id', 'name email');
+      .populate('doctor_id', 'name email phoneNumber specialty_id consultation_fee')
+      .populate('user_id', 'name email phoneNumber dateOfBirth gender')
+      .populate('specialty_id', 'name description');
 
-    res.status(201).json({
+    // ========== GỬI THÔNG BÁO CHO BỆNH NHÂN ==========
+    try {
+      await notificationService.sendNotification({
+        user_id: user_id.toString(),
+        template_key: 'appointment_booked',
+        variables: {
+          doctor_name: doctor.user_id?.name || 'Doctor',
+          appointment_date: appointmentDate.toLocaleDateString(),
+          appointment_time: time_slot,
+          specialty: doctor.specialty_id?.name || 'General Medicine'
+        },
+        type: 'appointment',
+        category: 'success',
+        priority: 'medium',
+        related_record: appointment._id.toString(),
+        related_record_type: 'appointment',
+        data: {
+          appointment: {
+            id: appointment._id.toString(),
+            date: appointmentDate.toISOString(),
+            time: time_slot,
+            reason: reason,
+            status: 'pending'
+          },
+          doctor: {
+            name: doctor.user_id?.name,
+            specialty: doctor.specialty_id?.name,
+            consultation_fee: doctor.consultation_fee
+          },
+          patient: {
+            name: user_name,
+            email: user_email
+          }
+        },
+        channels: ['in_app', 'email', 'sms'],
+        action_url: `/appointments/${appointment._id}`,
+        action_label: 'View Appointment Details'
+      });
+
+      console.log('✅ Appointment booking notification sent to patient');
+    } catch (patientNotifError) {
+      console.error('❌ Error sending patient notification:', patientNotifError);
+    }
+
+    // ========== GỬI THÔNG BÁO CHO BÁC SĨ ==========
+    try {
+      const doctorUserId = doctor.user_id?._id;
+      if (doctorUserId) {
+        await notificationService.sendNotification({
+          user_id: doctorUserId.toString(),
+          template_key: 'new_appointment_request',
+          variables: {
+            patient_name: user_name || 'Patient',
+            appointment_date: appointmentDate.toLocaleDateString(),
+            appointment_time: time_slot,
+            reason: reason || 'General consultation'
+          },
+          type: 'appointment',
+          category: 'info',
+          priority: 'medium',
+          related_record: appointment._id.toString(),
+          related_record_type: 'appointment',
+          data: {
+            appointment: {
+              id: appointment._id.toString(),
+              date: appointmentDate.toISOString(),
+              time: time_slot,
+              reason: reason,
+              symptoms: symptoms
+            },
+            patient: {
+              name: user_name,
+              email: user_email,
+              phone: user_phone
+            },
+            urgency: determineUrgency(symptoms, reason)
+          },
+          channels: ['in_app', 'email'],
+          action_url: `/doctor/appointments/${appointment._id}`,
+          action_label: 'Review Appointment'
+        });
+
+        console.log('✅ Appointment request notification sent to doctor');
+      }
+    } catch (doctorNotifError) {
+      console.error('❌ Error sending doctor notification:', doctorNotifError);
+    }
+
+    // ========== GỬI EMAIL XÁC NHẬN ==========
+    if (user_email) {
+      try {
+        await emailService.sendAppointmentConfirmationEmail(
+          user_email,
+          user_name || 'Patient',
+          {
+            appointment_id: appointment._id.toString(),
+            doctor_name: doctor.user_id?.name || 'Doctor',
+            doctor_specialty: doctor.specialty_id?.name || 'General Medicine',
+            appointment_date: appointmentDate.toLocaleDateString(),
+            appointment_time: time_slot,
+            appointment_end_time: appointmentEndTime,
+            location: 'Main Hospital - Room 101', // This would come from doctor profile
+            consultation_fee: doctor.consultation_fee,
+            preparation_instructions: getPreparationInstructions(specialty_id), // SỬA: gọi hàm trực tiếp
+            cancellation_policy: 'Cancel at least 24 hours in advance to avoid fees.',
+            contact_info: 'Call 123-456-7890 for assistance'
+          }
+        );
+
+        console.log(`✅ Appointment confirmation email sent to ${user_email}`);
+      } catch (emailError) {
+        console.error('❌ Error sending confirmation email:', emailError);
+      }
+    }
+
+    // ========== GỬI SMS REMINDER (nếu có số điện thoại) ==========
+    if (user_phone && smsService.isAvailable()) {
+      try {
+        // Schedule reminder for 1 day before appointment
+        const reminderDate = new Date(appointmentDate);
+        reminderDate.setDate(reminderDate.getDate() - 1);
+
+        await notificationService.sendNotification({
+          user_id: user_id.toString(),
+          title: 'Appointment Reminder',
+          message: `Reminder: Your appointment with Dr. ${doctor.user_id?.name} is tomorrow at ${time_slot}.`,
+          type: 'reminder',
+          category: 'info',
+          priority: 'medium',
+          scheduled_time: reminderDate,
+          channels: ['sms', 'push'],
+          data: {
+            appointment_id: appointment._id.toString(),
+            appointment_time: time_slot,
+            doctor_name: doctor.user_id?.name
+          }
+        });
+
+        console.log('✅ SMS reminder scheduled');
+      } catch (smsError) {
+        console.error('❌ Error scheduling SMS reminder:', smsError);
+      }
+    }
+
+    // ========== TẠO MEDICAL RECORD PLACEHOLDER ==========
+    try {
+      const medicalRecord = new MedicalRecord({
+        appointment_id: appointment._id,
+        user_id: user_id,
+        doctor_id: doctor_id,
+        consultation_status: 'scheduled',
+        status: 'pending',
+        symptoms: symptoms || [],
+        reason: reason,
+        notes: `Appointment scheduled for ${appointmentDate.toLocaleDateString()} at ${time_slot}`,
+        priority: determinePriority(symptoms, reason), // SỬA: gọi hàm trực tiếp
+        created_at: new Date()
+      });
+
+      await medicalRecord.save();
+      console.log('✅ Medical record placeholder created');
+    } catch (recordError) {
+      console.error('❌ Error creating medical record:', recordError);
+      // Continue even if medical record creation fails
+    }
+
+    // ========== UPDATE DOCTOR'S SCHEDULE ==========
+    try {
+      // This would update doctor's calendar/schedule
+      // For now, just log the booking
+      console.log(`📅 Doctor ${doctor.user_id?.name} now has appointment at ${time_slot} on ${appointmentDate.toLocaleDateString()}`);
+    } catch (scheduleError) {
+      console.error('❌ Error updating doctor schedule:', scheduleError);
+    }
+
+    // ========== LOG ACTIVITY ==========
+    try {
+      // Log booking activity
+      const activityLog = {
+        action: 'appointment_booked',
+        user_id: user_id,
+        description: `Appointment booked with Dr. ${doctor.user_id?.name} for ${appointmentDate.toLocaleDateString()} at ${time_slot}`,
+        metadata: {
+          appointment_id: appointment._id.toString(),
+          doctor_id: doctor_id,
+          time_slot: time_slot,
+          reason: reason
+        },
+        timestamp: new Date()
+      };
+
+      // Save to activity log collection or database
+      console.log('📝 Activity logged:', activityLog);
+    } catch (logError) {
+      console.error('❌ Error logging activity:', logError);
+    }
+
+    // ========== PREPARE RESPONSE ==========
+    const responseData = {
+      success: true,
       message: 'Appointment booked successfully',
-      appointment: populatedAppointment
-    });
+      data: {
+        appointment: {
+          _id: appointment._id,
+          appointment_date: appointment.appointment_date,
+          time_slot: appointment.time_slot,
+          appointment_end_time: appointment.appointment_end_time,
+          reason: appointment.reason,
+          status: appointment.status,
+          created_at: appointment.created_at
+        },
+        doctor: {
+          _id: doctor._id,
+          name: doctor.user_id?.name,
+          specialty: doctor.specialty_id?.name,
+          consultation_fee: doctor.consultation_fee
+        },
+        patient: {
+          _id: user_id,
+          name: user_name,
+          email: user_email
+        },
+        notifications: {
+          patient_notified: true,
+          doctor_notified: true,
+          email_sent: !!user_email,
+          sms_reminder_scheduled: !!user_phone
+        },
+        next_steps: [
+          'Wait for doctor confirmation',
+          'Arrive 15 minutes before appointment time',
+          'Bring ID and insurance card',
+          'Complete any pre-appointment forms if required'
+        ]
+      }
+    };
 
-  } catch (error) {
-    console.error('Error booking appointment:', error);
+    res.status(201).json(responseData);
+
+  } catch (error: any) {
+    console.error('❌ Error booking appointment:', error);
     
+    // Send error notification to admin
+    try {
+      await notificationService.sendNotification({
+        user_id: 'admin', // This would be actual admin ID
+        title: 'Error Booking Appointment',
+        message: `Error booking appointment: ${error.message}`,
+        type: 'system',
+        category: 'error',
+        priority: 'high',
+        data: {
+          error: error.message,
+          user_id: req.user?._id,
+          timestamp: new Date().toISOString()
+        }
+      });
+    } catch (notifError) {
+      console.error('❌ Error sending error notification:', notifError);
+    }
+
+    // Handle specific error types
     if (error instanceof mongoose.Error.ValidationError) {
-      return res.status(400).json({ 
-        message: 'Validation error', 
+      res.status(400).json({ 
+        success: false,
+        message: 'Validation error',
         errors: error.errors 
       });
+      return;
+    }
+    
+    if (error.code === 11000) {
+      res.status(409).json({ 
+        success: false,
+        message: 'Duplicate appointment detected'
+      });
+      return;
     }
     
     res.status(500).json({ 
-      message: 'Error booking appointment', 
-      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+      success: false,
+      message: 'Error booking appointment',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
@@ -723,8 +1188,6 @@ export const updateReview = async (req: AuthRequest, res: Response): Promise<voi
   }
 };
 
-
-
 export const getAllDoctors = async (req: Request, res: Response) => {
   try {
     const doctors = await Doctor.find()
@@ -737,7 +1200,6 @@ export const getAllDoctors = async (req: Request, res: Response) => {
     res.status(500).json({ message: 'Error fetching doctors', error });
   }
 };
-
 
 export const getAllMedicalRecordsForPatient = async (req: Request, res: Response) => {
   try {
@@ -776,7 +1238,7 @@ export const getAllAppointmentsForPatient = async (req: AuthRequest, res: Respon
       .sort({ appointment_date: -1, time_slot: -1 });
 
     if (!appointments || appointments.length === 0) {
-      res.status(404).json({ message: 'You don’t have any appointments yet. Tap here to schedule one.' });
+      res.status(404).json({ message: 'You don\'t have any appointments yet. Tap here to schedule one.' });
       return;
     }
     
@@ -786,7 +1248,6 @@ export const getAllAppointmentsForPatient = async (req: AuthRequest, res: Respon
     res.status(500).json({ message: 'Error fetching appointments', error });
   }
 };
-
 
 export const editAppointment = async (req: Request, res: Response) => {
   try {
@@ -886,7 +1347,6 @@ export const getMyMedicalRecords = async (req: AuthRequest, res: Response) => {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
-
 
 export const getUser = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
@@ -1112,7 +1572,6 @@ export const postDoctorReview = async (req: AuthRequest, res: Response): Promise
   }
 };
 
-
 export const getDoctorReviews = async (req: Request, res: Response): Promise<void> => {
   try {
     const doctor_id = req.params.doctor_id;
@@ -1190,5 +1649,291 @@ export const deleteReview = async (req: AuthRequest, res: Response): Promise<voi
   } catch (error) {
     console.error('Error deleting review:', error);
     res.status(500).json({ message: 'Error deleting review', error });
+  }
+};
+
+export const uploadAvatar = [
+  upload.single('avatar'),
+  
+  async (req: AuthRequest, res: Response): Promise<void> => {
+    try {
+      // 1. Authentication check
+      if (!req.user) {
+        res.status(401).json({ 
+          success: false, 
+          message: 'Authentication required' 
+        });
+        return;
+      }
+
+      // 2. File check
+      if (!req.file) {
+        res.status(400).json({ 
+          success: false, 
+          message: 'No image file provided' 
+        });
+        return;
+      }
+
+      const userId = req.user._id;
+      const filename = req.file.filename; // Đã là avatar_userId_timestamp.ext
+      
+      console.log('📤 Uploading avatar:', {
+        userId,
+        filename,
+        size: req.file.size
+      });
+
+      // 3. Get user and delete old avatar
+      const user = await User.findById(userId);
+      if (!user) {
+        deleteAvatarFile(filename);
+        res.status(404).json({ 
+          success: false, 
+          message: 'User not found' 
+        });
+        return;
+      }
+
+      // 4. Delete old avatar file if exists
+      if (user.avatar && user.avatar !== filename) {
+        deleteAvatarFile(user.avatar);
+      }
+
+      // 5. Lưu CHỈ TÊN FILE vào database
+      user.avatar = filename;
+      user.avatarUpdatedAt = new Date();
+      await user.save();
+
+      // 6. Tạo URL để trả về (không lưu vào DB)
+      const baseUrl = getBaseUrlFromRequest(req);
+      const avatarUrl = `${baseUrl}/uploads/avatars/${filename}?t=${Date.now()}`;
+
+      // 7. Response
+      res.status(200).json({
+        success: true,
+        message: 'Avatar uploaded successfully',
+        data: {
+          avatar: filename, // Chỉ tên file
+          avatarUrl: avatarUrl, // URL đầy đủ (tạm thời cho response)
+          user: {
+            _id: user._id,
+            name: user.name,
+            email: user.email
+          }
+        }
+      });
+
+    } catch (error: any) {
+      console.error('Avatar upload error:', error);
+      
+      if (req.file) {
+        deleteAvatarFile(req.file.filename);
+      }
+      
+      res.status(500).json({ 
+        success: false, 
+        message: 'Error uploading avatar',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+  }
+];
+
+const deleteAvatarFile = (filename: string): void => {
+  try {
+    if (!filename) return;
+    
+    const filePath = path.join(uploadDir, filename);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      console.log('🗑️ Deleted avatar file:', filename);
+    }
+  } catch (error) {
+    console.error('Error deleting avatar file:', error);
+  }
+};
+
+
+// Thêm vào file controller của bạn
+export const deleteAvatar = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ 
+        success: false, 
+        message: 'Authentication required' 
+      });
+      return;
+    }
+
+    const user = await User.findById(req.user._id);
+    if (!user) {
+      res.status(404).json({ 
+        success: false, 
+        message: 'User not found' 
+      });
+      return;
+    }
+
+    // Xóa file từ disk
+    if (user.avatar) {
+      const filePath = path.join(uploadDir, user.avatar);
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+        console.log('🗑️ Deleted old avatar file:', user.avatar);
+      }
+    }
+
+    // Cập nhật user - xóa avatar
+    user.avatar = '';
+    user.avatarUpdatedAt = new Date();
+    await user.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Avatar deleted successfully',
+      data: {
+        user: {
+          _id: user._id,
+          name: user.name,
+          email: user.email,
+          avatar: user.avatar
+        }
+      }
+    });
+  } catch (error: any) {
+    console.error('Delete avatar error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Error deleting avatar',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+const getBaseUrlFromRequest = (req: Request): string => {
+  if (process.env.SERVER_URL) {
+    return process.env.SERVER_URL;
+  }
+  
+  const protocol = req.protocol || 'http';
+  let host = req.get('host');
+  if (!host) {
+    const serverIP = process.env.SERVER_IP || 'localhost';
+    const serverPort = process.env.PORT || '3000';
+    host = `${serverIP}:${serverPort}`;
+  }
+  
+  return `${protocol}://${host}`;
+};
+
+
+export const getAvatar = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ 
+        success: false, 
+        message: 'Authentication required' 
+      });
+      return;
+    }
+
+    const user = await User.findById(req.user._id).select('avatar avatarUpdatedAt name email');
+    if (!user) {
+      res.status(404).json({ 
+        success: false, 
+        message: 'User not found' 
+      });
+      return;
+    }
+
+    // Chỉ trả về thông tin cơ bản
+    const response = {
+      success: true,
+      data: {
+        avatar: user.avatar, // Chỉ tên file
+        avatarUpdatedAt: user.avatarUpdatedAt,
+        user: {
+          _id: user._id,
+          name: user.name,
+          email: user.email
+        }
+      }
+    };
+
+    // Nếu client cần URL, tạo dynamic
+    if (req.query.includeUrl === 'true') {
+      const baseUrl = getBaseUrlFromRequest(req);
+      const timestamp = user.avatarUpdatedAt ? user.avatarUpdatedAt.getTime() : Date.now();
+      response.data['avatarUrl'] = user.avatar 
+        ? `${baseUrl}/uploads/avatars/${user.avatar}?t=${timestamp}`
+        : '';
+    }
+
+    res.status(200).json(response);
+  } catch (error: any) {
+    console.error('Get avatar error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Error getting avatar',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+
+// Debug endpoint cho avatar
+export const debugAvatar = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const avatarsDir = uploadDir;
+    const files = fs.readdirSync(avatarsDir);
+    
+    const avatarFiles = files
+      .filter(file => file.match(/\.(jpg|jpeg|png|gif|webp)$/i))
+      .map(file => {
+        const filePath = path.join(avatarsDir, file);
+        const stats = fs.statSync(filePath);
+        return {
+          filename: file,
+          path: filePath,
+          url: `${getBaseUrlFromRequest(req)}/uploads/avatars/${file}`,
+          urlWithTimestamp: `${getBaseUrlFromRequest(req)}/uploads/avatars/${file}?t=${Date.now()}`,
+          size: stats.size,
+          created: stats.birthtime,
+          modified: stats.mtime,
+          exists: true
+        };
+      });
+
+    res.status(200).json({
+      success: true,
+      timestamp: new Date().toISOString(),
+      data: {
+        uploadDir: avatarsDir,
+        exists: fs.existsSync(avatarsDir),
+        totalFiles: files.length,
+        avatarFiles: avatarFiles.length,
+        files: avatarFiles,
+        server: {
+          baseUrl: getBaseUrlFromRequest(req),
+          port: process.env.PORT || 3000,
+          nodeEnv: process.env.NODE_ENV || 'development'
+        },
+        testUrls: avatarFiles.map(file => ({
+          original: file.url,
+          withCacheBuster: `${file.url}?t=${Date.now()}&v=1`,
+          direct: `${getBaseUrlFromRequest(req)}/api/avatar/${file.filename}`
+        }))
+      }
+    });
+  } catch (error: any) {
+    console.error('Debug avatar error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error debugging avatar',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      uploadDir: uploadDir,
+      exists: fs.existsSync(uploadDir)
+    });
   }
 };

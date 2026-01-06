@@ -24,8 +24,13 @@ import {
   setActiveConsultation,
   clearActiveConsultation,
   getDoctorConsultations,
+  updateConsultationDetails,
+  updateTreatmentStep,
   getAllPatients,
-  getAllDrugs
+  getAllDrugs,
+  deleteTreatmentStep,
+  startTreatmentStep,
+  rejectTreatmentStep
 } from '../controllers/doctorcontroller';
 import multer from 'multer';
 import path from 'path';
@@ -147,12 +152,16 @@ router.post('/consultations', createConsultation);
 router.post('/consultations/:consultationId/steps', addTreatmentStep);
 router.post('/consultations/:consultationId/steps/:stepNumber/approve', approveTreatmentStep);
 router.post('/consultations/:consultationId/complete', completeConsultation);
-router.patch('/consultations/:consultationId/status', updateConsultationStatus); // NEW
-router.post('/consultations/:consultationId/set-active', setActiveConsultation); // NEW
-router.post('/consultations/clear-active/:doctorId', clearActiveConsultation); // NEW
+router.put('/consultations/:consultationId/steps/:stepNumber', updateTreatmentStep);
+router.patch('/consultations/:consultationId/status', updateConsultationStatus);
+router.post('/consultations/:consultationId/set-active', setActiveConsultation);
+router.post('/consultations/clear-active/:doctorId', clearActiveConsultation);
 router.get('/:doctorId/consultations', getDoctorConsultations);
+router.put('/consultations/:consultationId', updateConsultationDetails);
+router.delete('/consultations/:consultationId/steps/:stepNumber', deleteTreatmentStep);
+router.post('/consultations/:consultationId/steps/:stepNumber/start', startTreatmentStep);
+router.post('/consultations/:consultationId/steps/:stepNumber/reject', rejectTreatmentStep);
 router.get('/drugs', getAllDrugs);
-
 // Patient routes
 router.get('/:doctorId/patients/all', getAllPatients);
 

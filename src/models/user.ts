@@ -14,6 +14,7 @@ export interface IUser extends Document {
   dateOfBirth?: string;
   gender?: string;
   address?: string;
+  avatar?: string;
   status?: 'working' | 'busy' | 'not working';
   dayOff?: string[];
   loginAttempts?: number;
@@ -47,6 +48,7 @@ const userSchema = new Schema<IUser>(
     dateOfBirth: { type: String, trim: true },
     gender: { type: String, trim: true },
     address: { type: String, trim: true },
+    avatar: { type: String, default: '' },
     status: {
       type: String,
       enum: ['working', 'busy', 'not working'],

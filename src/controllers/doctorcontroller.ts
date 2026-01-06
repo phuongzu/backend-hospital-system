@@ -1,15 +1,17 @@
 import { Request, Response } from 'express';
-import mongoose from 'mongoose';
 import Doctor from '../models/doctor';
 import User from '../models/user';
 import Appointment from '../models/appointment';
 import MedicalRecord from '../models/medicalRecord';
 import Notification from '../models/notification';
-import Messeage from '../models/message';
-import Conversation from '../models/conversation';
 import path from 'path';
 import fs from 'fs';
 import Drug from '../models/drug';
+import { notificationService } from '../utils/notificationService';
+import { emailService } from '../utils/emailService';
+import { socketService } from '../utils/socketService';
+import UserInformation from '../models/UserInfor';
+
 
 
 export const getActiveConsultation = async (req: Request, res: Response) => {
@@ -106,25 +108,60 @@ export const createConsultation = async (req: Request, res: Response) => {
 export const addTreatmentStep = async (req: Request, res: Response) => {
   try {
     const { consultationId } = req.params;
-    const stepData = req.body;
+    const { title, description, medication, dosage, duration, instructions, prescriptions } = req.body;
 
     console.log('=== ADD TREATMENT STEP ===');
     console.log('Consultation ID:', consultationId);
-    console.log('Step data:', stepData);
-
+    
     const medicalRecord = await MedicalRecord.findById(consultationId);
     if (!medicalRecord) {
       return res.status(404).json({ success: false, message: 'Medical record not found' });
     }
 
+    // 1. Add the step to Medical Record
     const newStep = {
       stepNumber: medicalRecord.treatment_plan.length + 1,
-      ...stepData,
+      title,
+      description,
+      medication,
+      dosage,
+      duration,
+      instructions,
       status: 'pending'
     };
 
     medicalRecord.treatment_plan.push(newStep);
     await medicalRecord.save();
+
+    // 2. Reduce Stock Logic
+    // We expect a 'prescriptions' array from the frontend containing { medication, dosage, duration } objects
+    if (prescriptions && Array.isArray(prescriptions) && prescriptions.length > 0) {
+      console.log('Updating stock for prescriptions:', prescriptions);
+      
+      for (const item of prescriptions) {
+        if (!item.medication) continue;
+
+        // Calculate how much to deduct
+        const quantityToDeduct = calculateQuantity(item.dosage || '', item.duration || '');
+        
+        console.log(`Deducting ${quantityToDeduct} from ${item.medication}`);
+
+        // Find the drug by name and reduce stock
+        // We use $inc with a negative number.
+        // FIXED: Used 'stock_quantity' to match the Drug model
+        const updatedDrug = await Drug.findOneAndUpdate(
+          { name: item.medication },
+          { $inc: { stock_quantity: -quantityToDeduct } },
+          { new: true }
+        );
+
+        if (!updatedDrug) {
+          console.warn(`Warning: Drug '${item.medication}' not found in inventory.`);
+        } else {
+          console.log(`Updated stock for ${updatedDrug.name}. New stock: ${updatedDrug.stock_quantity}`);
+        }
+      }
+    }
 
     res.json({ success: true, data: medicalRecord });
   } catch (error) {
@@ -133,27 +170,94 @@ export const addTreatmentStep = async (req: Request, res: Response) => {
   }
 };
 
-// Approve treatment step
-export const approveTreatmentStep = async (req: Request, res: Response) => {
+export const updateTreatmentStep = async (req: Request, res: Response) => {
   try {
     const { consultationId, stepNumber } = req.params;
+    const { title, description, medication, dosage, duration, instructions } = req.body;
     const stepNum = parseInt(stepNumber);
 
-    console.log('=== APPROVE TREATMENT STEP ===');
-    console.log('Consultation ID:', consultationId);
-    console.log('Step number:', stepNum);
+    console.log('=== UPDATE TREATMENT STEP ===');
+    console.log('Consultation ID:', consultationId, 'Step:', stepNum);
+    console.log('Update Data:', { title, description, medication });
 
     const medicalRecord = await MedicalRecord.findById(consultationId);
     if (!medicalRecord) {
       return res.status(404).json({ success: false, message: 'Medical record not found' });
     }
 
-    const step = medicalRecord.treatment_plan.find(s => s.stepNumber === stepNum);
+    const stepIndex = medicalRecord.treatment_plan.findIndex(s => s.stepNumber === stepNum);
+    if (stepIndex === -1) {
+      return res.status(404).json({ success: false, message: 'Step not found' });
+    }
+
+    // Update the step fields
+    const step = medicalRecord.treatment_plan[stepIndex];
+    step.title = title;
+    step.description = description;
+    step.medication = medication;
+    step.dosage = dosage;
+    step.duration = duration;
+    step.instructions = instructions;
+
+    // Validate/Fix severity to avoid save error on legacy data
+    const validSeverities = ['mild', 'moderate', 'severe', 'critical'];
+    if (medicalRecord.severity && !validSeverities.includes(medicalRecord.severity)) {
+       if (medicalRecord.severity === 'low') medicalRecord.severity = 'mild';
+       else if (medicalRecord.severity === 'medium') medicalRecord.severity = 'moderate';
+       else if (medicalRecord.severity === 'high') medicalRecord.severity = 'severe';
+       else medicalRecord.severity = 'mild'; // Fallback
+    }
+
+    // Save
+    await medicalRecord.save();
+    
+    res.json({ 
+      success: true, 
+      message: 'Treatment step updated successfully',
+      data: medicalRecord 
+    });
+  } catch (error) {
+    console.error('Error updating treatment step:', error);
+    res.status(500).json({ success: false, message: 'Error updating treatment step' });
+  }
+};
+
+export const approveTreatmentStep = async (req: Request, res: Response) => {
+  try {
+    const { consultationId, stepNumber } = req.params;
+    const stepNum = parseInt(stepNumber);
+    const { doctor_notes } = req.body;
+
+    console.log('=== APPROVE TREATMENT STEP ===');
+    console.log('Consultation ID:', consultationId);
+    console.log('Step number:', stepNum);
+
+    // Sửa: Chỉ populate đơn giản
+    const medicalRecord = await MedicalRecord.findById(consultationId)
+      .populate('user_id', 'name email')
+      .populate('doctor_id', 'user_id name'); // Chỉ populate doctor_id
+
+    if (!medicalRecord) {
+      return res.status(404).json({ success: false, message: 'Medical record not found' });
+    }
+
+    // Nếu cần thông tin user của doctor, query riêng
+    let doctorUserInfo = null;
+    if (medicalRecord.doctor_id) {
+      // Cast to any để truy cập thuộc tính
+      const doctor = medicalRecord.doctor_id as any;
+      if (doctor.user_id) {
+        doctorUserInfo = await User.findById(doctor.user_id)
+          .select('name email phoneNumber')
+          .lean();
+      }
+    }
+
+    const step = medicalRecord.treatment_plan.find((s: any) => s.stepNumber === stepNum);
     if (!step) {
       return res.status(404).json({ success: false, message: 'Step not found' });
     }
 
-    // CHỈ CHO PHÉP approve steps có status là 'completed' (đã được patient hoàn thành)
     if (step.status !== 'completed') {
       return res.status(400).json({ 
         success: false, 
@@ -161,41 +265,108 @@ export const approveTreatmentStep = async (req: Request, res: Response) => {
       });
     }
 
-    step.status = 'approved';
+    // Sử dụng instance method để approve step
+    await medicalRecord.approveStep(stepNum, doctor_notes);
     
-    // KIỂM TRA: Có phải step cuối cùng không?
     const isLastStep = stepNum === medicalRecord.treatment_plan.length;
-    
-    // KIỂM TRA: Tất cả steps đã được approved chưa?
-    const allStepsApproved = medicalRecord.treatment_plan.every(s => 
+    const allStepsApproved = medicalRecord.treatment_plan.every((s: any) => 
       s.status === 'approved'
     );
 
-    console.log('🔍 Step approval check:', {
-      isLastStep,
-      allStepsApproved,
-      totalSteps: medicalRecord.treatment_plan.length,
-      approvedSteps: medicalRecord.treatment_plan.filter(s => s.status === 'approved').length
-    });
-
-    // CHỈ hoàn thành consultation khi TẤT CẢ steps đã approved
-    if (isLastStep && allStepsApproved) {
-      // TỰ ĐỘNG HOÀN THÀNH CONSULTATION
-      medicalRecord.consultation_status = 'completed';
-      medicalRecord.status = 'resolved';
-      medicalRecord.updated_at = new Date();
+    // ================= NOTIFICATION LOGIC =================
+    try {
+      // Get patient info
+      const patientUserId = (medicalRecord.user_id as any)._id;
       
-      console.log('🎉 All steps approved - Consultation auto-completed');
-    } else {
-      // Kích hoạt step tiếp theo nếu có
-      const nextStep = medicalRecord.treatment_plan.find(s => s.stepNumber === stepNum + 1);
-      if (nextStep && nextStep.status === 'pending') {
-        nextStep.status = 'in-progress';
-        console.log('🔄 Activated next step:', nextStep.stepNumber);
-      }
-    }
+      // Sử dụng doctorUserInfo thay vì medicalRecord.doctor_id.user_id
+      if (patientUserId && doctorUserInfo) {
+        // Send notification to patient
+        await notificationService.sendNotification({
+          user_id: patientUserId.toString(),
+          template_key: 'treatment_step_approved',
+          variables: {
+            step_number: stepNum.toString(),
+            step_title: step.title,
+            doctor_name: doctorUserInfo.name // Sử dụng tên từ doctorUserInfo
+          },
+          type: 'treatment',
+          category: 'success',
+          priority: 'medium',
+          related_record: consultationId,
+          related_record_type: 'medical_record',
+          data: {
+            step: step,
+            consultation_id: consultationId,
+            doctor_notes: doctor_notes,
+            is_consultation_completed: isLastStep && allStepsApproved
+          },
+          action_url: `/consultations/${consultationId}/steps/${stepNum}`,
+          action_label: 'View Step Details'
+        });
 
-    await medicalRecord.save();
+        // Send email to patient
+        const patientUser = await User.findById(patientUserId);
+        if (patientUser?.email) {
+          await emailService.sendTreatmentStepApprovalEmail(
+            patientUser.email,
+            patientUser.name,
+            step.title,
+            stepNum,
+            doctorUserInfo.name, // Sử dụng tên từ doctorUserInfo
+            doctor_notes,
+            isLastStep && allStepsApproved
+          );
+        }
+      }
+
+      // If consultation is completed, send completion notification
+      if (isLastStep && allStepsApproved) {
+        await notificationService.sendNotification({
+          user_id: patientUserId.toString(),
+          template_key: 'consultation_completed',
+          variables: {
+            doctor_name: doctorUserInfo ? doctorUserInfo.name : 'Your doctor',
+            diagnosis: medicalRecord.diagnosis || 'Completed'
+          },
+          type: 'consultation',
+          category: 'success',
+          priority: 'high',
+          related_record: consultationId,
+          related_record_type: 'medical_record',
+          data: {
+            consultation_id: consultationId,
+            completed_at: new Date().toISOString()
+          },
+          action_url: `/consultations/${consultationId}/summary`,
+          action_label: 'View Summary'
+        });
+
+        // Send consultation summary email
+        const patientUser = await User.findById(patientUserId);
+        if (patientUser?.email) {
+          await emailService.sendConsultationSummaryEmail(
+            patientUser.email,
+            patientUser.name,
+            {
+              consultation_id: consultationId,
+              doctor_name: doctorUserInfo ? doctorUserInfo.name : 'Your doctor',
+              diagnosis: medicalRecord.diagnosis || 'Completed',
+              summary: medicalRecord.notes || '',
+              treatment_steps_completed: medicalRecord.treatment_plan.filter((s: any) => s.status === 'approved').length,
+              total_treatment_steps: medicalRecord.treatment_plan.length,
+              follow_up_instructions: medicalRecord.follow_up_instructions || '',
+              next_appointment_date: medicalRecord.next_appointment,
+              completed_date: new Date().toLocaleDateString()
+            }
+          );
+        }
+      }
+
+      console.log('✅ Notifications sent successfully');
+    } catch (notifError) {
+      console.error('❌ Error sending notifications:', notifError);
+    }
+    // ================= END NOTIFICATION LOGIC =================
 
     res.json({ 
       success: true, 
@@ -210,35 +381,170 @@ export const approveTreatmentStep = async (req: Request, res: Response) => {
   }
 };
 
+
 // Complete consultation
 export const completeConsultation = async (req: Request, res: Response) => {
   try {
     const { consultationId } = req.params;
+    const { diagnosis, notes, follow_up_instructions, next_appointment } = req.body;
 
     console.log('=== COMPLETE CONSULTATION ===');
     console.log('Consultation ID:', consultationId);
 
-    const medicalRecord = await MedicalRecord.findByIdAndUpdate(
-      consultationId,
-      { 
-        consultation_status: 'completed',
-        status: 'resolved',
-        updated_at: new Date()
-      },
-      { new: true }
-    );
+    // Tìm medical record với thông tin liên quan
+    const medicalRecord = await MedicalRecord.findById(consultationId)
+      .populate('user_id', 'name email')
+      .populate({
+        path: 'doctor_id',
+        select: 'name',
+        populate: {
+          path: 'user_id',
+          select: '_id name email',
+          strictPopulate: false
+        }
+      });
 
     if (!medicalRecord) {
       return res.status(404).json({ success: false, message: 'Medical record not found' });
     }
 
-    res.json({ success: true, data: medicalRecord });
+
+    // Enforce: all steps must be approved before completing
+    const allApproved = medicalRecord.treatment_plan.every((step: any) => step.status === 'approved');
+    if (!allApproved) {
+      return res.status(400).json({ success: false, message: 'All steps must be approved before completing the consultation.' });
+    }
+
+    // Cập nhật consultation sử dụng instance method
+    medicalRecord.consultation_status = 'completed';
+    medicalRecord.status = 'resolved';
+    medicalRecord.updated_at = new Date();
+    
+    // Cập nhật các trường thông tin nếu có
+    if (diagnosis) medicalRecord.diagnosis = diagnosis;
+    if (notes) medicalRecord.notes = notes;
+    if (follow_up_instructions) medicalRecord.follow_up_instructions = follow_up_instructions;
+    if (next_appointment) medicalRecord.next_appointment = next_appointment;
+
+    await medicalRecord.save();
+
+    // ================= NOTIFICATION LOGIC =================
+    try {
+      // Get patient and doctor info
+      const patientUserId = medicalRecord.user_id._id;
+      const doctorUser = medicalRecord.doctor_id.user_id;
+
+      if (patientUserId && doctorUser) {
+        // Send notification to patient
+        await notificationService.sendNotification({
+          user_id: patientUserId.toString(),
+          title: 'Consultation Completed',
+          message: `Dr. ${medicalRecord.doctor_id.name} has completed your consultation. ${medicalRecord.diagnosis ? `Diagnosis: ${medicalRecord.diagnosis}` : ''}`,
+          type: 'consultation',
+          category: 'success',
+          priority: 'high',
+          related_record: consultationId,
+          related_record_type: 'medical_record',
+          data: {
+            diagnosis: diagnosis || medicalRecord.diagnosis,
+            summary: notes || medicalRecord.notes,
+            follow_up_instructions: follow_up_instructions || medicalRecord.follow_up_instructions,
+            next_appointment: next_appointment || medicalRecord.next_appointment,
+            completed_at: new Date().toISOString()
+          },
+          channels: ['in_app', 'email'],
+          action_url: `/consultations/${consultationId}/summary`,
+          action_label: 'View Summary'
+        });
+
+        // Send email to patient
+        const patientUser = await User.findById(patientUserId);
+        if (patientUser?.email) {
+          await emailService.sendConsultationSummaryEmail(
+            patientUser.email,
+            patientUser.name,
+            {
+              consultation_id: consultationId,
+              doctor_name: medicalRecord.doctor_id.name,
+              diagnosis: medicalRecord.diagnosis || 'Completed',
+              summary: medicalRecord.notes || '',
+              treatment_steps_completed: medicalRecord.treatment_plan.filter((s: any) => 
+                s.status === 'approved' || s.status === 'completed'
+              ).length,
+              total_treatment_steps: medicalRecord.treatment_plan.length,
+              follow_up_instructions: medicalRecord.follow_up_instructions || '',
+              next_appointment_date: medicalRecord.next_appointment,
+              completed_date: new Date().toLocaleDateString()
+            }
+          );
+        }
+      }
+
+      // Also send notification to doctor about consultation completion
+      if (doctorUser) {
+        await notificationService.sendNotification({
+          user_id: doctorUser._id.toString(),
+          title: 'Consultation Recorded',
+          message: `You have completed consultation with ${medicalRecord.user_id.name}. Medical record has been updated.`,
+          type: 'consultation',
+          category: 'info',
+          priority: 'medium',
+          related_record: consultationId,
+          related_record_type: 'medical_record',
+          data: {
+            patient_name: medicalRecord.user_id.name,
+            completion_date: new Date().toISOString(),
+            diagnosis: medicalRecord.diagnosis
+          }
+        });
+      }
+
+      console.log('✅ Consultation completion notifications sent');
+    } catch (notifError) {
+      console.error('❌ Error sending notifications:', notifError);
+      // Don't fail the whole request if notification fails
+    }
+    // ================= END NOTIFICATION LOGIC =================
+
+    // Send real-time notification via socket
+    const patientUser = await User.findById(medicalRecord.user_id._id);
+    if (patientUser) {
+      socketService.emitToUser(
+        patientUser._id.toString(),
+        'consultation_completed',
+        {
+          consultation_id: consultationId,
+          doctor_name: medicalRecord.doctor_id.name,
+          diagnosis: medicalRecord.diagnosis,
+          completed_at: new Date(),
+          timestamp: new Date()
+        }
+      );
+    }
+
+    // Update appointment status to completed
+    try {
+      const appointment = await Appointment.findById(medicalRecord.appointment_id);
+      if (appointment && appointment.status !== 'completed') {
+        appointment.status = 'completed';
+        await appointment.save();
+        
+        console.log('✅ Appointment status updated to completed');
+      }
+    } catch (appointmentError) {
+      console.error('❌ Error updating appointment status:', appointmentError);
+    }
+
+    res.json({ 
+      success: true, 
+      data: medicalRecord,
+      message: 'Consultation completed successfully with notifications sent'
+    });
   } catch (error) {
     console.error('Error completing consultation:', error);
     res.status(500).json({ success: false, message: 'Error completing consultation' });
   }
 };
-
 // File upload setup
 const uploadsDir = path.join(__dirname, '..', 'uploads', 'avatars');
 if (!fs.existsSync(uploadsDir)) {
@@ -413,11 +719,11 @@ export const getDoctorAppointments = async (req: Request, res: Response) => {
 export const getDoctorPatients = async (req: Request, res: Response) => {
   try {
     const { doctorId } = req.params;
+    const limit = parseInt(req.query.limit as string) || 10;
+    
     if (!doctorId) {
       return res.status(400).json({ success: false, message: 'Doctor ID is required' });
     }
-    
-    const limit = parseInt(req.query.limit as string) || 10;
     
     // Get recent medical records for this doctor
     const recentRecords = await MedicalRecord.find({ 
@@ -425,7 +731,10 @@ export const getDoctorPatients = async (req: Request, res: Response) => {
         { doctor_id: doctorId }
       ]
     })
-      .populate('user_id', 'name email phoneNumber dateOfBirth gender bloodGroup allergies')
+      .populate({
+        path: 'user_id',
+        select: 'name email phoneNumber dateOfBirth gender avatar'
+      })
       .sort({ created_at: -1 })
       .limit(limit);
     
@@ -437,8 +746,31 @@ export const getDoctorPatients = async (req: Request, res: Response) => {
         p && patient && p._id.toString() === patient._id.toString()
       )
     );
+
+    // Lấy thông tin từ UserInformation cho từng patient
+    const patientsWithInfo = await Promise.all(
+      uniquePatients.map(async (patient: any) => {
+        const userInfo = await UserInformation.findOne({ user_id: patient._id })
+          .select('blood_type allergies height weight chronic_diseases BMI emergency_contact')
+          .lean();
+        
+        return {
+          ...patient.toObject(),
+          blood_type: userInfo?.blood_type || null,
+          allergies: userInfo?.allergist || [],
+          height: userInfo?.height || null,
+          weight: userInfo?.weight || null,
+          chronic_diseases: userInfo?.chronic_diseases || [],
+          BMI: userInfo?.BMI || null,
+          emergency_contact: userInfo?.emergency_contact || null
+        };
+      })
+    );
     
-    res.status(200).json({ success: true, data: uniquePatients });
+    res.status(200).json({ 
+      success: true, 
+      data: patientsWithInfo 
+    });
   } catch (error) {
     handleError(res, error, 'Error fetching recent patients');
   }
@@ -694,7 +1026,6 @@ export const completeAppointment = async (req: Request, res: Response) => {
 };
 
 
-// controllers/doctorController.ts - Sửa hàm uploadDoctorAvatar
 export const uploadDoctorAvatar = async (req: Request, res: Response) => {
   try {
     console.log('=== AVATAR UPLOAD CONTROLLER ===');
@@ -754,9 +1085,7 @@ export const uploadDoctorAvatar = async (req: Request, res: Response) => {
     } catch (err) {
       console.error('❌ Error reading uploads directory:', err);
     }
-    
-    // CHỈ LƯU TÊN FILE vào database (không lưu đường dẫn API)
-    const avatarFilename = req.file.filename;
+        const avatarFilename = req.file.filename;
     
     console.log('✅ Avatar filename for DB:', avatarFilename);
 
@@ -1013,59 +1342,68 @@ export const getAllPatients = async (req: Request, res: Response) => {
 
     console.log('=== GET ALL PATIENTS ===');
     console.log('Doctor ID:', doctorId);
-    console.log('Search:', search);
-    console.log('Page:', page, 'Limit:', limit);
 
     if (!doctorId) {
       return res.status(400).json({ success: false, message: 'Doctor ID is required' });
     }
 
-    // Build match query for medical records
+    // Build query để lấy patients từ medical records
     let matchQuery: any = { doctor_id: doctorId };
     
-    // If search provided, add patient name search
-    if (search) {
-      const patients = await User.find({
-        name: { $regex: search, $options: 'i' },
-        role: 'patient'
-      }).select('_id');
-      
-      const patientIds = patients.map(p => p._id);
-      matchQuery.user_id = { $in: patientIds };
-    }
-
-    // Get unique patients from medical records
-    const patientsPipeline: any[] = [
-      { $match: matchQuery },
-      { $group: { _id: '$user_id' } },
-      { $skip: (Number(page) - 1) * Number(limit) },
-      { $limit: Number(limit) }
-    ];
-
-    const patientRecords = await MedicalRecord.aggregate(patientsPipeline);
-    
-    const patientIds = patientRecords.map(record => record._id);
-    
-    // Get patient details
-    const patients = await User.find({ 
-      _id: { $in: patientIds } 
-    })
-      .select('name email phoneNumber dateOfBirth gender bloodGroup allergies')
+    // Lấy tất cả medical records của doctor này để có danh sách patient IDs
+    const medicalRecords = await MedicalRecord.find(matchQuery)
+      .distinct('user_id')
       .lean();
 
-    // Get total count for pagination
-    const totalCountPipeline: any[] = [
-      { $match: matchQuery },
-      { $group: { _id: '$user_id' } },
-      { $count: 'total' }
-    ];
+    const patientIds = medicalRecords.map(id => id.toString());
 
-    const totalResult = await MedicalRecord.aggregate(totalCountPipeline);
-    const total = totalResult.length > 0 ? totalResult[0].total : 0;
+    // Query chính để lấy thông tin bệnh nhân
+    let userQuery: any = { 
+      _id: { $in: patientIds },
+      role: 'patient'
+    };
+
+    // Thêm search nếu có
+    if (search) {
+      userQuery.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { email: { $regex: search, $options: 'i' } },
+        { phoneNumber: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    // Lấy thông tin từ User model
+    const users = await User.find(userQuery)
+      .select('name email phoneNumber dateOfBirth gender')
+      .skip((Number(page) - 1) * Number(limit))
+      .limit(Number(limit))
+      .lean();
+
+    // Lấy thông tin từ UserInformation cho từng user
+    const usersWithInfo = await Promise.all(
+      users.map(async (user) => {
+        const userInfo = await UserInformation.findOne({ user_id: user._id })
+          .select('blood_type allergies height weight chronic_diseases BMI')
+          .lean();
+        
+        return {
+          ...user,
+          blood_type: userInfo?.blood_type || null,
+          allergies: userInfo?.allergies || [],
+          height: userInfo?.height || null,
+          weight: userInfo?.weight || null,
+          chronic_diseases: userInfo?.chronic_diseases || [],
+          BMI: userInfo?.BMI || null
+        };
+      })
+    );
+
+    // Lấy tổng số lượng
+    const total = await User.countDocuments(userQuery);
 
     res.status(200).json({ 
       success: true, 
-      data: patients,
+      data: usersWithInfo,
       pagination: {
         page: Number(page),
         limit: Number(limit),
@@ -1078,6 +1416,9 @@ export const getAllPatients = async (req: Request, res: Response) => {
     handleError(res, error, 'Error fetching patients');
   }
 };
+
+
+
 export const completeTreatmentStep = async (req: Request, res: Response) => {
   try {
     const { consultationId, stepNumber } = req.params;
@@ -1133,7 +1474,7 @@ export const completeTreatmentStep = async (req: Request, res: Response) => {
 export const getAllDrugs = async (req: Request, res: Response) => {
   try {
     const drugs = await Drug.find({})
-      .populate('category_id', 'name')
+      .populate('category_id', 'name',)
       .sort({ created_at: -1 });
     res.status(200).json({ success: true, data: drugs });
   } catch (error) {
@@ -1143,3 +1484,261 @@ export const getAllDrugs = async (req: Request, res: Response) => {
 };
 
 
+export const updateConsultationDetails = async (req: Request, res: Response) => {
+  try {
+    const { consultationId } = req.params;
+    const { diagnosis, severity, notes } = req.body;
+    const {initialStep, Description, Prescriptions} = req.body;
+
+    console.log('=== UPDATE CONSULTATION DETAILS ===');
+    console.log('Consultation ID:', consultationId);
+
+    const consultation = await MedicalRecord.findByIdAndUpdate(
+      consultationId,
+      { 
+        initialStep,
+        Description,
+        Prescriptions,
+        diagnosis,
+        severity,
+        notes,
+        updated_at: new Date()
+      },
+      { new: true }
+    );
+
+    if (!consultation) {
+      return res.status(404).json({ success: false, message: 'Consultation not found' });
+    }
+
+    res.json({ 
+      success: true, 
+      message: 'Consultation updated successfully',
+      data: consultation 
+    });
+  } catch (error) {
+    console.error('Error updating consultation details:', error);
+    res.status(500).json({ success: false, message: 'Error updating consultation details' });
+  }
+};
+
+const calculateQuantity = (dosage: string, duration: string): number => {
+  try {
+    let dailyCount = 0;
+    let amountPerDose = 0;
+    let days = 0;
+
+    const lowerDosage = dosage.toLowerCase();
+    const lowerDuration = duration.toLowerCase();
+
+    // 1. Determine Amount per dose (e.g., "1 tablet", "5ml")
+    const amountMatch = lowerDosage.match(/(\d+)\s*(?:tablet|pill|ml|mg)/);
+    if (amountMatch) {
+      amountPerDose = parseInt(amountMatch[1], 10);
+    } else if (lowerDosage.includes('tablet') || lowerDosage.includes('pill')) {
+      // Default to 1 if number not explicitly found but unit exists (e.g., "Apply thinly" = 0, ignore)
+      amountPerDose = 1;
+    } 
+
+    // 2. Determine Frequency (Daily count)
+    if (lowerDosage.includes('once') || lowerDosage.includes('1 time')) dailyCount = 1;
+    else if (lowerDosage.includes('twice') || lowerDosage.includes('2 times')) dailyCount = 2;
+    else if (lowerDosage.includes('thrice') || lowerDosage.includes('3 times')) dailyCount = 3;
+    else if (lowerDosage.includes('daily')) dailyCount = 1; // Default "once daily"
+    else dailyCount = 1; // Fallback
+
+    // 3. Determine Duration in Days
+    if (lowerDuration.includes('chronic') || lowerDuration.includes('ongoing')) {
+      days = 30; // Default chronic to 1 month deduction
+    } else if (lowerDuration.includes('month')) {
+      const monthMatch = lowerDuration.match(/(\d+)\s*month/);
+      const numMonths = monthMatch ? parseInt(monthMatch[1], 10) : 1;
+      days = numMonths * 30;
+    } else if (lowerDuration.includes('week')) {
+      const weekMatch = lowerDuration.match(/(\d+)\s*week/);
+      const numWeeks = weekMatch ? parseInt(weekMatch[1], 10) : 1;
+      days = numWeeks * 7;
+    } else {
+      // Default days
+      const dayMatch = lowerDuration.match(/(\d+)\s*day/);
+      days = dayMatch ? parseInt(dayMatch[1], 10) : 0;
+    }
+
+    const total = amountPerDose * dailyCount * days;
+    return total > 0 ? total : 0;
+
+  } catch (error) {
+    console.error("Error calculating quantity:", error);
+    return 0;
+  }
+};
+
+
+export const deleteTreatmentStep = async (req: Request, res: Response) => {
+  try {
+    const { consultationId, stepNumber } = req.params;
+    const stepNum = parseInt(stepNumber);
+
+    const medicalRecord = await MedicalRecord.findById(consultationId);
+    if (!medicalRecord) return res.status(404).json({ success: false, message: 'Medical record not found' });
+
+    const stepIndex = medicalRecord.treatment_plan.findIndex(s => s.stepNumber === stepNum);
+    if (stepIndex === -1) return res.status(404).json({ success: false, message: 'Step not found' });
+
+    const stepToRemove = medicalRecord.treatment_plan[stepIndex];
+
+    // Helper to extract value from "Med: Value | Med: Value" string
+    const getVal = (fullStr: string | undefined, medName: string) => {
+      if (!fullStr) return '';
+      const parts = fullStr.split(' | ');
+      const match = parts.find(p => p.trim().toLowerCase().startsWith(medName.toLowerCase() + ':'));
+      if (match) {
+        return match.substring(match.indexOf(':') + 1).trim();
+      }
+      // If legacy format (single med without prefix), assume value
+      if (!fullStr.includes(':')) return fullStr;
+      return '';
+    };
+
+    // Restore stock logic
+    if (stepToRemove.medication) {
+      const medications = stepToRemove.medication.split(' + ');
+      for (const medName of medications) {
+        let dose = getVal(stepToRemove.dosage, medName);
+        let dur = getVal(stepToRemove.duration, medName);
+
+        // Fallback for simple/legacy steps
+        if (!dose && medications.length === 1) dose = stepToRemove.dosage || '';
+        if (!dur && medications.length === 1) dur = stepToRemove.duration || '';
+
+        if (dose && dur) {
+          const qty = calculateQuantity(dose, dur);
+          if (qty > 0) {
+            await Drug.findOneAndUpdate({ name: medName.trim() }, { $inc: { stock_quantity: qty } });
+          }
+        }
+      }
+    }
+
+    // Remove the step
+    medicalRecord.treatment_plan.splice(stepIndex, 1);
+
+    // Re-index remaining steps
+    medicalRecord.treatment_plan.forEach((step, index) => {
+      step.stepNumber = index + 1;
+    });
+
+    // Adjust current step pointer if needed
+    if (medicalRecord.current_step > medicalRecord.treatment_plan.length) {
+      medicalRecord.current_step = Math.max(1, medicalRecord.treatment_plan.length);
+    }
+
+    await medicalRecord.save();
+    res.json({ success: true, message: 'Step deleted', data: medicalRecord });
+
+  } catch (error) {
+    handleError(res, error, 'Error deleting step');
+  }
+};
+
+export const startTreatmentStep = async (req: Request, res: Response) => {
+  try {
+    const { consultationId, stepNumber } = req.params;
+    const stepNum = parseInt(stepNumber);
+    
+    const medicalRecord = await MedicalRecord.findById(consultationId);
+    if (!medicalRecord) {
+      return res.status(404).json({ success: false, message: 'Medical record not found' });
+    }
+    
+    const step = medicalRecord.treatment_plan.find(s => s.stepNumber === stepNum);
+    if (!step) {
+      return res.status(404).json({ success: false, message: 'Step not found' });
+    }
+    
+    // Validate: step phải ở trạng thái pending
+    if (step.status !== 'pending') {
+      return res.status(400).json({ 
+        success: false, 
+        message: `Cannot start step. Current status: ${step.status}` 
+      });
+    }
+    
+    // Update status
+    step.status = 'in-progress';
+    step.startedAt = new Date();
+    
+    await medicalRecord.save();
+    
+    res.json({ 
+      success: true, 
+      data: medicalRecord,
+      message: 'Step started successfully' 
+    });
+  } catch (error) {
+    console.error('Error starting step:', error);
+    res.status(500).json({ success: false, message: 'Error starting step' });
+  }
+};
+
+export const rejectTreatmentStep = async (req: Request, res: Response) => {
+  try {
+    const { consultationId, stepNumber } = req.params;
+    const { reason } = req.body;
+    const stepNum = parseInt(stepNumber);
+    
+    const medicalRecord = await MedicalRecord.findById(consultationId);
+    if (!medicalRecord) {
+      return res.status(404).json({ success: false, message: 'Medical record not found' });
+    }
+    
+    const step = medicalRecord.treatment_plan.find(s => s.stepNumber === stepNum);
+    if (!step) {
+      return res.status(404).json({ success: false, message: 'Step not found' });
+    }
+    
+    // Validate: step phải ở trạng thái completed
+    if (step.status !== 'completed') {
+      return res.status(400).json({ 
+        success: false, 
+        message: `Cannot reject step. Current status: ${step.status}` 
+      });
+    }
+    
+    // Reject step (chuyển về pending)
+    step.status = 'pending';
+    step.rejectionReason = reason;
+    step.rejectedAt = new Date();
+    step.approval_requested = false;
+    
+    await medicalRecord.save();
+    
+    // Gửi notification cho patient
+    if (medicalRecord.user_id) {
+      await notificationService.sendNotification({
+        user_id: medicalRecord.user_id.toString(),
+        template_key: 'treatment_step_rejected',
+        variables: {
+          step_number: stepNum.toString(),
+          step_title: step.title,
+          doctor_name: 'Doctor',
+          reason: reason || 'Needs revision'
+        },
+        type: 'treatment',
+        category: 'warning',
+        priority: 'medium',
+        related_record: consultationId,
+        related_record_type: 'medical_record'
+      });
+    }
+    
+    res.json({ 
+      success: true, 
+      data: medicalRecord,
+      message: 'Step rejected. Patient notified to revise.' 
+    });
+  } catch (error) {
+    console.error('Error rejecting step:', error);
+    res.status(500).json({ success: false, message: 'Error rejecting step' });
+  }
+};

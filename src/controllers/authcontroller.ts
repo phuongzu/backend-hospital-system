@@ -9,6 +9,8 @@ import Specialty from '../models/specialty';
 import { AuthRequest } from '../middlewares/authmiddleware';
 import { emailService } from '../utils/emailService';
 import UnlockRequest from '../models/unlockRequest';
+import DoctorRegistrationRequest from '../models/doctorRegistrationRequest'; // Import model mới
+
 
 // Verification code storage
 interface VerificationCode {
@@ -289,8 +291,7 @@ const generateRefreshToken = (id: string): string => {
   return jwt.sign({ id }, secret, { expiresIn: '30d' });
 };
 
-// User registration with enhanced validation
-import DoctorRegistrationRequest from '../models/DoctorRegistrationRequest'; // Import model mới
+
 
 export const registerUser = async (req: Request, res: Response): Promise<void> => {
   try {
