@@ -30,7 +30,8 @@ import {
   getAllDrugs,
   deleteTreatmentStep,
   startTreatmentStep,
-  rejectTreatmentStep
+  rejectTreatmentStep,
+  reviewAndDecideStep
 } from '../controllers/doctorcontroller';
 import multer from 'multer';
 import path from 'path';
@@ -116,6 +117,11 @@ router.get('/notifications/:doctorId', getDoctorNotifications);
 
 // Get statistics for a specific doctor
 router.get('/stats/:doctorId', getDoctorStats);
+router.post(
+  '/consultations/:consultationId/steps/:stepNumber/review',
+  protect,
+  reviewAndDecideStep
+);
 
 // upload image  doctor avatar
 router.post('/avatar', 

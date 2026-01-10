@@ -26,7 +26,7 @@ import {
   uploadAvatar,
   deleteAvatar,
   getAvatar,
-  
+
 } from '../controllers/patientcontroller';
 import { protect } from '../middlewares/authmiddleware';
 import multer from 'multer';
@@ -72,6 +72,7 @@ router.post('/doctors/:doctor_id/reviews', postDoctorReview);
 router.get('/reviews/user', getUserReviews);
 router.delete('/reviews/:review_id', deleteReview);
 router.get('/medical-records/my-records', protect, getMyMedicalRecords);
+
 
 
 const storage = multer.diskStorage({

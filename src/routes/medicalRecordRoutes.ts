@@ -8,7 +8,8 @@ import {
   getApprovalRequests,
   activateTreatmentStep,
   changeTreatmentPlanStatus,
-  getMyRecords
+  getMyRecords,
+  completeTreatmentStepWithMessage
 } from '../controllers/medicalRecordController';
 import { protect } from '../middlewares/authmiddleware';
 
@@ -22,7 +23,8 @@ router.patch('/:id/steps/:stepNumber/activate', protect, activateTreatmentStep);
 router.patch('/:id/steps/:stepNumber/complete', protect, completeTreatmentStep); // Standardized
 // Also keep the old one or the one frontend was trying if preferred, but standardization is better:
 router.patch('/:id/complete-step/:stepNumber', protect, completeTreatmentStep); 
-
+router.patch('/:consultationId/steps/:stepNumber/complete', completeTreatmentStep);
+router.patch('/:consultationId/steps/:stepNumber/complete-with-message', completeTreatmentStepWithMessage);
 // Request approval for a specific step
 router.post('/:id/steps/:stepNumber/request-approval', protect, requestStepApproval);
 

@@ -112,7 +112,31 @@ class NotificationService {
           default_channels: ['in_app', 'email', 'sms'],
           variables: ['emergency_message'],
           is_active: true
-        }
+        },
+        {
+        template_key: 'patient_completed_step_with_message',
+        title_template: 'Patient Completed Treatment Step',
+        message_template: 'Patient {patient_name} has completed step {step_number}: {step_title} and is waiting for your review.',
+        description: 'Notification sent to doctor when patient completes a treatment step',
+        type: 'treatment',
+        category: 'info',
+        default_priority: 'medium',
+        default_channels: ['in_app', 'email'],
+        variables: ['patient_name', 'step_number', 'step_title'],
+        is_active: true
+      },
+      {
+        template_key: 'consultation_completed_by_doctor',
+        title_template: 'Consultation Completed',
+        message_template: 'Dr. {doctor_name} has completed your consultation. {diagnosis}',
+        description: 'Notification sent when doctor completes a consultation',
+        type: 'consultation',
+        category: 'success',
+        default_priority: 'high',
+        default_channels: ['in_app', 'email'],
+        variables: ['doctor_name', 'diagnosis'],
+        is_active: true
+      }
       ];
 
       for (const template of defaultTemplates) {

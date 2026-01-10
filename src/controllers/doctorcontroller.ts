@@ -264,8 +264,6 @@ export const approveTreatmentStep = async (req: Request, res: Response) => {
         message: 'Cannot approve step that is not completed by patient' 
       });
     }
-
-    // Sử dụng instance method để approve step
     await medicalRecord.approveStep(stepNum, doctor_notes);
     
     const isLastStep = stepNum === medicalRecord.treatment_plan.length;
@@ -1740,5 +1738,452 @@ export const rejectTreatmentStep = async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Error rejecting step:', error);
     res.status(500).json({ success: false, message: 'Error rejecting step' });
+  }
+};
+
+
+export const doctorDecisionOnStep = async (req: Request, res: Response) => {
+  try {
+    const { consultationId, stepNumber } = req.params;
+    const { 
+      decision, 
+      doctor_notes, 
+      new_step_title, 
+      new_step_description,
+      new_step_medication,
+      new_step_dosage,
+      new_step_duration,
+      new_step_instructions
+    } = req.body;
+
+    // Validate decision
+    const validDecisions = ['approve', 'approve_and_add_step', 'approve_and_complete'];
+    if (!validDecisions.includes(decision)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid decision. Must be: approve, approve_and_add_step, or approve_and_complete' 
+      });
+    }
+
+    const medicalRecord = await MedicalRecord.findById(consultationId)
+      .populate('user_id', 'name email phoneNumber')
+      .populate('doctor_id', 'name email');
+
+    if (!medicalRecord) {
+      return res.status(404).json({ success: false, message: 'Medical record not found' });
+    }
+
+    const step = medicalRecord.treatment_plan.find(s => s.stepNumber === parseInt(stepNumber));
+    if (!step) {
+      return res.status(404).json({ success: false, message: 'Step not found' });
+    }
+
+    // Chuẩn bị data cho step mới nếu cần
+    let newStepData = null;
+    if (decision === 'approve_and_add_step') {
+      newStepData = {
+        title: new_step_title || 'Follow-up Treatment',
+        description: new_step_description || 'Additional treatment based on patient feedback',
+        medication: new_step_medication,
+        dosage: new_step_dosage,
+        duration: new_step_duration,
+        instructions: new_step_instructions
+      };
+    }
+
+    // Thực hiện quyết định của bác sĩ
+    await medicalRecord.doctorDecision(
+      parseInt(stepNumber),
+      decision as any,
+      doctor_notes,
+      newStepData
+    );
+
+    // Gửi notification cho bệnh nhân
+    const patient = medicalRecord.user_id as any;
+    if (patient) {
+      let notificationMessage = '';
+      let actionLabel = '';
+      
+      if (decision === 'approve') {
+        notificationMessage = `Doctor has approved step ${stepNumber}.`;
+        actionLabel = 'View Approved Step';
+      } else if (decision === 'approve_and_add_step') {
+        notificationMessage = `Doctor has approved step ${stepNumber} and added a new follow-up step.`;
+        actionLabel = 'View Next Step';
+      } else if (decision === 'approve_and_complete') {
+        notificationMessage = `Doctor has approved all steps and completed your consultation.`;
+        actionLabel = 'View Consultation Summary';
+      }
+
+      await notificationService.sendNotification({
+        user_id: patient._id.toString(),
+        template_key: 'doctor_decision_made',
+        variables: {
+          doctor_name: medicalRecord.doctor_id?.name || 'Doctor',
+          decision: decision.replace(/_/g, ' '),
+          step_number: stepNumber
+        },
+        type: 'consultation',
+        category: 'success',
+        priority: 'medium',
+        related_record: consultationId,
+        related_record_type: 'medical_record',
+        data: {
+          decision: decision,
+          step_number: stepNumber,
+          doctor_notes: doctor_notes,
+          consultation_completed: decision === 'approve_and_complete'
+        },
+        action_url: `/consultations/${consultationId}`,
+        action_label: actionLabel
+      });
+
+      // Gửi email cho bệnh nhân
+      if (patient.email) {
+        await emailService.sendDoctorDecisionEmail(
+          patient.email,
+          patient.name,
+          medicalRecord.doctor_id?.name || 'Doctor',
+          decision,
+          stepNumber,
+          doctor_notes,
+          decision === 'approve_and_complete'
+        );
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Decision ${decision} processed successfully`,
+      data: {
+        record: medicalRecord,
+        decision: decision,
+        consultation_completed: decision === 'approve_and_complete'
+      }
+    });
+
+  } catch (error) {
+    console.error('Error processing doctor decision:', error);
+    res.status(500).json({ success: false, message: 'Error processing decision' });
+  }
+};
+
+export const reviewAndDecideStep = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { consultationId, stepNumber } = req.params;
+    const { 
+      decision, 
+      doctorNotes, 
+      requireFollowUp, 
+      followUpInstructions,
+      additionalStepTitle,
+      additionalStepDescription,
+      completeConsultation
+    } = req.body;
+    
+    const stepNum = parseInt(stepNumber);
+
+    console.log('=== REVIEW AND DECIDE STEP ===');
+    console.log('Doctor ID from auth:', req.user?._id);
+    console.log('Request body:', req.body);
+
+    // Kiểm tra authentication
+    if (!req.user || req.user.role !== 'doctor') {
+      res.status(401).json({ 
+        success: false, 
+        message: 'Unauthorized: Only doctors can review steps' 
+      });
+      return;
+    }
+
+    // Tìm medical record - FIXED: Populate doctor_id as User
+    const medicalRecord = await MedicalRecord.findById(consultationId)
+      .populate('user_id', 'name email phoneNumber')
+      .populate({
+        path: 'doctor_id',
+        select: 'name email role',
+        model: 'User'  // Specify that doctor_id references User model
+      });
+
+    if (!medicalRecord) {
+      res.status(404).json({ 
+        success: false, 
+        message: 'Medical record not found' 
+      });
+      return;
+    }
+
+    console.log('✅ Medical record found:', {
+      medicalRecordId: medicalRecord._id,
+      doctorIdInRecord: medicalRecord.doctor_id,
+      consultation_status: medicalRecord.consultation_status
+    });
+
+    // CRITICAL FIX: Check if doctor_id directly matches authenticated user
+    const doctorInRecord = medicalRecord.doctor_id as any;
+    
+    if (!doctorInRecord) {
+      console.log('❌ No doctor assigned to this consultation');
+      res.status(403).json({ 
+        success: false, 
+        message: 'Forbidden: No doctor assigned to this consultation' 
+      });
+      return;
+    }
+
+    console.log('🔍 Comparing doctor IDs:');
+    console.log('  - Doctor in record ID:', doctorInRecord._id?.toString());
+    console.log('  - Authenticated user ID:', req.user._id?.toString());
+    console.log('  - Are they equal?', doctorInRecord._id?.toString() === req.user._id?.toString());
+
+    // Check if the authenticated doctor is the same as the doctor in the record
+    if (doctorInRecord._id.toString() !== req.user._id.toString()) {
+      console.log('❌ Authorization failed: Doctor IDs do not match');
+      res.status(403).json({ 
+        success: false, 
+        message: 'Forbidden: You can only review your own consultations' 
+      });
+      return;
+    }
+
+    console.log('✅ Authorization passed');
+
+    const step = medicalRecord.treatment_plan.find((s: any) => s.stepNumber === stepNum);
+    if (!step) {
+      res.status(404).json({ 
+        success: false, 
+        message: 'Step not found' 
+      });
+      return;
+    }
+
+    if (step.status !== 'completed') {
+      res.status(400).json({ 
+        success: false, 
+        message: 'Can only review completed steps' 
+      });
+      return;
+    }
+
+    // Validate decision
+    if (!['approve_with_followup', 'approve_and_complete', 'reject'].includes(decision)) {
+      res.status(400).json({ 
+        success: false, 
+        message: 'Invalid decision type. Must be: approve_with_followup, approve_and_complete, or reject' 
+      });
+      return;
+    }
+
+    // Lấy thông tin bác sĩ và bệnh nhân
+    const doctorName = doctorInRecord?.name || 'Doctor';
+    const patient = medicalRecord.user_id;
+
+    // Xử lý quyết định của bác sĩ
+    switch (decision) {
+      case 'approve_with_followup':
+        // Duyệt step và thêm step tiếp theo
+        step.status = 'approved';
+        step.doctorNotes = doctorNotes;
+        step.approvedAt = new Date();
+        step.approval_requested = false;
+
+        // Thêm step tiếp theo nếu có yêu cầu
+        if (requireFollowUp && additionalStepTitle) {
+          const nextStepNumber = medicalRecord.treatment_plan.length + 1;
+          const newStep: any = {
+            stepNumber: nextStepNumber,
+            title: additionalStepTitle,
+            description: additionalStepDescription || 'Follow-up appointment based on previous treatment',
+            status: 'pending',
+            followUpRequired: true,
+            followUpInstructions: followUpInstructions,
+            created_at: new Date()
+          };
+          medicalRecord.treatment_plan.push(newStep);
+        }
+
+        // Kích hoạt step tiếp theo nếu có
+        const nextStep = medicalRecord.treatment_plan.find((s: any) => s.stepNumber === stepNum + 1);
+        if (nextStep && nextStep.status === 'pending') {
+          nextStep.status = 'in-progress';
+          nextStep.startedAt = new Date();
+        }
+
+        // Gửi thông báo cho bệnh nhân
+        try {
+          await notificationService.sendNotification({
+            user_id: (patient as any)._id.toString(),
+            template_key: 'step_approved_with_followup',
+            variables: {
+              step_number: stepNum.toString(),
+              step_title: step.title,
+              doctor_name: doctorName
+            },
+            type: 'treatment',
+            category: 'success',
+            priority: 'medium',
+            related_record: consultationId,
+            related_record_type: 'medical_record',
+            data: {
+              decision: 'approved_with_followup',
+              doctorNotes: doctorNotes,
+              requireFollowUp: requireFollowUp,
+              followUpInstructions: followUpInstructions,
+              hasNextStep: requireFollowUp
+            },
+            channels: ['in_app', 'email'],
+            action_url: `/medical-records/${consultationId}`,
+            action_label: 'View Treatment Plan'
+          });
+        } catch (notifError) {
+          console.error('Error sending notification:', notifError);
+        }
+
+        break;
+
+      case 'approve_and_complete':
+        // Duyệt step
+        step.status = 'approved';
+        step.doctorNotes = doctorNotes;
+        step.approvedAt = new Date();
+        step.approval_requested = false;
+
+        // Kiểm tra xem tất cả step đã approved chưa
+        const allStepsApproved = medicalRecord.treatment_plan.every((s: any) => 
+          s.status === 'approved'
+        );
+
+        if (allStepsApproved) {
+          medicalRecord.consultation_status = 'completed';
+          medicalRecord.status = 'resolved';
+          medicalRecord.updated_at = new Date();
+          
+          // Gửi thông báo hoàn thành consultation
+          try {
+            await notificationService.sendNotification({
+              user_id: (patient as any)._id.toString(),
+              template_key: 'consultation_completed_by_doctor',
+              variables: {
+                doctor_name: doctorName,
+                diagnosis: medicalRecord.diagnosis || 'Treatment Completed'
+              },
+              type: 'consultation',
+              category: 'success',
+              priority: 'high',
+              related_record: consultationId,
+              related_record_type: 'medical_record',
+              data: {
+                decision: 'completed',
+                completionReason: 'All steps approved and consultation completed by doctor'
+              },
+              channels: ['in_app', 'email'],
+              action_url: `/medical-records/${consultationId}/summary`,
+              action_label: 'View Summary'
+            });
+          } catch (notifError) {
+            console.error('Error sending completion notification:', notifError);
+          }
+
+          // Gửi email summary
+          try {
+            if ((patient as any).email) {
+              await emailService.sendConsultationSummaryEmail(
+                (patient as any).email,
+                (patient as any).name,
+                {
+                  consultation_id: consultationId,
+                  doctor_name: doctorName,
+                  diagnosis: medicalRecord.diagnosis || 'Treatment Completed',
+                  summary: doctorNotes || 'All treatment steps completed successfully',
+                  treatment_steps_completed: medicalRecord.treatment_plan.length,
+                  total_treatment_steps: medicalRecord.treatment_plan.length,
+                  follow_up_instructions: followUpInstructions || '',
+                  next_appointment_date: medicalRecord.next_appointment,
+                  completed_date: new Date().toLocaleDateString()
+                }
+              );
+            }
+          } catch (emailError) {
+            console.error('Error sending summary email:', emailError);
+          }
+        }
+
+        break;
+
+      case 'reject':
+        // Từ chối, yêu cầu bệnh nhân làm lại
+        step.status = 'pending';
+        step.rejectionReason = doctorNotes;
+        step.rejectedAt = new Date();
+        step.approval_requested = false;
+
+        // Gửi thông báo cho bệnh nhân
+        try {
+          await notificationService.sendNotification({
+            user_id: (patient as any)._id.toString(),
+            template_key: 'step_rejected_needs_revision',
+            variables: {
+              step_number: stepNum.toString(),
+              step_title: step.title,
+              doctor_name: doctorName
+            },
+            type: 'treatment',
+            category: 'warning',
+            priority: 'medium',
+            related_record: consultationId,
+            related_record_type: 'medical_record',
+            data: {
+              decision: 'rejected',
+              rejectionReason: doctorNotes
+            },
+            channels: ['in_app', 'email'],
+            action_url: `/medical-records/${consultationId}`,
+            action_label: 'View Step Details'
+          });
+        } catch (notifError) {
+          console.error('Error sending rejection notification:', notifError);
+        }
+
+        break;
+    }
+
+    await medicalRecord.save();
+
+    res.status(200).json({
+      success: true,
+      data: {
+        medical_record: {
+          _id: medicalRecord._id,
+          consultation_status: medicalRecord.consultation_status,
+          status: medicalRecord.status,
+          treatment_plan: medicalRecord.treatment_plan
+        },
+        step: {
+          stepNumber: step.stepNumber,
+          title: step.title,
+          status: step.status,
+          doctorNotes: step.doctorNotes
+        },
+        consultation_status: medicalRecord.consultation_status,
+        next_step: medicalRecord.treatment_plan.find((s: any) => s.stepNumber === stepNum + 1)
+      },
+      message: `Step ${decision.replace(/_/g, ' ')} successfully`
+    });
+
+  } catch (error: any) {
+    console.error('Error reviewing step:', error);
+    console.error('Error stack:', error.stack);
+    
+    res.status(500).json({ 
+      success: false, 
+      message: 'Error reviewing step',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      errorDetail: process.env.NODE_ENV === 'development' ? {
+        message: error.message,
+        stack: error.stack,
+        code: error.code
+      } : undefined
+    });
   }
 };

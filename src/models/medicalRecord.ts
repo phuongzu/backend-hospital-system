@@ -1,3 +1,4 @@
+// models/medicalRecord.ts
 import mongoose, { Document, Schema, Model } from 'mongoose';
 
 // ==================== INTERFACES ====================
@@ -10,17 +11,19 @@ export interface TreatmentStep {
   dosage?: string;
   duration?: string;
   instructions?: string;
-  status: 'pending' | 'in-progress' | 'completed' | 'approved';
+  status: 'pending' | 'in-progress' | 'completed' | 'approved' | 'rejected';
   completedAt?: Date;
   approvedAt?: Date;
   startedAt?: Date;
   patientMessage?: string;
-  patient_message?: string;
+  patient_feedback?: string;
   doctorNotes?: string;
   approval_requested?: boolean;
   approval_requested_at?: Date;
   rejectionReason?: string;
   rejectedAt?: Date;
+  requires_followup?: boolean;  // NEW: Yêu cầu tái khám
+  followup_reason?: string;     // NEW: Lý do tái khám
   _id?: string;
 }
 
@@ -101,11 +104,15 @@ export interface IMedicalRecord extends Document {
   recordType: string;
   progress: number;
   isFollowUpRequired: boolean;
+  hasPendingFeedback: boolean;  // NEW: Kiểm tra feedback đang chờ
   
   // Instance Methods
   addTreatmentStep(stepData: Omit<TreatmentStep, 'stepNumber' | 'status'>): Promise<this>;
   approveStep(stepNumber: number, doctorNotes?: string): Promise<this>;
   completeStep(stepNumber: number, patientMessage?: string): Promise<this>;
+  submitPatientFeedback(stepNumber: number, feedback: string): Promise<this>;  // NEW
+  doctorDecision(stepNumber: number, decision: 'approve' | 'approve_and_add_step' | 'approve_and_complete', 
+                doctorNotes?: string, newStepData?: Omit<TreatmentStep, 'stepNumber' | 'status'>): Promise<this>;  // NEW
   updateStepStatus(stepNumber: number, status: TreatmentStep['status']): Promise<this>;
   addLabResult(testName: string, result: string, normalRange: string, unit: string, notes?: string): Promise<this>;
   addPrescription(prescriptionData: Omit<Prescription, '_id'>): Promise<this>;
@@ -127,6 +134,8 @@ export interface IMedicalRecord extends Document {
     can_finalize: boolean;
     consultation_status: string;
   };
+  getStepsWithFeedback(): TreatmentStep[];  // NEW
+  hasPendingDoctorDecision(): boolean;  // NEW
 }
 
 export interface IMedicalRecordModel extends Model<IMedicalRecord> {
@@ -142,6 +151,7 @@ export interface IMedicalRecordModel extends Model<IMedicalRecord> {
   findByAppointment(appointmentId: string): Promise<IMedicalRecord | null>;
   findWithTreatmentPlan(doctorId: string): Promise<IMedicalRecord[]>;
   getPatientMedicalHistory(userId: string): Promise<IMedicalRecord[]>;
+  findByDoctorWithPendingFeedback(doctorId: string): Promise<IMedicalRecord[]>;  // NEW
 }
 
 // ==================== SCHEMA ====================
@@ -349,7 +359,7 @@ const medicalRecordSchema = new Schema<IMedicalRecord, IMedicalRecordModel>(
       },
       status: {
         type: String,
-        enum: ['pending', 'in-progress', 'completed', 'approved'],
+        enum: ['pending', 'in-progress', 'completed', 'approved', 'rejected'],
         default: 'pending'
       },
       completedAt: {
@@ -366,10 +376,10 @@ const medicalRecordSchema = new Schema<IMedicalRecord, IMedicalRecordModel>(
         trim: true,
         maxlength: [500, 'Patient message cannot exceed 500 characters']
       },
-      patient_message: {
+      patient_feedback: {  // NEW
         type: String,
         trim: true,
-        maxlength: [500, 'Patient message cannot exceed 500 characters']
+        maxlength: [1000, 'Patient feedback cannot exceed 1000 characters']
       },
       doctorNotes: {
         type: String,
@@ -389,6 +399,14 @@ const medicalRecordSchema = new Schema<IMedicalRecord, IMedicalRecordModel>(
       },
       rejectedAt: {
         type: Date
+      },
+      requires_followup: {  // NEW
+        type: Boolean,
+        default: false
+      },
+      followup_reason: {  // NEW
+        type: String,
+        trim: true
       }
     }],
     
@@ -535,160 +553,12 @@ medicalRecordSchema.virtual('isFollowUpRequired').get(function() {
   return !!this.follow_up_date || this.status === 'follow_up';
 });
 
-// ==================== INDEXES ====================
-
-// Core indexes
-medicalRecordSchema.index({ user_id: 1, created_at: -1 });
-medicalRecordSchema.index({ doctor_id: 1, created_at: -1 });
-medicalRecordSchema.index({ status: 1, priority: 1 });
-medicalRecordSchema.index({ consultation_status: 1 });
-medicalRecordSchema.index({ follow_up_date: 1 });
-medicalRecordSchema.index({ next_appointment: 1 });
-
-// Compound indexes for common queries
-medicalRecordSchema.index({ user_id: 1, status: 1, created_at: -1 });
-medicalRecordSchema.index({ doctor_id: 1, status: 1, priority: 1 });
-medicalRecordSchema.index({ doctor_id: 1, consultation_status: 1 });
-medicalRecordSchema.index({ priority: 1, severity: 1 });
-
-// Text search indexes
-medicalRecordSchema.index({ diagnosis: 'text', symptoms: 'text', notes: 'text' });
-
-// ==================== MIDDLEWARE ====================
-
-// ✅ FIXED: Pre-save middleware - REMOVED auto-complete logic
-medicalRecordSchema.pre('save', function(next) {
-  this.updated_at = new Date();
-  
-  // ❌ REMOVED: Auto-update consultation status
-  // This should ONLY be done manually by doctor via completeConsultation endpoint
-  
-  next();
+// NEW: Check if there are steps with pending feedback
+medicalRecordSchema.virtual('hasPendingFeedback').get(function() {
+  return this.treatment_plan.some(step => 
+    step.status === 'completed' && step.patient_feedback && !step.approval_requested
+  );
 });
-
-// Pre-save middleware to validate vital signs
-medicalRecordSchema.pre('save', function(next) {
-  const vitals = this.vital_signs;
-  
-  if (vitals?.blood_pressure) {
-    const [systolic, diastolic] = vitals.blood_pressure.split('/').map(Number);
-    if (systolic < diastolic) {
-      return next(new Error('Systolic pressure must be higher than diastolic pressure'));
-    }
-    if (systolic > 300 || diastolic > 200) {
-      return next(new Error('Blood pressure values are outside reasonable range'));
-    }
-  }
-  
-  if (vitals?.weight && vitals?.height) {
-    const bmi = vitals.weight / Math.pow(vitals.height / 100, 2);
-    if (bmi > 100 || bmi < 10) {
-      return next(new Error('BMI calculation seems incorrect. Please verify weight and height.'));
-    }
-  }
-  
-  next();
-});
-
-// Pre-save middleware to validate treatment steps
-medicalRecordSchema.pre('save', function(next) {
-  // Ensure step numbers are sequential and unique
-  const stepNumbers = this.treatment_plan.map(step => step.stepNumber);
-  const uniqueStepNumbers = [...new Set(stepNumbers)];
-  
-  if (stepNumbers.length !== uniqueStepNumbers.length) {
-    return next(new Error('Treatment step numbers must be unique'));
-  }
-  
-  // Check if step numbers are sequential
-  const sortedSteps = [...stepNumbers].sort((a, b) => a - b);
-  for (let i = 0; i < sortedSteps.length; i++) {
-    if (sortedSteps[i] !== i + 1) {
-      return next(new Error('Treatment step numbers must be sequential starting from 1'));
-    }
-  }
-  
-  next();
-});
-
-// ==================== STATIC METHODS ====================
-
-// Find records by patient
-medicalRecordSchema.statics.findByPatient = function(userId: string) {
-  return this.find({ user_id: userId })
-    .populate('doctor_id', 'name email specialty')
-    .populate('appointment_id', 'appointment_date appointment_time reason')
-    .sort({ created_at: -1 });
-};
-
-// Find records by doctor
-medicalRecordSchema.statics.findByDoctor = function(doctorId: string) {
-  return this.find({ doctor_id: doctorId })
-    .populate('user_id', 'name email phoneNumber dateOfBirth gender bloodGroup allergies')
-    .populate('appointment_id', 'appointment_date appointment_time')
-    .sort({ created_at: -1 });
-};
-
-// Find records by status
-medicalRecordSchema.statics.findByStatus = function(status: string) {
-  return this.find({ status })
-    .populate('user_id', 'name email phoneNumber')
-    .populate('doctor_id', 'name email')
-    .sort({ created_at: -1 });
-};
-
-// Find records by priority
-medicalRecordSchema.statics.findByPriority = function(priority: string) {
-  return this.find({ priority })
-    .populate('user_id', 'name email phoneNumber')
-    .populate('doctor_id', 'name email')
-    .sort({ priority: -1, created_at: -1 });
-};
-
-// Find recent records
-medicalRecordSchema.statics.findRecentRecords = function(limit: number = 10) {
-  return this.find()
-    .populate('user_id', 'name email phoneNumber')
-    .populate('doctor_id', 'name email')
-    .sort({ created_at: -1 })
-    .limit(limit);
-};
-
-// Find active consultation by doctor
-medicalRecordSchema.statics.findActiveByDoctor = function(doctorId: string) {
-  return this.findOne({ 
-    doctor_id: doctorId, 
-    consultation_status: 'in-progress' 
-  })
-    .populate('user_id', 'name email phoneNumber dateOfBirth gender bloodGroup allergies')
-    .populate('appointment_id')
-    .sort({ updated_at: -1 });
-};
-
-// Find record by appointment
-medicalRecordSchema.statics.findByAppointment = function(appointmentId: string) {
-  return this.findOne({ appointment_id: appointmentId })
-    .populate('user_id', 'name email phoneNumber dateOfBirth gender')
-    .populate('doctor_id', 'name email specialty');
-};
-
-// Find records with treatment plans
-medicalRecordSchema.statics.findWithTreatmentPlan = function(doctorId: string) {
-  return this.find({ 
-    doctor_id: doctorId,
-    'treatment_plan.0': { $exists: true }
-  })
-    .populate('user_id', 'name email phoneNumber')
-    .sort({ updated_at: -1 });
-};
-
-// Get patient medical history
-medicalRecordSchema.statics.getPatientMedicalHistory = function(userId: string) {
-  return this.find({ user_id: userId })
-    .populate('doctor_id', 'name email specialty')
-    .select('diagnosis symptoms treatment_plan prescriptions created_at status')
-    .sort({ created_at: -1 });
-};
 
 // ==================== INSTANCE METHODS ====================
 
@@ -710,8 +580,8 @@ medicalRecordSchema.methods.addTreatmentStep = function(stepData: Omit<Treatment
   return this.save();
 };
 
-// ✅ FIXED: Approve treatment step - REMOVED auto-complete logic
-medicalRecordSchema.methods.approveStep = function(stepNumber: number, doctorNotes?: string) {
+// Submit patient feedback
+medicalRecordSchema.methods.submitPatientFeedback = function(stepNumber: number, feedback: string) {
   const step = this.treatment_plan.find((s: TreatmentStep) => s.stepNumber === stepNumber);
   
   if (!step) {
@@ -719,16 +589,73 @@ medicalRecordSchema.methods.approveStep = function(stepNumber: number, doctorNot
   }
   
   if (step.status !== 'completed') {
-    throw new Error('Can only approve completed steps');
+    throw new Error('Step must be completed before submitting feedback');
   }
   
-  // ✅ Approve the step
+  step.patient_feedback = feedback;
+  step.approval_requested = true;
+  step.approval_requested_at = new Date();
+  
+  return this.save();
+};
+
+// Doctor decision on step
+medicalRecordSchema.methods.doctorDecision = function(
+  stepNumber: number,
+  decision: 'approve' | 'approve_and_add_step' | 'approve_and_complete',
+  doctorNotes?: string,
+  newStepData?: Omit<TreatmentStep, 'stepNumber' | 'status'>
+) {
+  const step = this.treatment_plan.find((s: TreatmentStep) => s.stepNumber === stepNumber);
+  
+  if (!step) {
+    throw new Error(`Step ${stepNumber} not found`);
+  }
+  
+  if (step.status !== 'completed') {
+    throw new Error('Step must be completed before doctor decision');
+  }
+  
+  // Update current step
   step.status = 'approved';
   step.doctorNotes = doctorNotes;
   step.approvedAt = new Date();
   step.approval_requested = false;
   
-  // ✅ Activate next step if exists
+  // Process decision
+  if (decision === 'approve_and_add_step') {
+    // Add new follow-up step
+    const newStepNumber = this.treatment_plan.length + 1;
+    const newStep: TreatmentStep = {
+      stepNumber: newStepNumber,
+      title: newStepData?.title || 'Follow-up Treatment',
+      description: newStepData?.description || 'Additional treatment based on patient feedback',
+      medication: newStepData?.medication,
+      dosage: newStepData?.dosage,
+      duration: newStepData?.duration,
+      instructions: newStepData?.instructions,
+      status: 'pending',
+      requires_followup: true,
+      followup_reason: doctorNotes
+    };
+    this.treatment_plan.push(newStep);
+    
+  } else if (decision === 'approve_and_complete') {
+    // Approve all completed steps
+    this.treatment_plan.forEach((s: TreatmentStep) => {
+      if (s.status === 'completed') {
+        s.status = 'approved';
+        s.approvedAt = new Date();
+      }
+    });
+    
+    // Complete consultation
+    this.consultation_status = 'completed';
+    this.status = 'resolved';
+    this.updated_at = new Date();
+  }
+  
+  // Activate next step if exists
   const nextStep = this.treatment_plan.find((s: TreatmentStep) => s.stepNumber === stepNumber + 1);
   if (nextStep && nextStep.status === 'pending') {
     nextStep.status = 'in-progress';
@@ -736,167 +663,38 @@ medicalRecordSchema.methods.approveStep = function(stepNumber: number, doctorNot
     this.current_step = stepNumber + 1;
   }
   
-  // ❌ REMOVED: Auto-complete consultation when last step is approved
-  // Doctor must manually complete via completeConsultation() method
-  
   return this.save();
 };
 
-// Complete treatment step (for patient)
-medicalRecordSchema.methods.completeStep = function(stepNumber: number, patientMessage?: string) {
-  const step = this.treatment_plan.find((s: TreatmentStep) => s.stepNumber === stepNumber);
-  
-  if (!step) {
-    throw new Error(`Step ${stepNumber} not found`);
-  }
-  
-  if (step.status !== 'in-progress') {
-    throw new Error('Can only complete steps that are in progress');
-  }
-  
-  step.status = 'completed';
-  step.completedAt = new Date();
-  step.patientMessage = patientMessage;
-  step.patient_message = patientMessage;
-  
-  return this.save();
-};
-
-// Update step status
-medicalRecordSchema.methods.updateStepStatus = function(stepNumber: number, status: TreatmentStep['status']) {
-  const step = this.treatment_plan.find((s: TreatmentStep) => s.stepNumber === stepNumber);
-  
-  if (!step) {
-    throw new Error(`Step ${stepNumber} not found`);
-  }
-  
-  step.status = status;
-  
-  if (status === 'completed') {
-    step.completedAt = new Date();
-  }
-  
-  return this.save();
-};
-
-// Add lab result
-medicalRecordSchema.methods.addLabResult = function(
-  testName: string, 
-  result: string, 
-  normalRange: string, 
-  unit: string, 
-  notes?: string
-) {
-  this.lab_results.push({
-    test_name: testName,
-    result,
-    normal_range: normalRange,
-    unit,
-    notes,
-    date: new Date()
-  });
-  
-  return this.save();
-};
-
-// Add prescription
-medicalRecordSchema.methods.addPrescription = function(prescriptionData: Omit<Prescription, '_id'>) {
-  this.prescriptions.push(prescriptionData);
-  return this.save();
-};
-
-// Update vital signs
-medicalRecordSchema.methods.updateVitalSigns = function(vitalSigns: Partial<VitalSigns>) {
-  this.vital_signs = { ...this.vital_signs, ...vitalSigns };
-  return this.save();
-};
-
-// ✅ Complete consultation - ONLY way to complete consultation now
-medicalRecordSchema.methods.completeConsultation = function() {
-  // ✅ Validate: All steps must be approved before completing
-  const allStepsApproved = this.treatment_plan.every((step: TreatmentStep) => 
-    step.status === 'approved'
-  );
-  
-  if (!allStepsApproved) {
-    throw new Error('All treatment steps must be approved before completing consultation');
-  }
-  
-  this.consultation_status = 'completed';
-  this.status = 'resolved';
-  this.updated_at = new Date();
-  
-  return this.save();
-};
-
-// Get current active step
-medicalRecordSchema.methods.getCurrentStep = function(): TreatmentStep | null {
-  return this.treatment_plan.find((step: TreatmentStep) => step.stepNumber === this.current_step) || null;
-};
-
-// Get step by number
-medicalRecordSchema.methods.getStep = function(stepNumber: number): TreatmentStep | null {
-  return this.treatment_plan.find((step: TreatmentStep) => step.stepNumber === stepNumber) || null;
-};
-
-// Check if step exists
-medicalRecordSchema.methods.hasStep = function(stepNumber: number): boolean {
-  return this.treatment_plan.some((step: TreatmentStep) => step.stepNumber === stepNumber);
-};
-
-// Get completed steps count
-medicalRecordSchema.methods.getCompletedStepsCount = function(): number {
+// Get steps with patient feedback
+medicalRecordSchema.methods.getStepsWithFeedback = function(): TreatmentStep[] {
   return this.treatment_plan.filter((step: TreatmentStep) => 
-    step.status === 'completed' || step.status === 'approved'
-  ).length;
-};
-
-// Get pending steps count
-medicalRecordSchema.methods.getPendingStepsCount = function(): number {
-  return this.treatment_plan.filter((step: TreatmentStep) => 
-    step.status === 'pending' || step.status === 'in-progress'
-  ).length;
-};
-
-// ✅ Check if consultation can be completed
-medicalRecordSchema.methods.canComplete = function(): boolean {
-  if (this.treatment_plan.length === 0) return false;
-  
-  return this.treatment_plan.every((step: TreatmentStep) => 
-    step.status === 'approved'
+    step.patient_feedback && step.approval_requested
   );
 };
 
-// ✅ Check if consultation is completable (alias for backward compatibility)
-medicalRecordSchema.methods.isCompletable = function(): boolean {
-  return this.canComplete();
+// Check if has pending doctor decisions
+medicalRecordSchema.methods.hasPendingDoctorDecision = function(): boolean {
+  return this.treatment_plan.some((step: TreatmentStep) => 
+    step.status === 'completed' && step.patient_feedback && step.approval_requested
+  );
 };
 
-// ✅ Get consultation completion status
-medicalRecordSchema.methods.getCompletionStatus = function() {
-  const totalSteps = this.treatment_plan.length;
-  const approvedSteps = this.treatment_plan.filter((step: TreatmentStep) => 
-    step.status === 'approved'
-  ).length;
-  const completedSteps = this.treatment_plan.filter((step: TreatmentStep) => 
-    step.status === 'completed'
-  ).length;
-  const inProgressSteps = this.treatment_plan.filter((step: TreatmentStep) => 
-    step.status === 'in-progress'
-  ).length;
-  const pendingSteps = this.treatment_plan.filter((step: TreatmentStep) => 
-    step.status === 'pending'
-  ).length;
-  
-  return {
-    total: totalSteps,
-    approved: approvedSteps,
-    completed: completedSteps,
-    in_progress: inProgressSteps,
-    pending: pendingSteps,
-    can_finalize: this.canComplete(),
-    consultation_status: this.consultation_status
-  };
+// ==================== STATIC METHODS ====================
+
+// Find records by doctor with pending feedback
+medicalRecordSchema.statics.findByDoctorWithPendingFeedback = function(doctorId: string) {
+  return this.find({ 
+    doctor_id: doctorId,
+    'treatment_plan.status': 'completed',
+    'treatment_plan.patient_feedback': { $exists: true, $ne: '' },
+    'treatment_plan.approval_requested': true
+  })
+    .populate('user_id', 'name email phoneNumber dateOfBirth gender')
+    .populate('appointment_id', 'appointment_date appointment_time')
+    .sort({ updated_at: -1 });
 };
+
+// ==================== EXPORT ====================
 
 export default mongoose.model<IMedicalRecord, IMedicalRecordModel>('MedicalRecord', medicalRecordSchema);
