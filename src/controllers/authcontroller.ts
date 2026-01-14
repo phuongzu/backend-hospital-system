@@ -269,18 +269,26 @@ export const resendVerificationCode = async (req: Request, res: Response): Promi
 
 
 
-const generateToken = (id: string, role: string): string => {
+const generateToken = (id: string, role: string, name: string, email: string): string => {
   const secret = process.env.JWT_SECRET;
   if (!secret) {
     throw new Error('JWT_SECRET environment variable is not set');
   }
   
   return jwt.sign(
-    { id, role, iat: Date.now() }, 
+    { 
+      userId: id,
+      id: id, 
+      role: role, 
+      name: name,   // Thêm name
+      email: email, // Thêm email
+      iat: Date.now() 
+    },
     secret, 
     { expiresIn: '7d' }
   );
 };
+
 
 const generateRefreshToken = (id: string): string => {
   const secret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
@@ -582,7 +590,12 @@ export const loginUser = async (req: Request, res: Response): Promise<void> => {
     }
 
     // Generate tokens
-    const accessToken = generateToken(String(user._id), user.role);
+    const accessToken = generateToken(
+      String(user._id), 
+      user.role, 
+      user.name, 
+      user.email  // thêm email
+    );
     const refreshToken = generateRefreshToken(String(user._id));
 
     // Update user with refresh token and last login

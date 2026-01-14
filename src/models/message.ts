@@ -1,4 +1,20 @@
-import mongoose from 'mongoose';
+// src/models/Message.ts
+import mongoose, { Schema, Document } from 'mongoose';
+
+export interface IMessage extends Document {
+  sender_id: mongoose.Types.ObjectId;
+  receiver_id: mongoose.Types.ObjectId;
+  message: string;
+  message_type: 'text' | 'image' | 'file';
+  medical_record_id?: mongoose.Types.ObjectId;
+  appointment_id?: mongoose.Types.ObjectId;
+  conversation_id: mongoose.Types.ObjectId;
+  timestamp: Date;
+  read: boolean;
+  read_at?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
 
 const messageSchema = new mongoose.Schema({
   sender_id: {
@@ -48,4 +64,7 @@ const messageSchema = new mongoose.Schema({
   timestamps: true
 });
 
-export default mongoose.model('Message', messageSchema);
+// CÁCH ĐƠN GIẢN NHẤT: Kiểm tra xem model đã tồn tại chưa
+const Message = mongoose.models.Message || mongoose.model<IMessage>('Message', messageSchema);
+
+export default Message;

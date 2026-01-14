@@ -3,19 +3,50 @@ import http from 'http';
 import jwt from 'jsonwebtoken';
 import User from '../models/user';
 
-class SocketService {
-  private io: Server;
-  private userSockets: Map<string, string[]> = new Map(); // userId -> socketIds
+/* =======================
+   TYPES
+======================= */
 
-  initialize(server: http.Server): void {
-    this.io = new Server(server, {
-      cors: {
-        origin: process.env.FRONTEND_URL || '*',
-        methods: ['GET', 'POST'],
-        credentials: true
-      },
-      transports: ['websocket', 'polling']
-    });
+interface SocketUser {
+  _id: string;
+  role: string;
+}
+
+/* Extend socket.data typing */
+declare module 'socket.io' {
+  interface Socket {
+    data: {
+      user: SocketUser;
+    };
+  }
+}
+
+/* =======================
+   SOCKET SERVICE
+======================= */
+
+class SocketService {
+  private io?: Server;
+
+  // userId -> socketIds[]
+  private userSockets: Map<string, string[]> = new Map();
+
+  /* =======================
+     INITIALIZE
+  ======================= */
+  initialize(server: http.Server, io?: Server): void {
+    if (io) {
+      this.io = io;
+    } else {
+      this.io = new Server(server, {
+        cors: {
+          origin: process.env.FRONTEND_URL || '*',
+          methods: ['GET', 'POST'],
+          credentials: true,
+        },
+        transports: ['websocket', 'polling'],
+      });
+    }
 
     this.io.use(this.authenticateSocket.bind(this));
     this.io.on('connection', this.handleConnection.bind(this));
@@ -23,136 +54,225 @@ class SocketService {
     console.log('✅ Socket.IO initialized');
   }
 
-  // Socket authentication middleware
-  private async authenticateSocket(socket: Socket, next: (err?: Error) => void): Promise<void> {
+  /* =======================
+     AUTH MIDDLEWARE
+  ======================= */
+  private async authenticateSocket(
+    socket: Socket,
+    next: (err?: Error) => void
+  ): Promise<void> {
     try {
-      const token = socket.handshake.auth.token || socket.handshake.headers.authorization;
-      
-      if (!token) {
+      const rawToken =
+        socket.handshake.auth?.token ||
+        socket.handshake.headers?.authorization;
+
+      if (!rawToken) {
         return next(new Error('Authentication error: No token provided'));
       }
 
-      const decoded = jwt.verify(token.replace('Bearer ', ''), process.env.JWT_SECRET!) as any;
-      const user = await User.findById(decoded.id).select('_id role isActive');
-      
+      const token = rawToken.replace('Bearer ', '');
+
+      const decoded = jwt.verify(
+        token,
+        process.env.JWT_SECRET!
+      ) as { id: string };
+
+      const user = await User.findById(decoded.id).select(
+        '_id role isActive'
+      );
+
       if (!user || !user.isActive) {
         return next(new Error('Authentication error: User not found or inactive'));
       }
 
       socket.data.user = {
         _id: user._id.toString(),
-        role: user.role
+        role: user.role,
       };
 
       next();
     } catch (error) {
-      console.error('Socket authentication error:', error);
+      console.error('❌ Socket auth error:', error);
       next(new Error('Authentication error'));
     }
   }
 
-  // Handle new connection
+  /* =======================
+     CONNECTION HANDLER
+  ======================= */
   private handleConnection(socket: Socket): void {
     const userId = socket.data.user._id;
+    const role = socket.data.user.role;
     const socketId = socket.id;
 
-    console.log(`🔌 New socket connection: ${socketId} for user: ${userId}`);
+    console.log(`🔌 Connected: ${socketId} (user ${userId})`);
 
-    // Store socket mapping
+    // Save socket mapping
     if (!this.userSockets.has(userId)) {
       this.userSockets.set(userId, []);
     }
     this.userSockets.get(userId)!.push(socketId);
 
-    // Join user room
+    // Join base rooms
     socket.join(`user:${userId}`);
+    socket.join(`role:${role}`);
 
-    // Join role-based rooms
-    socket.join(`role:${socket.data.user.role}`);
+    // Role-based rooms
+    if (role === 'doctor') {
+      socket.join(`doctor:${userId}`);
+      socket.join(`doctor-dashboard:${userId}`);
+    }
 
-    // Handle disconnect
-    socket.on('disconnect', () => {
-      console.log(`🔌 Socket disconnected: ${socketId}`);
-      
-      const userSockets = this.userSockets.get(userId);
-      if (userSockets) {
-        const index = userSockets.indexOf(socketId);
-        if (index > -1) {
-          userSockets.splice(index, 1);
-        }
-        
-        if (userSockets.length === 0) {
-          this.userSockets.delete(userId);
-        }
-      }
-    });
+    /* ---------- EVENTS ---------- */
 
-    // Handle custom events
     socket.on('join_room', (room: string) => {
       socket.join(room);
-      console.log(`📝 User ${userId} joined room: ${room}`);
+      console.log(`📝 ${userId} joined room ${room}`);
     });
 
     socket.on('leave_room', (room: string) => {
       socket.leave(room);
-      console.log(`📝 User ${userId} left room: ${room}`);
+      console.log(`📝 ${userId} left room ${room}`);
     });
 
     socket.on('notification_read', (notificationId: string) => {
-      this.io.to(`user:${userId}`).emit('notification_updated', {
+      this.io?.to(`user:${userId}`).emit('notification_updated', {
         notificationId,
-        read: true
+        read: true,
+        timestamp: new Date(),
       });
     });
 
-    // Health check
-    socket.on('ping', (callback) => {
-      if (typeof callback === 'function') {
-        callback('pong');
+    socket.on('ping', (callback?: (msg: string) => void) => {
+      callback?.('pong');
+    });
+
+    socket.on('disconnect', () => {
+      console.log(`🔌 Disconnected: ${socketId}`);
+
+      const sockets = this.userSockets.get(userId);
+      if (!sockets) return;
+
+      const index = sockets.indexOf(socketId);
+      if (index !== -1) sockets.splice(index, 1);
+
+      if (sockets.length === 0) {
+        this.userSockets.delete(userId);
       }
     });
   }
 
-  // Emit to specific user
+  /* =======================
+     EMIT HELPERS
+  ======================= */
+
   emitToUser(userId: string, event: string, data: any): void {
+    if (!this.io) return;
     this.io.to(`user:${userId}`).emit(event, data);
   }
 
-  // Emit to multiple users
   emitToUsers(userIds: string[], event: string, data: any): void {
-    userIds.forEach(userId => {
-      this.emitToUser(userId, event, data);
-    });
+    if (!this.io) return;
+    userIds.forEach(id => this.emitToUser(id, event, data));
   }
 
-  // Emit to all users
   emitToAll(event: string, data: any): void {
+    if (!this.io) return;
     this.io.emit(event, data);
   }
 
-  // Emit to role
   emitToRole(role: string, event: string, data: any): void {
+    if (!this.io) return;
     this.io.to(`role:${role}`).emit(event, data);
   }
 
-  // Emit to room
   emitToRoom(room: string, event: string, data: any): void {
+    if (!this.io) return;
     this.io.to(room).emit(event, data);
   }
 
-  // Check if user is online
-  isUserOnline(userId: string): boolean {
-    return this.userSockets.has(userId) && this.userSockets.get(userId)!.length > 0;
+  /* =======================
+     APPOINTMENT EVENTS
+  ======================= */
+
+  notifyNewAppointmentToDoctor(doctorId: string, appointment: any): void {
+    if (!this.io) return;
+
+    this.io.to(`doctor:${doctorId}`).emit('appointment:new', {
+      type: 'APPOINTMENT_CREATED',
+      appointment,
+      timestamp: new Date(),
+    });
+
+    this.io.to(`doctor-dashboard:${doctorId}`).emit(
+      'dashboard:appointment-update',
+      {
+        type: 'NEW_APPOINTMENT',
+        appointment,
+        timestamp: new Date(),
+      }
+    );
   }
 
-  // Get online users count
+  notifyPatientAppointmentStatus(
+    patientId: string,
+    appointment: any,
+    action: 'created' | 'updated' | 'cancelled'
+  ): void {
+    if (!this.io) return;
+
+    this.io.to(`user:${patientId}`).emit('appointment:status', {
+      type: `APPOINTMENT_${action.toUpperCase()}`,
+      appointment,
+      timestamp: new Date(),
+    });
+  }
+
+  updateAppointmentRealTime(
+    appointmentId: string,
+    updateData: any
+  ): void {
+    if (!this.io) return;
+
+    this.io.to(`appointment:${appointmentId}`).emit(
+      'appointment:update',
+      {
+        appointmentId,
+        ...updateData,
+        timestamp: new Date(),
+      }
+    );
+  }
+
+  /* =======================
+     UTILS
+  ======================= */
+
+  isUserOnline(userId: string): boolean {
+    return (
+      this.userSockets.has(userId) &&
+      this.userSockets.get(userId)!.length > 0
+    );
+  }
+
   getOnlineUsersCount(): number {
     return this.userSockets.size;
   }
 
-  // Get user's socket IDs
-  getUserSocketIds(userId: string): string[] {
-    return this.userSockets.get(userId) || [];
+  async getOnlineDoctors(): Promise<string[]> {
+    if (!this.io) return [];
+
+    const sockets = await this.io.in('role:doctor').fetchSockets();
+    return [...new Set(sockets.map(s => s.data.user._id))];
+  }
+
+  sendNotification(userId: string, notification: any): void {
+    if (!this.io) return;
+
+    this.io.to(`user:${userId}`).emit('notification:new', {
+      ...notification,
+      timestamp: new Date(),
+    });
   }
 }
 

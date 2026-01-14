@@ -28,7 +28,6 @@ const storage = multer.diskStorage({
     const timestamp = Date.now();
     const originalExt = path.extname(file.originalname);
     
-    // Tên file đơn giản: avatar_userId_timestamp.ext
     const simpleFilename = `avatar_${userId}_${timestamp}${originalExt}`;
     cb(null, simpleFilename);
   }
