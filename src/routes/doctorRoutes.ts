@@ -31,7 +31,10 @@ import {
   deleteTreatmentStep,
   startTreatmentStep,
   rejectTreatmentStep,
-  reviewAndDecideStep
+  reviewAndDecideStep,
+  scheduleReExamination,
+  confirmReExaminationArrival,
+  getAvailableSlots
 } from '../controllers/doctorcontroller';
 import multer from 'multer';
 import path from 'path';
@@ -123,6 +126,11 @@ router.post(
   reviewAndDecideStep
 );
 
+
+// Thêm vào doctor routes
+router.post('/consultations/:consultationId/steps/:stepNumber/schedule-re-examination',protect, scheduleReExamination);
+router.post('/consultations/:consultationId/steps/:stepNumber/confirm-arrival', confirmReExaminationArrival);
+
 // upload image  doctor avatar
 router.post('/avatar', 
   (req, res, next) => {
@@ -168,6 +176,7 @@ router.delete('/consultations/:consultationId/steps/:stepNumber', deleteTreatmen
 router.post('/consultations/:consultationId/steps/:stepNumber/start', startTreatmentStep);
 router.post('/consultations/:consultationId/steps/:stepNumber/reject', rejectTreatmentStep);
 router.get('/drugs', getAllDrugs);
+router.get('/appointments/available-slots', getAvailableSlots);
 // Patient routes
 router.get('/:doctorId/patients/all', getAllPatients);
 

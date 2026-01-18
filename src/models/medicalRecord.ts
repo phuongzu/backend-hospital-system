@@ -11,10 +11,10 @@ export interface TreatmentStep {
   dosage?: string;
   duration?: string;
   instructions?: string;
-  status: 'pending' | 'in-progress' | 'completed' | 'approved' | 'rejected';
-  completedAt?: Date;
+status: 'pending' | 'in-progress' | 'completed' | 'approved' | 'rejected' | 'scheduled' | 'waiting_for_patient_approval' | 'patient_suggested';  completedAt?: Date;
   approvedAt?: Date;
   startedAt?: Date;
+  condition_description?: string; // Added field for condition reports
   patientMessage?: string;
   patient_feedback?: string;
   doctorNotes?: string;
@@ -24,6 +24,14 @@ export interface TreatmentStep {
   rejectedAt?: Date;
   requires_followup?: boolean;  // NEW: Yêu cầu tái khám
   followup_reason?: string;     // NEW: Lý do tái khám
+
+  isPhysicalVisit?: boolean;
+  reExaminationScheduled?: boolean;
+  reExaminationDate?: Date;
+  reExaminationAppointmentId?: mongoose.Types.ObjectId;
+  arrivalConfirmed?: boolean;
+  arrivalConfirmedAt?: Date;
+  
   _id?: string;
 }
 
@@ -359,7 +367,7 @@ const medicalRecordSchema = new Schema<IMedicalRecord, IMedicalRecordModel>(
       },
       status: {
         type: String,
-        enum: ['pending', 'in-progress', 'completed', 'approved', 'rejected'],
+        enum: ['pending', 'in-progress', 'completed', 'approved', 'rejected', 'scheduled'],
         default: 'pending'
       },
       completedAt: {
@@ -375,6 +383,11 @@ const medicalRecordSchema = new Schema<IMedicalRecord, IMedicalRecordModel>(
         type: String,
         trim: true,
         maxlength: [500, 'Patient message cannot exceed 500 characters']
+      },
+      condition_description: {
+        type: String,
+        trim: true,
+        maxlength: [1000, 'Condition description cannot exceed 1000 characters']
       },
       patient_feedback: {  // NEW
         type: String,

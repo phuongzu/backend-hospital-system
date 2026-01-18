@@ -26,7 +26,6 @@ import {
   uploadAvatar,
   deleteAvatar,
   getAvatar,
-
 } from '../controllers/patientcontroller';
 import { protect } from '../middlewares/authmiddleware';
 import multer from 'multer';

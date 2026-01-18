@@ -79,9 +79,7 @@ const socketAuthMiddleware = (socket: Socket, next: (err?: Error) => void) => {
     // Verify token
     const decoded = jwt.verify(token, process.env.JWT_SECRET!) as any;
     console.log('🔐 Decoded token:', decoded);
-    
-    // Sửa ở đây:
-    const userId = decoded.userId || decoded.id;
+        const userId = decoded.userId || decoded.id;
     if (!userId) {
       console.error('❌ No userId or id found in token:', decoded);
       return next(new Error('Authentication error: No user ID in token'));
@@ -534,17 +532,11 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Request logging
-app.use((req: Request, _res: Response, next: NextFunction) => {
+app.use((req: Request, res: Response, next: NextFunction) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
-  if (req.method === 'POST' || req.method === 'PUT') {
-    console.log('Body:', JSON.stringify(req.body, null, 2).substring(0, 500));
-  }
   next();
 });
 
-/* =====================================================
-   STATIC FILES (AVATARS) - FIXED FOR MULTI-DEVICE
-===================================================== */
 const AVATAR_PUBLIC_ROUTE = '/uploads/avatars';
 const AVATAR_DIR = path.join(__dirname, '..', 'src', 'uploads', 'avatars');
 
@@ -641,9 +633,7 @@ app.get('/health', (req: Request, res: Response) => {
 app.get('/api/avatar/:filename', (req: Request, res: Response) => {
   try {
     const { filename } = req.params;
-    
-    // Security check: không cho phép path traversal
-    if (!filename || filename.includes('..') || filename.includes('/')) {
+        if (!filename || filename.includes('..') || filename.includes('/')) {
       return res.status(400).json({
         success: false,
         message: 'Invalid filename'
@@ -697,7 +687,7 @@ app.get('/api/avatar/:filename', (req: Request, res: Response) => {
     
     // Set headers
     res.setHeader('Content-Type', contentType);
-    res.setHeader('Cache-Control', 'public, max-age=31536000'); // 1 year
+    res.setHeader('Cache-Control', 'public, max-age=31536000');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('X-Server-URL', SERVER_URL);
     

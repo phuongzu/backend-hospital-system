@@ -65,25 +65,34 @@ const handleError = (res, error, message = 'Internal server error') => {
 // Get alternative time slots
 const getAlternativeTimeSlots = async (doctorId: string, date: Date): Promise<string[]> => {
   try {
+    const startOfDay = new Date(date);
+    startOfDay.setHours(0, 0, 0, 0);
+    
+    const endOfDay = new Date(date);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    // FIX: Lấy tất cả các appointment đã đặt trong ngày
+    const bookedAppointments = await Appointment.find({
+      doctor_id: doctorId,
+      appointment_date: { $gte: startOfDay, $lte: endOfDay },
+      status: { $in: ['pending', 'confirmed', 'in_progress'] }
+    }).select('time_slot');
+
+    const bookedSlots = bookedAppointments.map(app => app.time_slot);
+    
+    // Tất cả các time slot có sẵn
     const allTimeSlots = [
       '09:00', '09:30', '10:00', '10:30', '11:00', '11:30',
       '14:00', '14:30', '15:00', '15:30', '16:00', '16:30'
     ];
 
-    const bookedAppointments = await Appointment.find({
-      doctor_id: doctorId,
-      appointment_date: date,
-      status: { $in: ['pending', 'confirmed'] }
-    }).select('time_slot');
-
-    const bookedSlots = bookedAppointments.map(app => app.time_slot);
+    // Lọc ra các slot chưa được đặt
     return allTimeSlots.filter(slot => !bookedSlots.includes(slot));
   } catch (error) {
     console.error('Error getting alternative slots:', error);
     return [];
   }
 };
-
 // Calculate end time based on start time and duration
 const calculateEndTime = (startTime: string, durationMinutes: number): string => {
   const [hours, minutes] = startTime.split(':').map(Number);
@@ -651,21 +660,22 @@ export const getAppointmentAvailability = async (req: Request, res: Response) =>
     if (!doctor_id || !date) {
       return res.status(400).json({ message: 'Doctor ID and date are required' });
     }
+    
     if (!mongoose.Types.ObjectId.isValid(doctor_id as string)) {
       return res.status(400).json({ message: 'Invalid doctor ID format' });
     }
 
-    // Check if doctor exists
-    const doctor = await Doctor.findById(doctor_id);
-    if (!doctor) {
-      return res.status(404).json({ message: 'Doctor not found' });
-    }
+    const appointmentDate = new Date(date as string);
+    const startOfDay = new Date(appointmentDate);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(appointmentDate);
+    endOfDay.setHours(23, 59, 59, 999);
 
-    // Get existing appointments for this doctor and date
+    // FIX: Lấy tất cả appointments trong ngày
     const existingAppointments = await Appointment.find({
       doctor_id,
-      appointment_date: new Date(date as string),
-      status: { $in: ['pending', 'confirmed'] }
+      appointment_date: { $gte: startOfDay, $lte: endOfDay },
+      status: { $in: ['pending', 'confirmed', 'in_progress'] }
     });
 
     const allTimeSlots = [
@@ -673,20 +683,39 @@ export const getAppointmentAvailability = async (req: Request, res: Response) =>
       '14:00', '14:30', '15:00', '15:30', '16:00', '16:30'
     ];
 
-    // Filter out booked time slots
     const bookedSlots = existingAppointments.map(app => app.time_slot);
-    const availableSlots = allTimeSlots.map(slot => ({
-      time: slot,
-      isAvailable: !bookedSlots.includes(slot),
-      isReserved: false // This would need additional logic for reservations
-    }));
+    
+    // Tạo response chi tiết
+    const availableSlots = allTimeSlots.map(slot => {
+      const isBooked = bookedSlots.includes(slot);
+      const bookedAppointment = existingAppointments.find(app => app.time_slot === slot);
+      
+      return {
+        time: slot,
+        isAvailable: !isBooked,
+        isReserved: false, // Có thể thêm logic reservation
+        bookedInfo: isBooked ? {
+          appointment_id: bookedAppointment?._id,
+          patient_id: bookedAppointment?.user_id,
+          status: bookedAppointment?.status
+        } : null
+      };
+    });
 
+    // Kiểm tra số lượng slot còn trống
+    const availableCount = availableSlots.filter(slot => slot.isAvailable).length;
+    
     res.json({ 
-      date, 
+      date: appointmentDate.toISOString().split('T')[0],
       availableSlots,
+      summary: {
+        totalSlots: allTimeSlots.length,
+        bookedSlots: bookedSlots.length,
+        availableCount: availableCount,
+        isFullyBooked: availableCount === 0
+      },
       doctor: {
-        name: doctor.name,
-        specialty: doctor.specialty_id
+        id: doctor_id
       }
     });
   } catch (error) {
@@ -1937,3 +1966,73 @@ export const debugAvatar = async (req: Request, res: Response): Promise<void> =>
   }
 };
 
+const getNextAvailableDates = async (doctorId: string, days: number = 7): Promise<any[]> => {
+  const availableDates = [];
+  const today = new Date();
+  
+  for (let i = 1; i <= days; i++) {
+    const date = new Date(today);
+    date.setDate(today.getDate() + i);
+    
+    // Kiểm tra xem ngày này có slot nào trống không
+    const slots = await getAlternativeTimeSlots(doctorId, date);
+    if (slots.length > 0) {
+      availableDates.push({
+        date: date.toISOString().split('T')[0],
+        available_slots: slots.length,
+        slots: slots
+      });
+    }
+  }
+  
+  return availableDates;
+};
+
+export const checkRealTimeAvailability = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { doctor_id, date, time_slot } = req.query;
+    
+    if (!doctor_id || !date || !time_slot) {
+      res.status(400).json({ 
+        success: false,
+        message: 'doctor_id, date, and time_slot are required' 
+      });
+      return;
+    }
+
+    const appointmentDate = new Date(date as string);
+    const startOfDay = new Date(appointmentDate);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(appointmentDate);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    // Kiểm tra real-time
+    const existingAppointment = await Appointment.findOne({
+      doctor_id,
+      appointment_date: { $gte: startOfDay, $lte: endOfDay },
+      time_slot: time_slot,
+      status: { $in: ['pending', 'confirmed'] }
+    });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        isAvailable: !existingAppointment,
+        timeSlot: time_slot,
+        date: date,
+        checkedAt: new Date().toISOString(),
+        conflict: existingAppointment ? {
+          appointmentId: existingAppointment._id,
+          status: existingAppointment.status,
+          createdAt: existingAppointment.created_at
+        } : null
+      }
+    });
+  } catch (error) {
+    console.error('Error checking real-time availability:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Error checking availability' 
+    });
+  }
+};
