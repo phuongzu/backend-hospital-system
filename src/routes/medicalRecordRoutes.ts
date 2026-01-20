@@ -9,7 +9,9 @@ import {
   activateTreatmentStep,
   changeTreatmentPlanStatus,
   getMyRecords,
-  completeTreatmentStepWithMessage
+  completeTreatmentStepWithMessage,
+  getAllReExaminationAppointments,
+  getReExaminationAppointment,
 } from '../controllers/medicalRecordController';
 import { protect } from '../middlewares/authmiddleware';
 
@@ -17,11 +19,12 @@ const router = express.Router();
 
 router.get('/my-records', protect, getMyRecords);
 router.post('/:id/start-treatment', protect, startTreatment);
+router.get('/:recordId/re-examination/appointments', protect, getAllReExaminationAppointments);
+router.get('/:recordId/steps/:stepNumber/re-examination',protect, getReExaminationAppointment);
 
 // Routes for Treatment Plan Steps (Patient side)
 router.patch('/:id/steps/:stepNumber/activate', protect, activateTreatmentStep);
 router.patch('/:id/steps/:stepNumber/complete', protect, completeTreatmentStep); // Standardized
-// Also keep the old one or the one frontend was trying if preferred, but standardization is better:
 router.patch('/:id/complete-step/:stepNumber', protect, completeTreatmentStep); 
 router.patch('/:consultationId/steps/:stepNumber/complete', completeTreatmentStep);
 router.patch('/:consultationId/steps/:stepNumber/complete-with-message', completeTreatmentStepWithMessage);

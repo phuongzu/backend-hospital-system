@@ -1,6 +1,7 @@
 import MedicalRecord from '../models/medicalRecord';
 import Notification from '../models/notification';
 import {AuthRequest} from '../middlewares/authmiddleware';
+import Appointment from '../models/appointment';
 
 // Get medical records for the logged-in user (patient or doctor)
 export const getMyRecords = async (req: AuthRequest, res: any) => {
@@ -34,16 +35,30 @@ export const startTreatment = async (req: AuthRequest, res: any) => {
     const record = await MedicalRecord.findById(id);
     if (!record) return res.status(404).json({ error: 'Record not found' });
 
-    // Example: initialize processes if not already started
-    if (!record.processes || record.processes.length === 0) {
-      record.processes = [
-        { id: '1', name: 'Step 1', description: 'Do step 1', status: 'pending' },
-        { id: '2', name: 'Step 2', description: 'Do step 2', status: 'pending' },
-        // Add more steps as needed
+    // Ensure treatment_plan exists and steps have createdAt
+    if (!record.treatment_plan || record.treatment_plan.length === 0) {
+      record.treatment_plan = [
+        { 
+          stepNumber: 1, 
+          title: 'Initial Phase', 
+          description: 'Start prescribed medication and track symptoms', 
+          status: 'in-progress',
+          createdAt: new Date(), // Set creation date
+          isPhysicalVisit: false
+        },
+        { 
+          stepNumber: 2, 
+          title: 'Follow-up Check', 
+          description: 'Scheduled re-examination at the clinic', 
+          status: 'scheduled',
+          createdAt: new Date(),
+          isPhysicalVisit: true,
+          reExaminationDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7 days later
+        }
       ];
       await record.save();
     }
-    res.json({ processes: record.processes });
+    res.json({ treatment_plan: record.treatment_plan });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -520,7 +535,6 @@ export const changeTreatmentPlanStatus = async (req: AuthRequest, res: any): Pro
   }
 };
 
-// ========== HOÀN THÀNH STEP VỚI MESSAGE ==========
 export const completeTreatmentStepWithMessage = async (req: any, res: any): Promise<void> => {
   try {
     const { consultationId, stepNumber } = req.params;
@@ -561,14 +575,8 @@ export const completeTreatmentStepWithMessage = async (req: any, res: any): Prom
     // Match the schema property name 'patientMessage'
     step.patientMessage = patientMessage || 'Step completed';
     step.condition_description = conditionDescription || '';
-
-    // 5. CRITICAL FIX: Use validateModifiedOnly: true 
-    // This allows saving the update even if the top-level 'diagnosis' is currently invalid in your DB
     await medicalRecord.save({ validateModifiedOnly: true });
-
-    // 6. Notifications (Simplified for demo, usually involves external services)
     console.log(`✅ Step ${stepNum} updated. Waiting for doctor review.`);
-
     res.status(200).json({ 
       success: true, 
       data: medicalRecord,
@@ -580,6 +588,315 @@ export const completeTreatmentStepWithMessage = async (req: any, res: any): Prom
     res.status(500).json({ 
       success: false, 
       message: 'Failed to complete step: ' + error.message 
+    });
+  }
+};
+
+// Lấy appointment tái khám cho một treatment step cụ thể
+export const getReExaminationAppointment = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { recordId, stepNumber } = req.params;
+    
+    if (!req.user) {
+      res.status(401).json({
+        success: false,
+        message: 'Authentication required'
+      });
+      return;
+    }
+
+    // Validate input
+    if (!recordId || !stepNumber) {
+      res.status(400).json({
+        success: false,
+        message: 'Medical record ID and step number are required'
+      });
+      return;
+    }
+
+    // Find medical record
+    const medicalRecord = await MedicalRecord.findById(recordId)
+      .populate('user_id', 'name email phoneNumber')
+      .populate('doctor_id', 'name email')
+      .populate('appointment_id');
+
+    if (!medicalRecord) {
+      res.status(404).json({
+        success: false,
+        message: 'Medical record not found'
+      });
+      return;
+    }
+
+    // Check if user has permission (patient or doctor)
+    const isPatient = medicalRecord.user_id._id.toString() === req.user._id.toString();
+    const isDoctor = medicalRecord.doctor_id._id.toString() === req.user._id.toString();
+    
+    if (!isPatient && !isDoctor) {
+      res.status(403).json({
+        success: false,
+        message: 'Access denied to this medical record'
+      });
+      return;
+    }
+
+    // Parse step number
+    const stepNum = parseInt(stepNumber);
+    
+    // Find the treatment step
+    const treatmentStep = medicalRecord.treatment_plan.find(
+      step => step.stepNumber === stepNum
+    );
+
+    if (!treatmentStep) {
+      res.status(404).json({
+        success: false,
+        message: 'Treatment step not found'
+      });
+      return;
+    }
+
+    // If step has reExaminationAppointmentId, fetch the appointment
+    let appointment = null;
+    if (treatmentStep.reExaminationAppointmentId) {
+      appointment = await Appointment.findById(treatmentStep.reExaminationAppointmentId)
+        .populate('doctor_id', 'name specialty_id')
+        .populate('user_id', 'name email phoneNumber');
+    }
+
+    // If no appointment ID but has reExaminationDate, try to find matching appointment
+    if (!appointment && treatmentStep.reExaminationDate) {
+      const reExaminationDate = new Date(treatmentStep.reExaminationDate);
+      const startOfDay = new Date(reExaminationDate);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(reExaminationDate);
+      endOfDay.setHours(23, 59, 59, 999);
+
+      // Find appointment on the same day for this patient and doctor
+      appointment = await Appointment.findOne({
+        user_id: medicalRecord.user_id._id,
+        doctor_id: medicalRecord.doctor_id._id,
+        appointment_date: {
+          $gte: startOfDay,
+          $lte: endOfDay
+        },
+        status: { $in: ['confirmed', 'scheduled'] }
+      })
+      .populate('doctor_id', 'name specialty_id')
+      .populate('user_id', 'name email phoneNumber');
+    }
+
+    // Prepare response data
+    const responseData: any = {
+      success: true,
+      data: {
+        recordId,
+        stepNumber: stepNum,
+        stepTitle: treatmentStep.title,
+        stepStatus: treatmentStep.status,
+        isPhysicalVisit: treatmentStep.isPhysicalVisit,
+        requiresFollowup: treatmentStep.requires_followup,
+        followupReason: treatmentStep.followup_reason,
+        hasAppointment: !!appointment,
+        appointment: null
+      }
+    };
+
+    // Add appointment details if found
+    if (appointment) {
+      responseData.data.appointment = {
+        _id: appointment._id,
+        appointment_date: appointment.appointment_date,
+        time_slot: appointment.time_slot,
+        status: appointment.status,
+        reason: appointment.reason,
+        notes: appointment.notes,
+        created_at: appointment.created_at,
+        doctor: {
+          _id: appointment.doctor_id._id,
+          name: appointment.doctor_id.name,
+          specialty: appointment.doctor_id.specialty_id?.name || 'General'
+        },
+        patient: {
+          _id: appointment.user_id._id,
+          name: appointment.user_id.name
+        }
+      };
+    }
+
+    // Add reExaminationDate info even if no appointment found
+    if (treatmentStep.reExaminationDate) {
+      responseData.data.reExaminationDate = treatmentStep.reExaminationDate;
+    }
+
+    res.status(200).json(responseData);
+
+  } catch (error) {
+    console.error('❌ Error fetching re-examination appointment:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: process.env.NODE_ENV === 'development' ? (error as any).message : undefined
+    });
+  }
+};
+
+// Lấy tất cả appointments tái khám cho một medical record
+export const getAllReExaminationAppointments = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { recordId } = req.params;
+    
+    if (!req.user) {
+      res.status(401).json({
+        success: false,
+        message: 'Authentication required'
+      });
+      return;
+    }
+
+    // Find medical record
+    const medicalRecord = await MedicalRecord.findById(recordId)
+      .populate('user_id', 'name email phoneNumber')
+      .populate('doctor_id', 'name email');
+
+    if (!medicalRecord) {
+      res.status(404).json({
+        success: false,
+        message: 'Medical record not found'
+      });
+      return;
+    }
+
+    // Check permission
+    const isPatient = medicalRecord.user_id._id.toString() === req.user._id.toString();
+    const isDoctor = medicalRecord.doctor_id._id.toString() === req.user._id.toString();
+    
+    if (!isPatient && !isDoctor) {
+      res.status(403).json({
+        success: false,
+        message: 'Access denied to this medical record'
+      });
+      return;
+    }
+
+    // PHẦN QUAN TRỌNG: Tìm tất cả appointments cho patient và doctor này
+    const appointments = await Appointment.find({
+      user_id: medicalRecord.user_id._id,
+      doctor_id: medicalRecord.doctor_id._id,
+      status: { $in: ['scheduled', 'confirmed', 'completed'] },
+      reason: { $regex: /re-examination|follow-up|tái khám/i }
+    })
+    .populate('doctor_id', 'name specialty_id')
+    .populate('user_id', 'name email phoneNumber')
+    .sort({ appointment_date: 1 });
+
+    // Map appointments to steps dựa trên reExaminationDate hoặc logic khác
+    const stepAppointments = medicalRecord.treatment_plan
+      .filter(step => step.isPhysicalVisit || step.requires_followup || step.reExaminationDate)
+      .map(step => {
+        // Tìm appointment phù hợp nhất cho step này
+        let appointment = null;
+        
+        // Ưu tiên 1: appointment có ID liên kết trực tiếp
+        if (step.reExaminationAppointmentId) {
+          appointment = appointments.find(app => 
+            app._id.toString() === step.reExaminationAppointmentId?.toString()
+          );
+        }
+        
+        // Ưu tiên 2: appointment có date trùng với reExaminationDate
+        if (!appointment && step.reExaminationDate) {
+          const stepDate = new Date(step.reExaminationDate);
+          appointment = appointments.find(app => {
+            const appDate = new Date(app.appointment_date);
+            return appDate.toDateString() === stepDate.toDateString();
+          });
+        }
+        
+        // Ưu tiên 3: appointment có lý do tương tự với step title
+        if (!appointment && step.title) {
+          const titleLower = step.title.toLowerCase();
+          appointment = appointments.find(app => {
+            const reasonLower = (app.reason || '').toLowerCase();
+            return reasonLower.includes(titleLower) || 
+                   (step.title.includes('Follow-up') && reasonLower.includes('follow'));
+          });
+        }
+        
+        // Ưu tiên 4: appointment đầu tiên chưa được gán
+        if (!appointment) {
+          appointment = appointments.find(app => 
+            !medicalRecord.treatment_plan.some(otherStep => 
+              otherStep.reExaminationAppointmentId?.toString() === app._id.toString()
+            )
+          );
+        }
+
+        return {
+          stepNumber: step.stepNumber,
+          stepTitle: step.title,
+          stepStatus: step.status,
+          isPhysicalVisit: step.isPhysicalVisit,
+          requiresFollowup: step.requires_followup,
+          followupReason: step.followup_reason,
+          reExaminationDate: step.reExaminationDate,
+          appointment: appointment ? {
+            _id: appointment._id,
+            appointment_date: appointment.appointment_date,
+            time_slot: appointment.time_slot,
+            status: appointment.status,
+            reason: appointment.reason,
+            notes: appointment.notes
+          } : null
+        };
+      });
+
+    // THÊM: Nếu có appointments không được map tới bất kỳ step nào
+    const unmappedAppointments = appointments
+      .filter(app => !stepAppointments.some(sa => 
+        sa.appointment && sa.appointment._id.toString() === app._id.toString()
+      ))
+      .map(app => ({
+        stepNumber: null,
+        stepTitle: 'Additional Appointment',
+        stepStatus: 'additional',
+        isPhysicalVisit: true,
+        requiresFollowup: false,
+        followupReason: 'Additional medical follow-up',
+        reExaminationDate: app.appointment_date,
+        appointment: {
+          _id: app._id,
+          appointment_date: app.appointment_date,
+          time_slot: app.time_slot,
+          status: app.status,
+          reason: app.reason,
+          notes: app.notes
+        }
+      }));
+
+    const allAppointments = [...stepAppointments, ...unmappedAppointments];
+
+    res.status(200).json({
+      success: true,
+      data: {
+        recordId,
+        totalSteps: medicalRecord.treatment_plan.length,
+        reExaminationSteps: allAppointments.length,
+        stepAppointments: allAppointments,
+        debug: {
+          totalAppointmentsFound: appointments.length,
+          treatmentStepsWithFollowup: medicalRecord.treatment_plan.filter(step => 
+            step.isPhysicalVisit || step.requires_followup
+          ).length
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error fetching all re-examination appointments:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
     });
   }
 };

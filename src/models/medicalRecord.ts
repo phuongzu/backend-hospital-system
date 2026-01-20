@@ -11,7 +11,9 @@ export interface TreatmentStep {
   dosage?: string;
   duration?: string;
   instructions?: string;
-status: 'pending' | 'in-progress' | 'completed' | 'approved' | 'rejected' | 'scheduled' | 'waiting_for_patient_approval' | 'patient_suggested';  completedAt?: Date;
+  status: 'pending' | 'in-progress' | 'completed' | 'approved' | 'rejected' | 'scheduled' | 'waiting_for_patient_approval' | 'patient_suggested';  
+  completedAt?: Date;
+  createdAt?: Date;
   approvedAt?: Date;
   startedAt?: Date;
   condition_description?: string; // Added field for condition reports
@@ -352,6 +354,10 @@ const medicalRecordSchema = new Schema<IMedicalRecord, IMedicalRecordModel>(
       medication: {
         type: String,
         trim: true
+      },
+      createdAt: {
+        type: Date,
+        default: Date.now
       },
       dosage: {
         type: String,
