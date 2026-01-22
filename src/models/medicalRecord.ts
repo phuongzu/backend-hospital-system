@@ -748,27 +748,38 @@ medicalRecordSchema.methods.scheduleReExamination = function(
     throw new Error(`Step ${stepNumber} not found`);
   }
   
-  // Nếu đã có appointment cũ, không thay đổi ID
-  const existingAppointmentId = step.reExaminationAppointmentId;
+  // QUAN TRỌNG: Tìm appointmentId theo thứ tự ưu tiên
+  let targetAppointmentId = null;
   
+  // 1. Ưu tiên: appointmentId từ tham số (nếu có)
+  if (appointmentId) {
+    targetAppointmentId = appointmentId;
+  }
+  // 2. Sử dụng appointmentId đã có trong step
+  else if (step.reExaminationAppointmentId) {
+    targetAppointmentId = step.reExaminationAppointmentId;
+  }
+  
+  // Cập nhật thông tin step
   step.reExaminationScheduled = true;
   step.reExaminationDate = appointmentDate;
   step.reExaminationTime = appointmentTime;
   step.reExaminationNotes = notes;
-  step.needsReExamination = false; // Đã lập lịch xong
+  step.needsReExamination = false;
   
-  // Chỉ cập nhật appointmentId nếu được cung cấp và chưa có
-  if (appointmentId && !existingAppointmentId) {
-    step.reExaminationAppointmentId = appointmentId;
+  // Chỉ cập nhật appointmentId nếu có giá trị mới
+  if (targetAppointmentId) {
+    step.reExaminationAppointmentId = targetAppointmentId;
   }
   
-  // Nếu đang là completed/approved, chuyển sang scheduled
+  // Cập nhật trạng thái
   if (step.status === 'completed' || step.status === 'approved') {
     step.status = 'scheduled';
   }
   
   return this.save();
 };
+
 
 // Reschedule re-examination
 medicalRecordSchema.methods.rescheduleReExamination = function(

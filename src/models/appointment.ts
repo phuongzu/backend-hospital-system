@@ -6,7 +6,7 @@ export interface IAppointment extends Document {
   specialty_id: mongoose.Types.ObjectId;
   appointment_date: Date;
   time_slot: string;
-  status: 'pending' | 'confirmed' | 'completed' | 'cancelled';
+  status: 'pending' | 'confirmed' | 'completed' | 'cancelled'| 'scheduled';
   reason?: string;
   re_examination_step_id?: mongoose.Types.ObjectId;
   is_re_examination?: boolean;
@@ -20,7 +20,7 @@ const appointmentSchema = new mongoose.Schema<IAppointment>({
   specialty_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Specialty' },
   appointment_date: { type: Date, required: true },
   time_slot: { type: String, required: true },
-  status: { type: String, enum: ['pending', 'confirmed', 'completed', 'cancelled'], default: 'pending' },
+  status: { type: String, enum: ['pending', 'confirmed', 'completed', 'cancelled','scheduled'], default: 'pending' },
   reason: String,
   re_examination_step_id: { 
     type: mongoose.Schema.Types.ObjectId, 
