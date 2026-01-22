@@ -850,6 +850,8 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
       insurance_info: insurance_info || {},
       emergency_contact_required: emergency_contact_required || false,
       status: 'pending',
+      is_re_examination: false,
+      re_examination_step_id: null,
       created_at: new Date(),
       metadata: {
         booked_via: 'patient_portal',
@@ -857,6 +859,7 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
         ip_address: req.ip
       }
     });
+
 
     await appointment.save();
 

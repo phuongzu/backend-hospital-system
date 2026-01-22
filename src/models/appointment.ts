@@ -8,6 +8,8 @@ export interface IAppointment extends Document {
   time_slot: string;
   status: 'pending' | 'confirmed' | 'completed' | 'cancelled';
   reason?: string;
+  re_examination_step_id?: mongoose.Types.ObjectId;
+  is_re_examination?: boolean;
   notes?: string;
   created_at: Date;
 }
@@ -20,6 +22,15 @@ const appointmentSchema = new mongoose.Schema<IAppointment>({
   time_slot: { type: String, required: true },
   status: { type: String, enum: ['pending', 'confirmed', 'completed', 'cancelled'], default: 'pending' },
   reason: String,
+  re_examination_step_id: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'MedicalRecord.treatment_plan._id',
+    sparse: true
+  },
+  is_re_examination: { 
+    type: Boolean, 
+    default: false 
+  },
   notes: String,
   created_at: { type: Date, default: Date.now },
 });

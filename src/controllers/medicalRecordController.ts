@@ -597,6 +597,11 @@ export const getReExaminationAppointment = async (req: AuthRequest, res: Respons
   try {
     const { recordId, stepNumber } = req.params;
     
+    console.log('=== GET RE-EXAMINATION APPOINTMENT ===');
+    console.log('Record ID:', recordId);
+    console.log('Step Number:', stepNumber);
+    console.log('Authenticated User:', req.user);
+
     if (!req.user) {
       res.status(401).json({
         success: false,
@@ -614,11 +619,40 @@ export const getReExaminationAppointment = async (req: AuthRequest, res: Respons
       return;
     }
 
-    // Find medical record
+    if (!mongoose.Types.ObjectId.isValid(recordId)) {
+      res.status(400).json({
+        success: false,
+        message: 'Invalid medical record ID format'
+      });
+      return;
+    }
+
+    // Parse step number
+    const stepNum = parseInt(stepNumber);
+    if (isNaN(stepNum) || stepNum < 1) {
+      res.status(400).json({
+        success: false,
+        message: 'Invalid step number format'
+      });
+      return;
+    }
+
+    // Find medical record với populate đầy đủ
     const medicalRecord = await MedicalRecord.findById(recordId)
-      .populate('user_id', 'name email phoneNumber')
-      .populate('doctor_id', 'name email')
-      .populate('appointment_id');
+      .populate({
+        path: 'user_id',
+        select: 'name email phoneNumber dateOfBirth gender avatar',
+        model: 'User'
+      })
+      .populate({
+        path: 'doctor_id',
+        select: 'name email avatar specialty_id',
+        populate: {
+          path: 'specialty_id',
+          select: 'name description'
+        }
+      })
+      .populate('appointment_id', 'appointment_date time_slot reason notes');
 
     if (!medicalRecord) {
       res.status(404).json({
@@ -628,10 +662,30 @@ export const getReExaminationAppointment = async (req: AuthRequest, res: Respons
       return;
     }
 
+    console.log('Medical Record found:', {
+      id: medicalRecord._id,
+      patient: medicalRecord.user_id?._id,
+      doctor: medicalRecord.doctor_id?._id,
+      consultation_status: medicalRecord.consultation_status
+    });
+
     // Check if user has permission (patient or doctor)
-    const isPatient = medicalRecord.user_id._id.toString() === req.user._id.toString();
-    const isDoctor = medicalRecord.doctor_id._id.toString() === req.user._id.toString();
+    const isPatient = medicalRecord.user_id && 
+                     (medicalRecord.user_id as any)._id.toString() === req.user._id.toString();
     
+    let isDoctor = false;
+    if (medicalRecord.doctor_id) {
+      // Kiểm tra nếu doctor_id là ObjectId trực tiếp
+      if (medicalRecord.doctor_id instanceof mongoose.Types.ObjectId) {
+        isDoctor = medicalRecord.doctor_id.toString() === req.user._id.toString();
+      } else {
+        // Nếu doctor_id đã được populate
+        isDoctor = (medicalRecord.doctor_id as any)._id?.toString() === req.user._id.toString();
+      }
+    }
+
+    console.log('Permission check:', { isPatient, isDoctor, userId: req.user._id });
+
     if (!isPatient && !isDoctor) {
       res.status(403).json({
         success: false,
@@ -640,10 +694,7 @@ export const getReExaminationAppointment = async (req: AuthRequest, res: Respons
       return;
     }
 
-    // Parse step number
-    const stepNum = parseInt(stepNumber);
-    
-    // Find the treatment step
+    // Find the specific treatment step
     const treatmentStep = medicalRecord.treatment_plan.find(
       step => step.stepNumber === stepNum
     );
@@ -651,54 +702,205 @@ export const getReExaminationAppointment = async (req: AuthRequest, res: Respons
     if (!treatmentStep) {
       res.status(404).json({
         success: false,
-        message: 'Treatment step not found'
+        message: `Treatment step ${stepNum} not found in medical record`
       });
       return;
     }
 
-    // If step has reExaminationAppointmentId, fetch the appointment
+    console.log('Treatment Step found:', {
+      stepNumber: treatmentStep.stepNumber,
+      status: treatmentStep.status,
+      hasReExaminationAppointmentId: !!treatmentStep.reExaminationAppointmentId,
+      isPhysicalVisit: treatmentStep.isPhysicalVisit,
+      requiresFollowup: treatmentStep.requires_followup
+    });
+
+    // Biến lưu appointment tìm được
     let appointment = null;
+    let appointmentType = 'none';
+
+    // **STRATEGY 1: Tìm appointment bằng liên kết trực tiếp (reExaminationAppointmentId)**
     if (treatmentStep.reExaminationAppointmentId) {
+      console.log('Strategy 1: Looking for appointment by reExaminationAppointmentId');
+      
       appointment = await Appointment.findById(treatmentStep.reExaminationAppointmentId)
-        .populate('doctor_id', 'name specialty_id')
-        .populate('user_id', 'name email phoneNumber');
+        .populate({
+          path: 'doctor_id',
+          select: 'name email',
+          populate: {
+            path: 'user_id',
+            select: 'name email phoneNumber',
+            model: 'User'
+          }
+        })
+        .populate('user_id', 'name email phoneNumber')
+        .populate('specialty_id', 'name')
+        .lean();
+
+      if (appointment) {
+        appointmentType = 'direct_link';
+        console.log('✅ Found appointment via direct link:', appointment._id);
+      }
     }
 
-    // If no appointment ID but has reExaminationDate, try to find matching appointment
+    // **STRATEGY 2: Tìm appointment tái khám qua re_examination_step_id**
+    if (!appointment && treatmentStep._id) {
+      console.log('Strategy 2: Looking for re-examination appointment via step ID');
+      
+      appointment = await Appointment.findOne({
+        re_examination_step_id: treatmentStep._id,
+        is_re_examination: true
+      })
+      .populate({
+        path: 'doctor_id',
+        select: 'name email',
+        populate: {
+          path: 'user_id',
+          select: 'name email phoneNumber',
+          model: 'User'
+        }
+      })
+      .populate('user_id', 'name email phoneNumber')
+      .populate('specialty_id', 'name')
+      .lean();
+
+      if (appointment) {
+        appointmentType = 'step_id_link';
+        console.log('✅ Found appointment via step ID link:', appointment._id);
+      }
+    }
+
+    // **STRATEGY 3: Tìm appointment theo ngày reExaminationDate**
     if (!appointment && treatmentStep.reExaminationDate) {
+      console.log('Strategy 3: Looking for appointment by reExaminationDate');
+      
       const reExaminationDate = new Date(treatmentStep.reExaminationDate);
       const startOfDay = new Date(reExaminationDate);
       startOfDay.setHours(0, 0, 0, 0);
       const endOfDay = new Date(reExaminationDate);
       endOfDay.setHours(23, 59, 59, 999);
 
-      // Find appointment on the same day for this patient and doctor
       appointment = await Appointment.findOne({
-        user_id: medicalRecord.user_id._id,
-        doctor_id: medicalRecord.doctor_id._id,
+        user_id: medicalRecord.user_id,
         appointment_date: {
           $gte: startOfDay,
           $lte: endOfDay
         },
-        status: { $in: ['confirmed', 'scheduled'] }
+        status: { $in: ['scheduled', 'confirmed', 'completed'] }
       })
-      .populate('doctor_id', 'name specialty_id')
-      .populate('user_id', 'name email phoneNumber');
+      .populate({
+        path: 'doctor_id',
+        select: 'name email',
+        populate: {
+          path: 'user_id',
+          select: 'name email phoneNumber',
+          model: 'User'
+        }
+      })
+      .populate('user_id', 'name email phoneNumber')
+      .populate('specialty_id', 'name')
+      .lean();
+
+      if (appointment) {
+        appointmentType = 'date_match';
+        console.log('✅ Found appointment by date match:', appointment._id);
+      }
+    }
+
+    // **STRATEGY 4: Tìm appointment có lý do tương tự với step title**
+    if (!appointment && treatmentStep.title) {
+      console.log('Strategy 4: Looking for appointment by reason/title match');
+      
+      const searchTerms = [
+        treatmentStep.title.toLowerCase(),
+        're-examination',
+        'follow-up',
+        'tái khám',
+        'physical review',
+        'clinical review'
+      ];
+
+      appointment = await Appointment.findOne({
+        user_id: medicalRecord.user_id,
+        doctor_id: medicalRecord.doctor_id,
+        $or: [
+          { reason: { $regex: searchTerms.join('|'), $options: 'i' } },
+          { notes: { $regex: searchTerms.join('|'), $options: 'i' } }
+        ],
+        status: { $in: ['scheduled', 'confirmed'] }
+      })
+      .populate({
+        path: 'doctor_id',
+        select: 'name email',
+        populate: {
+          path: 'user_id',
+          select: 'name email phoneNumber',
+          model: 'User'
+        }
+      })
+      .populate('user_id', 'name email phoneNumber')
+      .populate('specialty_id', 'name')
+      .lean();
+
+      if (appointment) {
+        appointmentType = 'reason_match';
+        console.log('✅ Found appointment by reason match:', appointment._id);
+      }
+    }
+
+    // **STRATEGY 5: Tìm appointment gần nhất có status scheduled hoặc confirmed**
+    if (!appointment) {
+      console.log('Strategy 5: Looking for most recent scheduled appointment');
+      
+      const recentAppointments = await Appointment.find({
+        user_id: medicalRecord.user_id,
+        doctor_id: medicalRecord.doctor_id,
+        status: { $in: ['scheduled', 'confirmed'] },
+        appointment_date: { $gt: new Date() } // Chỉ tìm appointment trong tương lai
+      })
+      .populate({
+        path: 'doctor_id',
+        select: 'name email',
+        populate: {
+          path: 'user_id',
+          select: 'name email phoneNumber',
+          model: 'User'
+        }
+      })
+      .populate('user_id', 'name email phoneNumber')
+      .populate('specialty_id', 'name')
+      .sort({ appointment_date: 1 }) // Sắp xếp theo ngày gần nhất
+      .limit(1)
+      .lean();
+
+      if (recentAppointments.length > 0) {
+        appointment = recentAppointments[0];
+        appointmentType = 'most_recent';
+        console.log('✅ Found most recent appointment:', appointment._id);
+      }
     }
 
     // Prepare response data
     const responseData: any = {
       success: true,
       data: {
-        recordId,
+        recordId: recordId,
         stepNumber: stepNum,
         stepTitle: treatmentStep.title,
         stepStatus: treatmentStep.status,
-        isPhysicalVisit: treatmentStep.isPhysicalVisit,
-        requiresFollowup: treatmentStep.requires_followup,
-        followupReason: treatmentStep.followup_reason,
+        stepDescription: treatmentStep.description,
+        isPhysicalVisit: treatmentStep.isPhysicalVisit || false,
+        requiresFollowup: treatmentStep.requires_followup || false,
+        followupReason: treatmentStep.followup_reason || '',
+        reExaminationDate: treatmentStep.reExaminationDate,
         hasAppointment: !!appointment,
-        appointment: null
+        appointmentType: appointmentType,
+        appointment: null,
+        stepMetadata: {
+          hasStepId: !!treatmentStep._id,
+          hasDirectLink: !!treatmentStep.reExaminationAppointmentId,
+          isScheduled: treatmentStep.status === 'scheduled'
+        }
       }
     };
 
@@ -708,38 +910,228 @@ export const getReExaminationAppointment = async (req: AuthRequest, res: Respons
         _id: appointment._id,
         appointment_date: appointment.appointment_date,
         time_slot: appointment.time_slot,
+        appointment_end_time: appointment.appointment_end_time,
         status: appointment.status,
         reason: appointment.reason,
         notes: appointment.notes,
+        is_re_examination: appointment.is_re_examination || false,
+        re_examination_step_id: appointment.re_examination_step_id,
         created_at: appointment.created_at,
+        updated_at: appointment.updated_at,
         doctor: {
-          _id: appointment.doctor_id._id,
-          name: appointment.doctor_id.name,
-          specialty: appointment.doctor_id.specialty_id?.name || 'General'
+          _id: appointment.doctor_id?._id,
+          name: appointment.doctor_id?.name,
+          specialty: appointment.doctor_id?.specialty_id?.name || 'General'
         },
         patient: {
-          _id: appointment.user_id._id,
-          name: appointment.user_id.name
-        }
+          _id: appointment.user_id?._id,
+          name: appointment.user_id?.name
+        },
+        canCheckIn: appointment.status === 'scheduled' && 
+                    new Date(appointment.appointment_date).toDateString() === new Date().toDateString()
       };
     }
 
-    // Add reExaminationDate info even if no appointment found
-    if (treatmentStep.reExaminationDate) {
-      responseData.data.reExaminationDate = treatmentStep.reExaminationDate;
+    // Add treatment step details for physical visits
+    if (treatmentStep.isPhysicalVisit) {
+      responseData.data.visitDetails = {
+        arrivalConfirmed: treatmentStep.arrivalConfirmed || false,
+        arrivalConfirmedAt: treatmentStep.arrivalConfirmedAt,
+        completedAt: treatmentStep.completedAt,
+        doctorNotes: treatmentStep.doctorNotes
+      };
+    }
+
+    // Add metadata for debugging (only in development)
+    if (process.env.NODE_ENV === 'development') {
+      responseData.metadata = {
+        searchStrategies: [
+          'direct_link',
+          'step_id_link', 
+          'date_match',
+          'reason_match',
+          'most_recent'
+        ],
+        usedStrategy: appointmentType,
+        treatmentStep: {
+          _id: treatmentStep._id,
+          stepNumber: treatmentStep.stepNumber,
+          reExaminationAppointmentId: treatmentStep.reExaminationAppointmentId,
+          reExaminationDate: treatmentStep.reExaminationDate
+        },
+        permissions: { isPatient, isDoctor }
+      };
+    }
+
+    // Log success
+    console.log(`✅ Re-examination appointment fetch completed for step ${stepNum}`);
+    console.log(`   Found appointment: ${!!appointment}`);
+    console.log(`   Appointment type: ${appointmentType}`);
+    if (appointment) {
+      console.log(`   Appointment ID: ${appointment._id}`);
+      console.log(`   Appointment Date: ${appointment.appointment_date}`);
+      console.log(`   Appointment Status: ${appointment.status}`);
     }
 
     res.status(200).json(responseData);
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('❌ Error fetching re-examination appointment:', error);
+    
+    // Log detailed error information
+    console.error('Error details:', {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+      code: error.code,
+      keyValue: error.keyValue
+    });
+
+    // Trả về error response chi tiết hơn
+    const errorResponse: any = {
+      success: false,
+      message: 'Internal server error while fetching re-examination appointment'
+    };
+
+    // Chỉ thêm error details trong môi trường development
+    if (process.env.NODE_ENV === 'development') {
+      errorResponse.error = error.message;
+      errorResponse.stack = error.stack;
+    }
+
+    // Xử lý specific errors
+    if (error.name === 'CastError') {
+      errorResponse.message = 'Invalid ID format';
+      res.status(400).json(errorResponse);
+      return;
+    }
+
+    if (error.name === 'ValidationError') {
+      errorResponse.message = 'Validation error';
+      errorResponse.errors = error.errors;
+      res.status(400).json(errorResponse);
+      return;
+    }
+
+    res.status(500).json(errorResponse);
+  }
+};
+
+// Helper function để lấy appointment cho một medical record
+export const getMedicalRecordAppointments = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { recordId } = req.params;
+    
+    if (!req.user) {
+      res.status(401).json({
+        success: false,
+        message: 'Authentication required'
+      });
+      return;
+    }
+
+    if (!recordId) {
+      res.status(400).json({
+        success: false,
+        message: 'Medical record ID is required'
+      });
+      return;
+    }
+
+    // Lấy medical record
+    const medicalRecord = await MedicalRecord.findById(recordId)
+      .populate('user_id', 'name email')
+      .populate('doctor_id', 'name email');
+
+    if (!medicalRecord) {
+      res.status(404).json({
+        success: false,
+        message: 'Medical record not found'
+      });
+      return;
+    }
+
+    // Tìm tất cả appointments liên quan đến medical record này
+    const appointments = await Appointment.find({
+      $or: [
+        { _id: medicalRecord.appointment_id }, // Appointment gốc
+        { re_examination_step_id: { $in: medicalRecord.treatment_plan.map(step => step._id) } }, // Appointments tái khám
+        { 
+          user_id: medicalRecord.user_id,
+          doctor_id: medicalRecord.doctor_id,
+          appointment_date: { $gte: medicalRecord.created_at } // Appointments sau khi tạo medical record
+        }
+      ]
+    })
+    .populate('doctor_id', 'name')
+    .populate('user_id', 'name')
+    .sort({ appointment_date: 1 })
+    .lean();
+
+    // Phân loại appointments
+    const classifiedAppointments = appointments.map(app => {
+      let appointmentType = 'regular';
+      
+      // Kiểm tra xem có phải appointment gốc không
+      if (app._id.toString() === medicalRecord.appointment_id?.toString()) {
+        appointmentType = 'initial_consultation';
+      }
+      
+      // Kiểm tra xem có phải appointment tái khám không
+      else if (app.is_re_examination) {
+        appointmentType = 're_examination';
+        
+        // Tìm step tương ứng
+        const relatedStep = medicalRecord.treatment_plan.find(
+          step => step._id?.toString() === app.re_examination_step_id?.toString()
+        );
+        
+        if (relatedStep) {
+          return {
+            ...app,
+            appointmentType,
+            relatedStep: {
+              stepNumber: relatedStep.stepNumber,
+              title: relatedStep.title,
+              status: relatedStep.status
+            }
+          };
+        }
+      }
+      
+      return {
+        ...app,
+        appointmentType
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        recordId,
+        patient: medicalRecord.user_id,
+        doctor: medicalRecord.doctor_id,
+        totalAppointments: appointments.length,
+        appointments: classifiedAppointments,
+        treatmentPlanSummary: {
+          totalSteps: medicalRecord.treatment_plan.length,
+          scheduledSteps: medicalRecord.treatment_plan.filter(step => step.status === 'scheduled').length,
+          stepsWithReExamination: medicalRecord.treatment_plan.filter(step => 
+            step.reExaminationScheduled || step.reExaminationDate
+          ).length
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching medical record appointments:', error);
     res.status(500).json({
       success: false,
-      message: 'Internal server error',
-      error: process.env.NODE_ENV === 'development' ? (error as any).message : undefined
+      message: 'Internal server error'
     });
   }
 };
+
 
 // Lấy tất cả appointments tái khám cho một medical record
 export const getAllReExaminationAppointments = async (req: AuthRequest, res: Response): Promise<void> => {

@@ -27,12 +27,15 @@ export interface TreatmentStep {
   requires_followup?: boolean;  // NEW: Yêu cầu tái khám
   followup_reason?: string;     // NEW: Lý do tái khám
 
-  isPhysicalVisit?: boolean;
-  reExaminationScheduled?: boolean;
-  reExaminationDate?: Date;
-  reExaminationAppointmentId?: mongoose.Types.ObjectId;
-  arrivalConfirmed?: boolean;
-  arrivalConfirmedAt?: Date;
+  needsReExamination?: boolean;           // Cần tái khám
+  isReExaminationVisit?: boolean;         // Đây là bước tái khám
+  reExaminationScheduled?: boolean;       // Đã lên lịch tái khám
+  reExaminationDate?: Date;              // Ngày tái khám
+  reExaminationTime?: string;            // Giờ tái khám (ví dụ: "09:00")
+  reExaminationAppointmentId?: mongoose.Types.ObjectId; // ID appointment
+  reExaminationNotes?: string;           // Ghi chú tái khám
+  arrivalConfirmed?: boolean;            // Đã xác nhận đến khám
+  arrivalConfirmedAt?: Date;             // Thời gian xác nhận
   
   _id?: string;
 }
@@ -376,6 +379,14 @@ const medicalRecordSchema = new Schema<IMedicalRecord, IMedicalRecordModel>(
         enum: ['pending', 'in-progress', 'completed', 'approved', 'rejected', 'scheduled'],
         default: 'pending'
       },
+        needsReExamination: {
+        type: Boolean,
+        default: false
+      },
+      isReExaminationVisit: {
+        type: Boolean,
+        default: false
+      },
       completedAt: {
         type: Date
       },
@@ -621,7 +632,7 @@ medicalRecordSchema.methods.submitPatientFeedback = function(stepNumber: number,
 // Doctor decision on step
 medicalRecordSchema.methods.doctorDecision = function(
   stepNumber: number,
-  decision: 'approve' | 'approve_and_add_step' | 'approve_and_complete',
+  decision: 'approve' | 'approve_and_add_step' | 'approve_and_complete' | 'approve_needs_re_examination',
   doctorNotes?: string,
   newStepData?: Omit<TreatmentStep, 'stepNumber' | 'status'>
 ) {
@@ -642,7 +653,13 @@ medicalRecordSchema.methods.doctorDecision = function(
   step.approval_requested = false;
   
   // Process decision
-  if (decision === 'approve_and_add_step') {
+  if (decision === 'approve_needs_re_examination') {
+    // Đánh dấu cần tái khám, KHÔNG tự tạo lịch
+    step.needsReExamination = true;
+    step.requires_followup = true;
+    step.followup_reason = doctorNotes;
+    
+  } else if (decision === 'approve_and_add_step') {
     // Add new follow-up step
     const newStepNumber = this.treatment_plan.length + 1;
     const newStep: TreatmentStep = {
@@ -684,6 +701,7 @@ medicalRecordSchema.methods.doctorDecision = function(
   
   return this.save();
 };
+  
 
 // Get steps with patient feedback
 medicalRecordSchema.methods.getStepsWithFeedback = function(): TreatmentStep[] {
@@ -713,6 +731,150 @@ medicalRecordSchema.statics.findByDoctorWithPendingFeedback = function(doctorId:
     .populate('appointment_id', 'appointment_date appointment_time')
     .sort({ updated_at: -1 });
 };
+
+// Trong medicalRecordSchema.methods
+
+// Schedule re-examination for a step
+medicalRecordSchema.methods.scheduleReExamination = function(
+  stepNumber: number,
+  appointmentDate: Date,
+  appointmentTime: string,
+  notes?: string,
+  appointmentId?: mongoose.Types.ObjectId
+) {
+  const step = this.treatment_plan.find((s: TreatmentStep) => s.stepNumber === stepNumber);
+  
+  if (!step) {
+    throw new Error(`Step ${stepNumber} not found`);
+  }
+  
+  // Nếu đã có appointment cũ, không thay đổi ID
+  const existingAppointmentId = step.reExaminationAppointmentId;
+  
+  step.reExaminationScheduled = true;
+  step.reExaminationDate = appointmentDate;
+  step.reExaminationTime = appointmentTime;
+  step.reExaminationNotes = notes;
+  step.needsReExamination = false; // Đã lập lịch xong
+  
+  // Chỉ cập nhật appointmentId nếu được cung cấp và chưa có
+  if (appointmentId && !existingAppointmentId) {
+    step.reExaminationAppointmentId = appointmentId;
+  }
+  
+  // Nếu đang là completed/approved, chuyển sang scheduled
+  if (step.status === 'completed' || step.status === 'approved') {
+    step.status = 'scheduled';
+  }
+  
+  return this.save();
+};
+
+// Reschedule re-examination
+medicalRecordSchema.methods.rescheduleReExamination = function(
+  stepNumber: number,
+  newDate: Date,
+  newTime: string,
+  notes?: string
+) {
+  const step = this.treatment_plan.find((s: TreatmentStep) => s.stepNumber === stepNumber);
+  
+  if (!step) {
+    throw new Error(`Step ${stepNumber} not found`);
+  }
+  
+  if (!step.reExaminationScheduled) {
+    throw new Error('Re-examination not scheduled yet');
+  }
+  
+  step.reExaminationDate = newDate;
+  step.reExaminationTime = newTime;
+  
+  if (notes) {
+    step.reExaminationNotes = notes;
+  }
+  
+  return this.save();
+};
+
+// Cancel re-examination
+medicalRecordSchema.methods.cancelReExamination = function(stepNumber: number) {
+  const step = this.treatment_plan.find((s: TreatmentStep) => s.stepNumber === stepNumber);
+  
+  if (!step) {
+    throw new Error(`Step ${stepNumber} not found`);
+  }
+  
+  step.reExaminationScheduled = false;
+  step.reExaminationDate = undefined;
+  step.reExaminationTime = undefined;
+  step.reExaminationNotes = undefined;
+  step.arrivalConfirmed = false;
+  step.arrivalConfirmedAt = undefined;
+  
+  // Giữ lại appointmentId để có thể tham chiếu nếu cần
+  
+  // Chuyển status về trạng thái trước đó
+  if (step.status === 'scheduled') {
+    step.status = step.needsReExamination ? 'approved' : 'completed';
+  }
+  
+  return this.save();
+};
+
+// Confirm patient arrival for re-examination
+medicalRecordSchema.methods.confirmReExaminationArrival = function(stepNumber: number) {
+  const step = this.treatment_plan.find((s: TreatmentStep) => s.stepNumber === stepNumber);
+  
+  if (!step) {
+    throw new Error(`Step ${stepNumber} not found`);
+  }
+  
+  if (!step.reExaminationScheduled) {
+    throw new Error('Re-examination not scheduled');
+  }
+  
+  if (!step.reExaminationDate) {
+    throw new Error('Re-examination date not set');
+  }
+  
+  // Kiểm tra xem có phải ngày hẹn không
+  const today = new Date();
+  const appointmentDate = new Date(step.reExaminationDate);
+  
+  if (appointmentDate.toDateString() !== today.toDateString()) {
+    throw new Error('Can only confirm arrival on scheduled date');
+  }
+  
+  step.arrivalConfirmed = true;
+  step.arrivalConfirmedAt = new Date();
+  step.status = 'in-progress'; // Bắt đầu quá trình tái khám
+  
+  return this.save();
+};
+
+// Get all steps that need re-examination
+medicalRecordSchema.methods.getStepsNeedingReExamination = function(): TreatmentStep[] {
+  return this.treatment_plan.filter((step: TreatmentStep) => 
+    step.needsReExamination && !step.reExaminationScheduled
+  );
+};
+
+// Get all scheduled re-examinations
+medicalRecordSchema.methods.getScheduledReExaminations = function(): TreatmentStep[] {
+  return this.treatment_plan.filter((step: TreatmentStep) => 
+    step.reExaminationScheduled && step.reExaminationDate
+  );
+};
+
+// Check if has any upcoming re-examinations
+medicalRecordSchema.virtual('hasUpcomingReExaminations').get(function() {
+  return this.treatment_plan.some((step: TreatmentStep) => 
+    step.reExaminationScheduled && 
+    step.reExaminationDate && 
+    step.reExaminationDate > new Date()
+  );
+});
 
 // ==================== EXPORT ====================
 

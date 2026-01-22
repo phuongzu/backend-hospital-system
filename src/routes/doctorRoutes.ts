@@ -34,7 +34,8 @@ import {
   reviewAndDecideStep,
   scheduleReExamination,
   confirmReExaminationArrival,
-  getAvailableSlots
+  getAvailableSlots,
+  cancelReExamination
 } from '../controllers/doctorcontroller';
 import multer from 'multer';
 import path from 'path';
@@ -177,6 +178,8 @@ router.post('/consultations/:consultationId/steps/:stepNumber/start', startTreat
 router.post('/consultations/:consultationId/steps/:stepNumber/reject', rejectTreatmentStep);
 router.get('/drugs', getAllDrugs);
 router.get('/appointments/available-slots', getAvailableSlots);
+router.delete('/consultations/:consultationId/steps/:stepNumber/cancel-re-examination', cancelReExamination);
+
 // Patient routes
 router.get('/:doctorId/patients/all', getAllPatients);
 
