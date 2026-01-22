@@ -1883,6 +1883,7 @@ export const reviewAndDecideStep = async (req: any, res: any): Promise<void> => 
       doctorNotes, 
       requireFollowUp, 
       nextAppointmentDate,
+      nextAppointmentTime, // Thêm dòng này
       followUpInstructions,
       additionalStepTitle,
       additionalStepDescription,
@@ -1931,6 +1932,96 @@ export const reviewAndDecideStep = async (req: any, res: any): Promise<void> => 
 
     const doctorName = doctorInRecord?.name || 'Doctor';
     const patient = medicalRecord.user_id;
+    
+    // FIX: Sử dụng nextAppointmentDate thay vì appointmentDateTime
+    const appointmentDate = nextAppointmentDate ? new Date(nextAppointmentDate) : null;
+    const timeSlot = nextAppointmentTime || '09:00'; // Sử dụng biến chính xác
+    const notes = followUpInstructions || `Re-examination: ${step.title}`; // Sử dụng biến chính xác
+    
+    let appointment;
+    
+    // 1. Tìm theo appointmentId đã có trong step (nếu có)
+    if (step.reExaminationAppointmentId) {
+      appointment = await Appointment.findById(step.reExaminationAppointmentId);
+      console.log('🔍 Found appointment by ID:', step.reExaminationAppointmentId);
+    }
+    
+    // 2. Nếu không tìm thấy, tìm theo step._id (nếu có)
+    if (!appointment && step._id) {
+      appointment = await Appointment.findOne({
+        re_examination_step_id: step._id,
+        is_re_examination: true,
+        user_id: medicalRecord.user_id,
+        doctor_id: doctorInRecord._id // Sửa từ doctor._id thành doctorInRecord._id
+      });
+      console.log('🔍 Searched appointment by step_id:', step._id, 'found:', appointment?._id);
+    }
+    
+    // 3. Nếu vẫn không tìm thấy, tìm theo consultationId và stepNumber
+    if (!appointment) {
+      appointment = await Appointment.findOne({
+        'metadata.consultation_id': consultationId,
+        'metadata.step_number': parseInt(stepNumber),
+        is_re_examination: true,
+        status: { $in: ['confirmed', 'scheduled', 'pending'] }
+      });
+      console.log('🔍 Searched appointment by metadata:', consultationId, stepNumber, 'found:', appointment?._id);
+    }
+    
+    // Chỉ xử lý appointment nếu có appointmentDate (cho follow-up)
+    if (appointmentDate && (decision === 'approve_with_followup' || decision === 'approve_and_complete')) {
+      if (appointment) {
+        // CẬP NHẬT lịch hẹn hiện có
+        console.log('✅ Updating existing appointment:', appointment._id);
+        appointment.appointment_date = appointmentDate;
+        appointment.time_slot = timeSlot;
+        appointment.notes = notes;
+        appointment.status = 'confirmed';
+        appointment.updated_at = new Date();
+        appointment.is_re_examination = true;
+        appointment.re_examination_step_id = step._id;
+        
+        // Cập nhật metadata để dễ tìm kiếm sau này
+        appointment.metadata = {
+          ...appointment.metadata,
+          consultation_id: consultationId,
+          step_number: parseInt(stepNumber),
+          step_title: step.title,
+          updated_by: 'doctor',
+          updated_at: new Date()
+        };
+        
+        await appointment.save();
+        
+      } else if (requireFollowUp) {
+        // TẠO MỚI lịch hẹn chỉ khi requireFollowUp = true
+        console.log('🆕 Creating new appointment');
+        appointment = await createNewAppointment();
+      }
+    }
+    
+    async function createNewAppointment() {
+      const newAppointment = new Appointment({
+        user_id: medicalRecord.user_id,
+        doctor_id: doctorInRecord._id, // Sửa từ doctor._id thành doctorInRecord._id
+        appointment_date: appointmentDate,
+        time_slot: timeSlot,
+        status: 'pending',
+        reason: `Re-examination: ${step.title}`,
+        notes: notes,
+        is_re_examination: true,
+        re_examination_step_id: step._id,
+        metadata: {
+          consultation_id: consultationId,
+          step_number: parseInt(stepNumber),
+          step_title: step.title,
+          created_by: 'doctor',
+          created_at: new Date()
+        }
+      });
+      await newAppointment.save();
+      return newAppointment;
+    }
 
         switch (decision) {
       case 'approve_with_followup':
@@ -2122,9 +2213,6 @@ export const scheduleReExamination = async (req: AuthRequest, res: Response) => 
     }
 
     const appointmentDate = new Date(appointmentDateTime);
-    
-    // ========== PHẦN QUAN TRỌNG ĐÃ SỬA ==========
-    // TÌM KIẾM APPOINTMENT CŨ THEO MULTIPLE CRITERIA
     let appointment;
     
     // 1. Tìm theo appointmentId đã có trong step (nếu có)
