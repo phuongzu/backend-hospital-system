@@ -29,12 +29,12 @@ export const getActiveConsultation = async (req: Request, res: Response) => {
         { status: 'active' }  // Keep this as backup
       ]
     })
-    .populate('user_id', 'name email phoneNumber dateOfBirth gender')
-    .populate('appointment_id')
-    .sort({ updated_at: -1 });
+      .populate('user_id', 'name email phoneNumber dateOfBirth gender')
+      .populate('appointment_id')
+      .sort({ updated_at: -1 });
 
     console.log(`Found ${consultations.length} active consultations`);
-    
+
     // Log each consultation for debugging
     consultations.forEach((consult, index) => {
       console.log(`Consultation ${index + 1}:`, {
@@ -88,9 +88,9 @@ export const createConsultation = async (req: Request, res: Response) => {
       }],
       consultation_status: 'in-progress',
       status: 'active',
-      priority: severity === 'critical' ? 'urgent' : 
-               severity === 'severe' ? 'high' : 
-               severity === 'moderate' ? 'medium' : 'low'
+      priority: severity === 'critical' ? 'urgent' :
+        severity === 'severe' ? 'high' :
+          severity === 'moderate' ? 'medium' : 'low'
     });
 
     await medicalRecord.save();
@@ -114,12 +114,12 @@ export const addTreatmentStep = async (req: Request, res: Response) => {
 
     console.log('=== ADD TREATMENT STEP ===');
     console.log('Consultation ID:', consultationId);
-    
+
     const medicalRecord = await MedicalRecord.findById(consultationId);
     if (!medicalRecord) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Medical record not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Medical record not found'
       });
     }
 
@@ -143,13 +143,13 @@ export const addTreatmentStep = async (req: Request, res: Response) => {
     // We expect a 'prescriptions' array from the frontend containing { medication, dosage, duration } objects
     if (prescriptions && Array.isArray(prescriptions) && prescriptions.length > 0) {
       console.log('Updating stock for prescriptions:', prescriptions);
-      
+
       for (const item of prescriptions) {
         if (!item.medication) continue;
 
         // Calculate how much to deduct
         const quantityToDeduct = calculateQuantity(item.dosage || '', item.duration || '');
-        
+
         console.log(`Deducting ${quantityToDeduct} from ${item.medication}`);
 
         // Find the drug by name and reduce stock
@@ -208,19 +208,19 @@ export const updateTreatmentStep = async (req: Request, res: Response) => {
     // Validate/Fix severity to avoid save error on legacy data
     const validSeverities = ['mild', 'moderate', 'severe', 'critical'];
     if (medicalRecord.severity && !validSeverities.includes(medicalRecord.severity)) {
-       if (medicalRecord.severity === 'low') medicalRecord.severity = 'mild';
-       else if (medicalRecord.severity === 'medium') medicalRecord.severity = 'moderate';
-       else if (medicalRecord.severity === 'high') medicalRecord.severity = 'severe';
-       else medicalRecord.severity = 'mild'; // Fallback
+      if (medicalRecord.severity === 'low') medicalRecord.severity = 'mild';
+      else if (medicalRecord.severity === 'medium') medicalRecord.severity = 'moderate';
+      else if (medicalRecord.severity === 'high') medicalRecord.severity = 'severe';
+      else medicalRecord.severity = 'mild'; // Fallback
     }
 
     // Save
     await medicalRecord.save();
-    
-    res.json({ 
-      success: true, 
+
+    res.json({
+      success: true,
       message: 'Treatment step updated successfully',
-      data: medicalRecord 
+      data: medicalRecord
     });
   } catch (error) {
     console.error('Error updating treatment step:', error);
@@ -265,15 +265,15 @@ export const approveTreatmentStep = async (req: Request, res: Response) => {
     }
 
     if (step.status !== 'completed') {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Cannot approve step that is not completed by patient' 
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot approve step that is not completed by patient'
       });
     }
     await medicalRecord.approveStep(stepNum, doctor_notes);
-    
+
     const isLastStep = stepNum === medicalRecord.treatment_plan.length;
-    const allStepsApproved = medicalRecord.treatment_plan.every((s: any) => 
+    const allStepsApproved = medicalRecord.treatment_plan.every((s: any) =>
       s.status === 'approved'
     );
 
@@ -281,7 +281,7 @@ export const approveTreatmentStep = async (req: Request, res: Response) => {
     try {
       // Get patient info
       const patientUserId = (medicalRecord.user_id as any)._id;
-      
+
       // Sử dụng doctorUserInfo thay vì medicalRecord.doctor_id.user_id
       if (patientUserId && doctorUserInfo) {
         // Send notification to patient
@@ -372,11 +372,11 @@ export const approveTreatmentStep = async (req: Request, res: Response) => {
     }
     // ================= END NOTIFICATION LOGIC =================
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       data: medicalRecord,
-      message: isLastStep && allStepsApproved 
-        ? 'Final step approved - Consultation completed!' 
+      message: isLastStep && allStepsApproved
+        ? 'Final step approved - Consultation completed!'
         : 'Step approved successfully'
     });
   } catch (error) {
@@ -423,7 +423,7 @@ export const completeConsultation = async (req: Request, res: Response) => {
     medicalRecord.consultation_status = 'completed';
     medicalRecord.status = 'resolved';
     medicalRecord.updated_at = new Date();
-    
+
     // Cập nhật các trường thông tin nếu có
     if (diagnosis) medicalRecord.diagnosis = diagnosis;
     if (notes) medicalRecord.notes = notes;
@@ -472,7 +472,7 @@ export const completeConsultation = async (req: Request, res: Response) => {
               doctor_name: medicalRecord.doctor_id.name,
               diagnosis: medicalRecord.diagnosis || 'Completed',
               summary: medicalRecord.notes || '',
-              treatment_steps_completed: medicalRecord.treatment_plan.filter((s: any) => 
+              treatment_steps_completed: medicalRecord.treatment_plan.filter((s: any) =>
                 s.status === 'approved' || s.status === 'completed'
               ).length,
               total_treatment_steps: medicalRecord.treatment_plan.length,
@@ -532,15 +532,15 @@ export const completeConsultation = async (req: Request, res: Response) => {
       if (appointment && appointment.status !== 'completed') {
         appointment.status = 'completed';
         await appointment.save();
-        
+
         console.log('✅ Appointment status updated to completed');
       }
     } catch (appointmentError) {
       console.error('❌ Error updating appointment status:', appointmentError);
     }
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       data: medicalRecord,
       message: 'Consultation completed successfully with notifications sent'
     });
@@ -578,7 +578,7 @@ export const getAvailableDoctors = async (req: Request, res: Response) => {
     const doctors = await Doctor.find({})
       .populate('user_id', 'name email phoneNumber status')
       .populate('specialty_id', 'name description');
-    
+
     const availableDoctors = doctors.filter((doc: any) => doc.user_id?.status === 'working');
     res.status(200).json({ success: true, data: availableDoctors });
   } catch (error) {
@@ -596,7 +596,7 @@ export const getDoctorsBySpecialty = async (req: Request, res: Response) => {
     const doctors = await Doctor.find({ specialty_id: specialtyId })
       .populate('user_id', 'name email phoneNumber status')
       .populate('specialty_id', 'name description');
-    
+
     const availableDoctors = doctors.filter((doc: any) => doc.user_id?.status === 'working');
     res.status(200).json({ success: true, data: availableDoctors });
   } catch (error) {
@@ -609,22 +609,22 @@ export const getDoctorsFromUsers = async (req: Request, res: Response) => {
   try {
     const { search } = req.query;
     let query: any = { role: 'doctor', isActive: true };
-    
+
     if (search) {
       query.name = { $regex: search, $options: 'i' };
     }
-    
+
     const users = await User.find(query).select('name email phoneNumber status').sort({ name: 1 });
     const doctorsWithDetails = await Promise.all(
       users.map(async (user) => {
         const doctorDetails = await Doctor.findOne({ user_id: user._id }).populate('specialty_id', 'name description');
-        return { 
-          ...user.toObject(), 
-          doctorDetails: doctorDetails || null 
+        return {
+          ...user.toObject(),
+          doctorDetails: doctorDetails || null
         };
       })
     );
-    
+
     res.status(200).json({ success: true, data: doctorsWithDetails });
   } catch (error) {
     handleError(res, error, 'Error fetching doctors from users');
@@ -636,23 +636,23 @@ export const changeDoctorStatus = async (req: Request, res: Response) => {
   try {
     const { doctorId } = req.params;
     const { status } = req.body;
-    
+
     if (!doctorId || !status || !['working', 'busy', 'not working'].includes(status)) {
       return res.status(400).json({ success: false, message: 'Invalid doctor ID or status' });
     }
-    
+
     const user = await User.findById(doctorId);
     if (!user || user.role !== 'doctor') {
       return res.status(404).json({ success: false, message: 'Doctor not found' });
     }
-    
+
     user.status = status;
     await user.save();
-    
-    res.status(200).json({ 
-      success: true, 
-      message: 'Doctor status updated', 
-      data: { doctorId, status } 
+
+    res.status(200).json({
+      success: true,
+      message: 'Doctor status updated',
+      data: { doctorId, status }
     });
   } catch (error) {
     handleError(res, error, 'Error changing doctor status');
@@ -665,7 +665,7 @@ export const getDoctorAppointments = async (req: Request, res: Response) => {
     const { doctorId } = req.params;
     console.log('=== GET DOCTOR APPOINTMENTS ===');
     console.log('Doctor ID from params:', doctorId);
-    
+
     if (!doctorId) {
       return res.status(400).json({ success: false, message: 'Doctor ID is required' });
     }
@@ -673,7 +673,7 @@ export const getDoctorAppointments = async (req: Request, res: Response) => {
     // First, find the doctor document by user_id
     const doctor = await Doctor.findOne({ user_id: doctorId });
     console.log('Found doctor:', doctor);
-    
+
     if (!doctor) {
       return res.status(404).json({ success: false, message: 'Doctor not found' });
     }
@@ -683,19 +683,19 @@ export const getDoctorAppointments = async (req: Request, res: Response) => {
     console.log('Using doctor ObjectId for appointments:', doctorObjectId);
 
     let query: any = { doctor_id: doctorObjectId };
-    
+
     // Optional: filter by date if provided as query param
     if (req.query.date) {
       const date = new Date(req.query.date as string);
       if (isNaN(date.getTime())) {
         return res.status(400).json({ success: false, message: 'Invalid date format' });
       }
-      
+
       const nextDay = new Date(date);
       nextDay.setDate(date.getDate() + 1);
       query.appointment_date = { $gte: date, $lt: nextDay };
     }
-    
+
     const appointments = await Appointment.find(query)
       .populate('user_id', 'name email phoneNumber dateOfBirth gender')
       .populate('specialty_id', 'name')
@@ -705,8 +705,8 @@ export const getDoctorAppointments = async (req: Request, res: Response) => {
     console.log('Found appointments:', appointments.length);
     console.log('Appointments:', appointments);
 
-    res.status(200).json({ 
-      success: true, 
+    res.status(200).json({
+      success: true,
       data: appointments,
       debug: {
         doctorIdFromParams: doctorId,
@@ -724,13 +724,13 @@ export const getDoctorPatients = async (req: Request, res: Response) => {
   try {
     const { doctorId } = req.params;
     const limit = parseInt(req.query.limit as string) || 10;
-    
+
     if (!doctorId) {
       return res.status(400).json({ success: false, message: 'Doctor ID is required' });
     }
-    
+
     // Get recent medical records for this doctor
-    const recentRecords = await MedicalRecord.find({ 
+    const recentRecords = await MedicalRecord.find({
       $or: [
         { doctor_id: doctorId }
       ]
@@ -741,12 +741,12 @@ export const getDoctorPatients = async (req: Request, res: Response) => {
       })
       .sort({ created_at: -1 })
       .limit(limit);
-    
+
     const patients = recentRecords.map((record: any) => record.user_id).filter(Boolean);
-    
+
     // Remove duplicates by _id
     const uniquePatients = patients.filter((patient: any, index: number, self: any[]) =>
-      index === self.findIndex((p: any) => 
+      index === self.findIndex((p: any) =>
         p && patient && p._id.toString() === patient._id.toString()
       )
     );
@@ -757,7 +757,7 @@ export const getDoctorPatients = async (req: Request, res: Response) => {
         const userInfo = await UserInformation.findOne({ user_id: patient._id })
           .select('blood_type allergies height weight chronic_diseases BMI emergency_contact')
           .lean();
-        
+
         return {
           ...patient.toObject(),
           blood_type: userInfo?.blood_type || null,
@@ -770,10 +770,10 @@ export const getDoctorPatients = async (req: Request, res: Response) => {
         };
       })
     );
-    
-    res.status(200).json({ 
-      success: true, 
-      data: patientsWithInfo 
+
+    res.status(200).json({
+      success: true,
+      data: patientsWithInfo
     });
   } catch (error) {
     handleError(res, error, 'Error fetching recent patients');
@@ -788,11 +788,11 @@ export const getDoctorNotifications = async (req: Request, res: Response) => {
     if (!doctorId) {
       return res.status(400).json({ success: false, message: 'Doctor ID is required' });
     }
-    
-    const notifications = await Notification.find({ 
-      doctor_id: doctorId 
+
+    const notifications = await Notification.find({
+      doctor_id: doctorId
     }).sort({ createdAt: -1 });
-    
+
     res.status(200).json({ success: true, data: notifications });
   } catch (error) {
     handleError(res, error, 'Error fetching notifications');
@@ -813,25 +813,25 @@ export const getDoctorStats = async (req: Request, res: Response) => {
     // First, find the doctor document by user_id
     const doctor = await Doctor.findOne({ user_id: doctorId });
     console.log('Found doctor for stats:', doctor);
-    
+
     if (!doctor) {
       return res.status(404).json({ success: false, message: 'Doctor not found' });
     }
 
     const doctorObjectId = doctor._id;
     const stats = await Appointment.aggregate([
-      { 
-        $match: { 
+      {
+        $match: {
           doctor_id: doctorObjectId
-        } 
+        }
       },
       { $group: { _id: '$status', count: { $sum: 1 } } }
     ]);
 
     console.log('Stats result:', stats);
 
-    res.status(200).json({ 
-      success: true, 
+    res.status(200).json({
+      success: true,
       data: stats,
       debug: {
         doctorIdFromParams: doctorId,
@@ -851,26 +851,26 @@ export const updateDoctorAvailability = async (req: AuthRequest, res: Response) 
     if (!req.user?._id) {
       return res.status(401).json({ success: false, message: 'Unauthorized' });
     }
-    
+
     const { isAvailable } = req.body;
     if (typeof isAvailable !== 'boolean') {
       return res.status(400).json({ success: false, message: 'isAvailable (boolean) is required' });
     }
-    
+
     const doctor = await Doctor.findOneAndUpdate(
       { user_id: req.user._id },
       { isAvailable },
       { new: true }
     );
-    
+
     if (!doctor) {
       return res.status(404).json({ success: false, message: 'Doctor not found' });
     }
-    
-    res.status(200).json({ 
-      success: true, 
-      message: 'Availability updated successfully', 
-      data: doctor 
+
+    res.status(200).json({
+      success: true,
+      message: 'Availability updated successfully',
+      data: doctor
     });
   } catch (error) {
     handleError(res, error, 'Error updating availability');
@@ -900,8 +900,8 @@ export const getDoctorProfile = async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, message: 'Doctor not found' });
     }
 
-    res.status(200).json({ 
-      success: true, 
+    res.status(200).json({
+      success: true,
       data: doctor,
       debug: {
         searchMethod: 'user_id',
@@ -932,7 +932,7 @@ export const confirmAppointment = async (req: Request, res: Response) => {
 
     const doctorObjectId = doctor._id;
     const appointment = await Appointment.findOneAndUpdate(
-      { 
+      {
         _id: appointmentId,
         doctor_id: doctorObjectId
       },
@@ -946,10 +946,10 @@ export const confirmAppointment = async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, message: 'Appointment not found' });
     }
 
-    res.status(200).json({ 
-      success: true, 
+    res.status(200).json({
+      success: true,
       message: 'Appointment confirmed successfully',
-      data: appointment 
+      data: appointment
     });
   } catch (error) {
     console.error('Error confirming appointment:', error);
@@ -970,7 +970,7 @@ export const cancelAppointment = async (req: Request, res: Response) => {
 
     const doctorObjectId = doctor._id;
     const appointment = await Appointment.findOneAndUpdate(
-      { 
+      {
         _id: appointmentId,
         doctor_id: doctorObjectId
       },
@@ -982,10 +982,10 @@ export const cancelAppointment = async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, message: 'Appointment not found' });
     }
 
-    res.status(200).json({ 
-      success: true, 
+    res.status(200).json({
+      success: true,
       message: 'Appointment cancelled successfully',
-      data: appointment 
+      data: appointment
     });
   } catch (error) {
     console.error('Error cancelling appointment:', error);
@@ -1006,7 +1006,7 @@ export const completeAppointment = async (req: Request, res: Response) => {
 
     const doctorObjectId = doctor._id;
     const appointment = await Appointment.findOneAndUpdate(
-      { 
+      {
         _id: appointmentId,
         doctor_id: doctorObjectId
       },
@@ -1018,10 +1018,10 @@ export const completeAppointment = async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, message: 'Appointment not found' });
     }
 
-    res.status(200).json({ 
-      success: true, 
+    res.status(200).json({
+      success: true,
       message: 'Appointment completed successfully',
-      data: appointment 
+      data: appointment
     });
   } catch (error) {
     console.error('Error completing appointment:', error);
@@ -1037,7 +1037,7 @@ export const uploadDoctorAvatar = async (req: Request, res: Response) => {
     console.log('req.file:', req.file);
 
     let doctorId = req.query.doctorId as string;
-    
+
     console.log('DoctorId from query:', doctorId);
 
     if (!doctorId || doctorId === 'undefined') {
@@ -1045,9 +1045,9 @@ export const uploadDoctorAvatar = async (req: Request, res: Response) => {
       if (req.file) {
         fs.unlinkSync(req.file.path);
       }
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Doctor ID is required' 
+      return res.status(400).json({
+        success: false,
+        message: 'Doctor ID is required'
       });
     }
 
@@ -1055,9 +1055,9 @@ export const uploadDoctorAvatar = async (req: Request, res: Response) => {
 
     if (!req.file) {
       console.error('❌ No file uploaded');
-      return res.status(400).json({ 
-        success: false, 
-        message: 'No file uploaded' 
+      return res.status(400).json({
+        success: false,
+        message: 'No file uploaded'
       });
     }
 
@@ -1069,14 +1069,14 @@ export const uploadDoctorAvatar = async (req: Request, res: Response) => {
     try {
       const files = fs.readdirSync(uploadsDir);
       console.log('All files in uploads directory:', files);
-      
+
       const oldFiles = files.filter(file => {
-        return file.startsWith(`doctor-${doctorId}-`) && 
-               file !== req.file!.filename;
+        return file.startsWith(`doctor-${doctorId}-`) &&
+          file !== req.file!.filename;
       });
-      
+
       console.log('Old files to delete:', oldFiles);
-      
+
       oldFiles.forEach(file => {
         const oldFilePath = path.join(uploadsDir, file);
         try {
@@ -1089,8 +1089,8 @@ export const uploadDoctorAvatar = async (req: Request, res: Response) => {
     } catch (err) {
       console.error('❌ Error reading uploads directory:', err);
     }
-        const avatarFilename = req.file.filename;
-    
+    const avatarFilename = req.file.filename;
+
     console.log('✅ Avatar filename for DB:', avatarFilename);
 
     // Update database - chỉ lưu tên file
@@ -1103,9 +1103,9 @@ export const uploadDoctorAvatar = async (req: Request, res: Response) => {
     if (!doctor) {
       console.error('❌ Doctor not found with user_id:', doctorId);
       fs.unlinkSync(req.file.path);
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Doctor not found in database' 
+      return res.status(404).json({
+        success: false,
+        message: 'Doctor not found in database'
       });
     }
 
@@ -1114,7 +1114,7 @@ export const uploadDoctorAvatar = async (req: Request, res: Response) => {
     res.status(200).json({
       success: true,
       message: 'Avatar uploaded successfully',
-      data: { 
+      data: {
         avatar: avatarFilename, // Trả về tên file
         doctor: {
           _id: doctor._id,
@@ -1133,9 +1133,9 @@ export const uploadDoctorAvatar = async (req: Request, res: Response) => {
         console.error('❌ Error cleaning up file:', unlinkError);
       }
     }
-    res.status(500).json({ 
-      success: false, 
-      message: 'Error uploading avatar' 
+    res.status(500).json({
+      success: false,
+      message: 'Error uploading avatar'
     });
   }
 };
@@ -1144,13 +1144,13 @@ export const uploadDoctorAvatar = async (req: Request, res: Response) => {
 export const getDoctorAvatar = async (req: Request, res: Response) => {
   try {
     const { filename } = req.params;
-    
+
     if (!filename) {
       return res.status(400).json({ success: false, message: 'Filename is required' });
     }
 
     const avatarPath = path.join(uploadsDir, filename);
-    
+
     // Kiểm tra file có tồn tại không
     if (!fs.existsSync(avatarPath)) {
       return res.status(404).json({ success: false, message: 'Avatar not found' });
@@ -1159,7 +1159,7 @@ export const getDoctorAvatar = async (req: Request, res: Response) => {
     // Xác định loại file
     const ext = path.extname(filename).toLowerCase();
     let contentType = 'image/jpeg';
-    
+
     switch (ext) {
       case '.png':
         contentType = 'image/png';
@@ -1173,7 +1173,7 @@ export const getDoctorAvatar = async (req: Request, res: Response) => {
     }
     res.setHeader('Content-Type', contentType);
     res.setHeader('Cache-Control', 'public, max-age=86400');
-    
+
     res.sendFile(avatarPath);
   } catch (error) {
     console.error('Error serving avatar:', error);
@@ -1188,8 +1188,8 @@ export const getDoctorConsultations = async (req: Request, res: Response) => {
     console.log('=== GET DOCTOR CONSULTATIONS ===');
     console.log('Doctor ID from params:', doctorId);
 
-    const consultations = await MedicalRecord.find({ 
-      doctor_id: doctorId 
+    const consultations = await MedicalRecord.find({
+      doctor_id: doctorId
     })
       .populate('user_id', 'name email phoneNumber dateOfBirth gender')
       .populate('appointment_id')
@@ -1197,9 +1197,9 @@ export const getDoctorConsultations = async (req: Request, res: Response) => {
 
     console.log('Found consultations:', consultations.length);
 
-    res.json({ 
-      success: true, 
-      data: consultations 
+    res.json({
+      success: true,
+      data: consultations
     });
   } catch (error) {
     console.error('Error fetching consultations:', error);
@@ -1219,23 +1219,23 @@ export const setActiveConsultation = async (req: Request, res: Response) => {
 
     // First, clear any existing active consultation for this doctor
     await MedicalRecord.updateMany(
-      { 
+      {
         doctor_id: doctorId,
         consultation_status: 'in-progress'
       },
-      { 
+      {
         $unset: { isActive: 1 } // Remove isActive field
       }
     );
 
     // Set the new consultation as active
     const consultation = await MedicalRecord.findOneAndUpdate(
-      { 
+      {
         _id: consultationId,
         doctor_id: doctorId,
         consultation_status: 'in-progress'
       },
-      { 
+      {
         isActive: true,
         updated_at: new Date()
       },
@@ -1245,16 +1245,16 @@ export const setActiveConsultation = async (req: Request, res: Response) => {
       .populate('appointment_id');
 
     if (!consultation) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Consultation not found or not in progress' 
+      return res.status(404).json({
+        success: false,
+        message: 'Consultation not found or not in progress'
       });
     }
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: 'Consultation set as active',
-      data: consultation 
+      data: consultation
     });
   } catch (error) {
     console.error('Error setting active consultation:', error);
@@ -1271,19 +1271,19 @@ export const clearActiveConsultation = async (req: Request, res: Response) => {
     console.log('Doctor ID:', doctorId);
 
     const result = await MedicalRecord.updateMany(
-      { 
+      {
         doctor_id: doctorId,
         consultation_status: 'in-progress'
       },
-      { 
+      {
         $unset: { isActive: 1 } // Remove isActive field
       }
     );
 
     console.log('Cleared active consultations:', result.modifiedCount);
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: 'Active consultation cleared',
       data: { clearedCount: result.modifiedCount }
     });
@@ -1306,15 +1306,15 @@ export const updateConsultationStatus = async (req: Request, res: Response) => {
 
     const validStatuses = ['active', 'resolved', 'follow_up', 'chronic'];
     if (!validStatuses.includes(status)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Invalid status. Must be: active, resolved, follow_up, or chronic' 
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid status. Must be: active, resolved, follow_up, or chronic'
       });
     }
 
     const consultation = await MedicalRecord.findByIdAndUpdate(
       consultationId,
-      { 
+      {
         status: status,
         updated_at: new Date()
       },
@@ -1327,10 +1327,10 @@ export const updateConsultationStatus = async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, message: 'Consultation not found' });
     }
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: 'Consultation status updated',
-      data: consultation 
+      data: consultation
     });
   } catch (error) {
     console.error('Error updating consultation status:', error);
@@ -1353,7 +1353,7 @@ export const getAllPatients = async (req: Request, res: Response) => {
 
     // Build query để lấy patients từ medical records
     let matchQuery: any = { doctor_id: doctorId };
-    
+
     // Lấy tất cả medical records của doctor này để có danh sách patient IDs
     const medicalRecords = await MedicalRecord.find(matchQuery)
       .distinct('user_id')
@@ -1362,7 +1362,7 @@ export const getAllPatients = async (req: Request, res: Response) => {
     const patientIds = medicalRecords.map(id => id.toString());
 
     // Query chính để lấy thông tin bệnh nhân
-    let userQuery: any = { 
+    let userQuery: any = {
       _id: { $in: patientIds },
       role: 'patient'
     };
@@ -1389,7 +1389,7 @@ export const getAllPatients = async (req: Request, res: Response) => {
         const userInfo = await UserInformation.findOne({ user_id: user._id })
           .select('blood_type allergies height weight chronic_diseases BMI')
           .lean();
-        
+
         return {
           ...user,
           blood_type: userInfo?.blood_type || null,
@@ -1405,8 +1405,8 @@ export const getAllPatients = async (req: Request, res: Response) => {
     // Lấy tổng số lượng
     const total = await User.countDocuments(userQuery);
 
-    res.status(200).json({ 
-      success: true, 
+    res.status(200).json({
+      success: true,
       data: usersWithInfo,
       pagination: {
         page: Number(page),
@@ -1443,9 +1443,9 @@ export const completeTreatmentStep = async (req: Request, res: Response) => {
 
     // VALIDATION QUAN TRỌNG: Chỉ cho phép complete step đang 'in-progress'
     if (step.status !== 'in-progress') {
-      return res.status(400).json({ 
-        success: false, 
-        message: `Cannot complete step. Current status: ${step.status}. Step must be in progress.` 
+      return res.status(400).json({
+        success: false,
+        message: `Cannot complete step. Current status: ${step.status}. Step must be in progress.`
       });
     }
 
@@ -1453,7 +1453,7 @@ export const completeTreatmentStep = async (req: Request, res: Response) => {
     step.status = 'completed';
     step.completedAt = new Date();
     step.approval_requested = true;
-    
+
     if (patientMessage) {
       step.patient_message = patientMessage;
     }
@@ -1462,8 +1462,8 @@ export const completeTreatmentStep = async (req: Request, res: Response) => {
 
     console.log('✅ Step marked as completed, waiting for doctor approval');
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       data: medicalRecord,
       message: 'Step completed successfully. Waiting for doctor approval.'
     });
@@ -1492,14 +1492,14 @@ export const updateConsultationDetails = async (req: Request, res: Response) => 
   try {
     const { consultationId } = req.params;
     const { diagnosis, severity, notes } = req.body;
-    const {initialStep, Description, Prescriptions} = req.body;
+    const { initialStep, Description, Prescriptions } = req.body;
 
     console.log('=== UPDATE CONSULTATION DETAILS ===');
     console.log('Consultation ID:', consultationId);
 
     const consultation = await MedicalRecord.findByIdAndUpdate(
       consultationId,
-      { 
+      {
         initialStep,
         Description,
         Prescriptions,
@@ -1515,10 +1515,10 @@ export const updateConsultationDetails = async (req: Request, res: Response) => 
       return res.status(404).json({ success: false, message: 'Consultation not found' });
     }
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: 'Consultation updated successfully',
-      data: consultation 
+      data: consultation
     });
   } catch (error) {
     console.error('Error updating consultation details:', error);
@@ -1542,7 +1542,7 @@ const calculateQuantity = (dosage: string, duration: string): number => {
     } else if (lowerDosage.includes('tablet') || lowerDosage.includes('pill')) {
       // Default to 1 if number not explicitly found but unit exists (e.g., "Apply thinly" = 0, ignore)
       amountPerDose = 1;
-    } 
+    }
 
     // 2. Determine Frequency (Daily count)
     if (lowerDosage.includes('once') || lowerDosage.includes('1 time')) dailyCount = 1;
@@ -1649,35 +1649,35 @@ export const startTreatmentStep = async (req: Request, res: Response) => {
   try {
     const { consultationId, stepNumber } = req.params;
     const stepNum = parseInt(stepNumber);
-    
+
     const medicalRecord = await MedicalRecord.findById(consultationId);
     if (!medicalRecord) {
       return res.status(404).json({ success: false, message: 'Medical record not found' });
     }
-    
+
     const step = medicalRecord.treatment_plan.find(s => s.stepNumber === stepNum);
     if (!step) {
       return res.status(404).json({ success: false, message: 'Step not found' });
     }
-    
+
     // Validate: step phải ở trạng thái pending
     if (step.status !== 'pending') {
-      return res.status(400).json({ 
-        success: false, 
-        message: `Cannot start step. Current status: ${step.status}` 
+      return res.status(400).json({
+        success: false,
+        message: `Cannot start step. Current status: ${step.status}`
       });
     }
-    
+
     // Update status
     step.status = 'in-progress';
     step.startedAt = new Date();
-    
+
     await medicalRecord.save();
-    
-    res.json({ 
-      success: true, 
+
+    res.json({
+      success: true,
       data: medicalRecord,
-      message: 'Step started successfully' 
+      message: 'Step started successfully'
     });
   } catch (error) {
     console.error('Error starting step:', error);
@@ -1690,33 +1690,33 @@ export const rejectTreatmentStep = async (req: Request, res: Response) => {
     const { consultationId, stepNumber } = req.params;
     const { reason } = req.body;
     const stepNum = parseInt(stepNumber);
-    
+
     const medicalRecord = await MedicalRecord.findById(consultationId);
     if (!medicalRecord) {
       return res.status(404).json({ success: false, message: 'Medical record not found' });
     }
-    
+
     const step = medicalRecord.treatment_plan.find(s => s.stepNumber === stepNum);
     if (!step) {
       return res.status(404).json({ success: false, message: 'Step not found' });
     }
-    
+
     // Validate: step phải ở trạng thái completed
     if (step.status !== 'completed') {
-      return res.status(400).json({ 
-        success: false, 
-        message: `Cannot reject step. Current status: ${step.status}` 
+      return res.status(400).json({
+        success: false,
+        message: `Cannot reject step. Current status: ${step.status}`
       });
     }
-    
+
     // Reject step (chuyển về pending)
     step.status = 'pending';
     step.rejectionReason = reason;
     step.rejectedAt = new Date();
     step.approval_requested = false;
-    
+
     await medicalRecord.save();
-    
+
     // Gửi notification cho patient
     if (medicalRecord.user_id) {
       await notificationService.sendNotification({
@@ -1735,11 +1735,11 @@ export const rejectTreatmentStep = async (req: Request, res: Response) => {
         related_record_type: 'medical_record'
       });
     }
-    
-    res.json({ 
-      success: true, 
+
+    res.json({
+      success: true,
       data: medicalRecord,
-      message: 'Step rejected. Patient notified to revise.' 
+      message: 'Step rejected. Patient notified to revise.'
     });
   } catch (error) {
     console.error('Error rejecting step:', error);
@@ -1751,10 +1751,10 @@ export const rejectTreatmentStep = async (req: Request, res: Response) => {
 export const doctorDecisionOnStep = async (req: Request, res: Response) => {
   try {
     const { consultationId, stepNumber } = req.params;
-    const { 
-      decision, 
-      doctor_notes, 
-      new_step_title, 
+    const {
+      decision,
+      doctor_notes,
+      new_step_title,
       new_step_description,
       new_step_medication,
       new_step_dosage,
@@ -1765,9 +1765,9 @@ export const doctorDecisionOnStep = async (req: Request, res: Response) => {
     // Validate decision
     const validDecisions = ['approve', 'approve_and_add_step', 'approve_and_complete'];
     if (!validDecisions.includes(decision)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Invalid decision. Must be: approve, approve_and_add_step, or approve_and_complete' 
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid decision. Must be: approve, approve_and_add_step, or approve_and_complete'
       });
     }
 
@@ -1810,7 +1810,7 @@ export const doctorDecisionOnStep = async (req: Request, res: Response) => {
     if (patient) {
       let notificationMessage = '';
       let actionLabel = '';
-      
+
       if (decision === 'approve') {
         notificationMessage = `Doctor has approved step ${stepNumber}.`;
         actionLabel = 'View Approved Step';
@@ -1897,30 +1897,46 @@ export const reviewAndDecideStep = async (req: any, res: any): Promise<void> => 
     console.log('RequireFollowUp:', requireFollowUp);
     console.log('Step Number:', stepNum);
 
+    // Authentication check
     if (!req.user || req.user.role !== 'doctor') {
       res.status(401).json({ success: false, message: 'Unauthorized' });
       return;
     }
 
+    // Lấy thông tin doctor từ bảng Doctor
+    const doctor = await Doctor.findOne({ user_id: req.user._id });
+    if (!doctor) {
+      res.status(404).json({ success: false, message: 'Doctor profile not found' });
+      return;
+    }
+
+    console.log('Doctor found - Doctor ID:', doctor._id, 'User ID:', doctor.user_id);
+    console.log('Current logged in User ID:', req.user._id);
+
+    // Get medical record
     const medicalRecord = await MedicalRecord.findById(consultationId)
-      .populate('user_id', 'name email phoneNumber')
-      .populate({
-        path: 'doctor_id',
-        select: 'name email role',
-        model: 'User'
-      });
+      .populate('user_id', 'name email phoneNumber');
 
     if (!medicalRecord) {
       res.status(404).json({ success: false, message: 'Medical record not found' });
       return;
     }
 
-    const doctorInRecord = medicalRecord.doctor_id as any;
-    if (doctorInRecord._id.toString() !== req.user._id.toString()) {
-      res.status(403).json({ success: false, message: 'Forbidden: Assigned doctor only' });
+    console.log('Medical record doctor_id (User ID):', medicalRecord.doctor_id);
+
+    // QUAN TRỌNG: Kiểm tra authorization bằng cách so sánh user_id
+    // medicalRecord.doctor_id là user_id của doctor, cần so sánh với doctor.user_id
+    if (medicalRecord.doctor_id.toString() !== doctor.user_id.toString()) {
+      res.status(403).json({ 
+        success: false, 
+        message: 'Forbidden: You can only review steps for your own patients',
+        medicalRecordDoctorId: medicalRecord.doctor_id.toString(),
+        currentDoctorUserId: doctor.user_id.toString()
+      });
       return;
     }
 
+    // Find the step
     const step = medicalRecord.treatment_plan.find((s: any) => s.stepNumber === stepNum);
     if (!step) {
       res.status(404).json({ success: false, message: 'Step not found' });
@@ -1936,39 +1952,20 @@ export const reviewAndDecideStep = async (req: any, res: any): Promise<void> => 
       return;
     }
 
-    const doctorName = doctorInRecord?.name || 'Doctor';
+    // Lấy thông tin patient
     const patient = medicalRecord.user_id;
     const patientId = (patient as any)._id.toString();
+    
+    // Lấy thông tin doctor name từ User table
+    const doctorUser = await User.findById(doctor.user_id);
+    const doctorName = doctorUser?.name || 'Doctor';
     
     const appointmentDate = nextAppointmentDate ? new Date(nextAppointmentDate) : null;
     const timeSlot = nextAppointmentTime || '09:00';
     const notes = followUpInstructions || `Re-examination: ${step.title}`;
     
     let appointment = null;
-    
-    // Helper function to create new appointment
-    const createNewAppointment = async () => {
-      const newAppointment = new Appointment({
-        user_id: medicalRecord.user_id,
-        doctor_id: doctorInRecord._id,
-        appointment_date: appointmentDate,
-        time_slot: timeSlot,
-        status: 'pending',
-        reason: `Re-examination: ${step.title}`,
-        notes: notes,
-        is_re_examination: true,
-        re_examination_step_id: null, // Will update later
-        metadata: {
-          consultation_id: consultationId,
-          approved_step_number: stepNum,
-          step_title: step.title,
-          created_by: 'doctor',
-          created_at: new Date()
-        }
-      });
-      await newAppointment.save();
-      return newAppointment;
-    };
+    let newStep = null;
 
     console.log('Processing decision:', decision);
     
@@ -1979,79 +1976,122 @@ export const reviewAndDecideStep = async (req: any, res: any): Promise<void> => 
         step.doctorNotes = doctorNotes;
         step.approvedAt = new Date();
         step.approval_requested = false;
+        step.needsReExamination = requireFollowUp || false;
         
         console.log('✅ Step approved:', stepNum);
 
-        // 2. Tạo appointment CHO step re-examination mới (nếu có appointmentDate)
-        if (appointmentDate && requireFollowUp) {
-          try {
-            appointment = await createNewAppointment();
-            console.log('✅ Created appointment:', appointment._id);
-          } catch (err) {
-            console.error('❌ Error creating appointment:', err);
-          }
-        }
-
-        // 3. TẠO STEP RE-EXAMINATION MỚI với status 'scheduled'
+        // 2. Tạo appointment và step re-examination (nếu cần)
         if (requireFollowUp) {
           const nextStepNumber = medicalRecord.treatment_plan.length + 1;
           
-          const reExaminationStep: any = {
+          // Tạo step re-examination mới
+          newStep = {
             stepNumber: nextStepNumber,
-            title: additionalStepTitle || `Re-Examination: Physical Assessment`,
+            title: additionalStepTitle || `Re-Examination: ${step.title}`,
             description: additionalStepDescription || `In-person clinical assessment following ${step.title}`,
             status: 'scheduled',
             instructions: followUpInstructions || 'Please arrive 10 minutes early for check-in',
-            isPhysicalVisit: true,
-            needsReExamination: true,
+            isReExaminationVisit: true,
+            needsReExamination: false,
             reExaminationScheduled: appointmentDate ? true : false,
             reExaminationDate: appointmentDate,
             reExaminationTime: timeSlot,
             reExaminationNotes: notes,
-            reExaminationAppointmentId: appointment?._id,
+            requires_followup: true,
+            followup_reason: doctorNotes || 'Re-examination required',
             created_at: new Date()
           };
           
-          medicalRecord.treatment_plan.push(reExaminationStep);
-          console.log('✅ Created re-examination step:', nextStepNumber);
+          // Thêm step vào treatment_plan
+          medicalRecord.treatment_plan.push(newStep);
           
-          // SAVE medical record để có _id cho step mới
-          console.log('💾 Saving medical record with new step...');
+          // Lưu medical record để step có _id
           await medicalRecord.save({ validateModifiedOnly: true });
-          console.log('✅ Medical record saved');
+          console.log('✅ Created re-examination step:', nextStepNumber);
           
           // Lấy step vừa tạo (có _id rồi)
           const savedStep = medicalRecord.treatment_plan.find(
             (s: any) => s.stepNumber === nextStepNumber
           );
           
-          // Update appointment với step_id mới
-          if (appointment && savedStep && savedStep._id) {
+          // Tạo appointment với step_id đã có
+          if (appointmentDate && savedStep && savedStep._id) {
             try {
-              console.log('🔗 Linking appointment to step:', savedStep._id);
-              appointment.re_examination_step_id = savedStep._id;
+              // Kiểm tra slot trước
+              const startOfDay = new Date(appointmentDate);
+              startOfDay.setHours(0, 0, 0, 0);
               
-              // FIX: Kiểm tra và khởi tạo metadata nếu undefined
-              if (!appointment.metadata) {
-                appointment.metadata = {};
+              const endOfDay = new Date(appointmentDate);
+              endOfDay.setHours(23, 59, 59, 999);
+              
+              const existingAppointment = await Appointment.findOne({
+                doctor_id: doctor._id, // Sử dụng doctor._id từ Doctor table
+                appointment_date: { $gte: startOfDay, $lte: endOfDay },
+                time_slot: timeSlot,
+                status: { $in: ['pending', 'confirmed', 'scheduled'] }
+              });
+              
+              if (existingAppointment) {
+                return res.status(409).json({
+                  success: false,
+                  message: `Doctor already has an appointment at ${timeSlot} on ${appointmentDate.toLocaleDateString()}`,
+                  alternative_slots: await getAlternativeTimeSlots(doctor._id.toString(), appointmentDate)
+                });
               }
-              appointment.metadata.step_number = nextStepNumber;
+              
+              appointment = new Appointment({
+                user_id: medicalRecord.user_id,
+                doctor_id: doctor._id, // Sử dụng doctor._id từ Doctor table
+                specialty_id: doctor.specialty_id,
+                appointment_date: appointmentDate,
+                time_slot: timeSlot,
+                status: 'scheduled',
+                reason: `Re-examination: ${step.title}`,
+                notes: notes,
+                is_re_examination: true,
+                re_examination_step_id: savedStep._id,
+                metadata: {
+                  consultation_id: consultationId,
+                  approved_step_number: stepNum,
+                  step_number: nextStepNumber,
+                  step_title: savedStep.title,
+                  created_by: 'doctor',
+                  created_at: new Date()
+                }
+              });
               
               await appointment.save();
-              console.log('✅ Updated appointment with step_id:', savedStep._id);
-            } catch (err) {
-              console.error('❌ Error updating appointment:', err);
+              console.log('✅ Created appointment with doctor_id:', doctor._id);
+              console.log('✅ Created appointment with step_id:', savedStep._id);
+              
+              // Cập nhật step với appointmentId
+              savedStep.reExaminationAppointmentId = appointment._id;
+              
+              // Lưu lại medical record với appointmentId
+              await medicalRecord.save({ validateModifiedOnly: true });
+              console.log('✅ Updated step with appointment_id:', appointment._id);
+              
+            } catch (err: any) {
+              console.error('❌ Error creating appointment:', err);
+              if (err.name === 'DuplicateAppointmentError') {
+                return res.status(409).json({
+                  success: false,
+                  message: err.message,
+                  alternative_slots: await getAlternativeTimeSlots(doctor._id.toString(), appointmentDate)
+                });
+              }
+              throw err;
             }
           }
         }
 
-        // 4. Update next_appointment trong medical record
+        // 3. Update next_appointment trong medical record
         if (appointmentDate) {
           medicalRecord.next_appointment = appointmentDate;
           console.log('📅 Updated next_appointment:', appointmentDate);
         }
 
-        // 5. Send notification
+        // 4. Send notification
         try {
           const notificationData: any = {
             user_id: patientId,
@@ -2074,7 +2114,8 @@ export const reviewAndDecideStep = async (req: any, res: any): Promise<void> => 
             related_record_type: 'medical_record',
             data: {
               decision: 'approved_needs_followup',
-              doctorNotes: doctorNotes
+              doctorNotes: doctorNotes,
+              needsReExamination: requireFollowUp
             },
             action_url: `/medical-records/${consultationId}`,
             action_label: 'View Treatment Plan'
@@ -2101,7 +2142,7 @@ export const reviewAndDecideStep = async (req: any, res: any): Promise<void> => 
         step.approval_requested = false;
 
         const allStepsApproved = medicalRecord.treatment_plan.every((s: any) => 
-          s.status === 'approved'
+          s.status === 'approved' || s.status === 'completed'
         );
         
         if (allStepsApproved || completeConsultation) {
@@ -2178,9 +2219,11 @@ export const reviewAndDecideStep = async (req: any, res: any): Promise<void> => 
         return;
     }
 
-    // Final save
-    console.log('💾 Final save of medical record...');
-    await medicalRecord.save({ validateModifiedOnly: true });
+    // Final save (nếu chưa save trong các trường hợp trên)
+    if (decision !== 'approve_with_followup' || !requireFollowUp) {
+      await medicalRecord.save({ validateModifiedOnly: true });
+    }
+    
     console.log('✅ Final save completed');
 
     // Prepare response
@@ -2197,7 +2240,8 @@ export const reviewAndDecideStep = async (req: any, res: any): Promise<void> => 
             stepNumber: s.stepNumber,
             title: s.title,
             status: s.status,
-            isPhysicalVisit: s.isPhysicalVisit,
+            isReExaminationVisit: s.isReExaminationVisit,
+            needsReExamination: s.needsReExamination,
             reExaminationScheduled: s.reExaminationScheduled,
             reExaminationDate: s.reExaminationDate,
             reExaminationAppointmentId: s.reExaminationAppointmentId
@@ -2207,7 +2251,8 @@ export const reviewAndDecideStep = async (req: any, res: any): Promise<void> => 
           stepNumber: stepNum,
           status: step.status,
           decision: decision,
-          doctorNotes: step.doctorNotes
+          doctorNotes: step.doctorNotes,
+          needsReExamination: step.needsReExamination
         },
         message: `Step ${stepNum} ${decision.replace(/_/g, ' ')} successfully`
       }
@@ -2222,7 +2267,18 @@ export const reviewAndDecideStep = async (req: any, res: any): Promise<void> => 
         status: appointment.status,
         notes: appointment.notes,
         is_re_examination: appointment.is_re_examination,
-        re_examination_step_id: appointment.re_examination_step_id
+        re_examination_step_id: appointment.re_examination_step_id,
+        metadata: appointment.metadata
+      };
+    }
+
+    // Add new step info if created
+    if (newStep) {
+      responseData.data.new_step = {
+        stepNumber: newStep.stepNumber,
+        title: newStep.title,
+        status: newStep.status,
+        isReExaminationVisit: newStep.isReExaminationVisit
       };
     }
 
@@ -2242,6 +2298,9 @@ export const reviewAndDecideStep = async (req: any, res: any): Promise<void> => 
     } else if (error.name === 'CastError') {
       statusCode = 400;
       errorMessage = 'Invalid ID format';
+    } else if (error.name === 'DuplicateAppointmentError') {
+      statusCode = 409;
+      errorMessage = error.message;
     }
     
     res.status(statusCode).json({ 
@@ -2254,10 +2313,16 @@ export const reviewAndDecideStep = async (req: any, res: any): Promise<void> => 
 };
 
 
-export const scheduleReExamination = async (req: AuthRequest, res: Response) => {
+export const scheduleReExamination = async (req: any, res: any): Promise<void> => {
   try {
     const { consultationId, stepNumber } = req.params;
     const { appointmentDateTime, notes, timeSlot } = req.body;
+    
+    console.log('=== SCHEDULE RE-EXAMINATION ===');
+    console.log('Consultation ID:', consultationId);
+    console.log('Step Number:', stepNumber);
+    console.log('Appointment DateTime:', appointmentDateTime);
+    console.log('Time Slot:', timeSlot);
     
     // Validate input
     if (!appointmentDateTime) {
@@ -2267,23 +2332,30 @@ export const scheduleReExamination = async (req: AuthRequest, res: Response) => 
       });
     }
     
-    const doctor_user_id = req.user?._id;
-    if (!doctor_user_id) {
+    // Authentication check
+    if (!req.user || req.user.role !== 'doctor') {
       return res.status(401).json({ 
         success: false,
         message: 'Authentication required' 
       });
     }
     
-    const doctor = await Doctor.findOne({ user_id: doctor_user_id });
+    // Get doctor info từ bảng Doctor
+    const doctor = await Doctor.findOne({ user_id: req.user._id });
     if (!doctor) {
       return res.status(404).json({ 
         success: false,
-        message: 'Doctor not found' 
+        message: 'Doctor profile not found' 
       });
     }
     
-    const medicalRecord = await MedicalRecord.findById(consultationId);
+    console.log('Doctor found - Doctor ID:', doctor._id, 'User ID:', doctor.user_id);
+    console.log('Current logged in User ID:', req.user._id);
+
+    // Get medical record - không populate doctor_id phức tạp
+    const medicalRecord = await MedicalRecord.findById(consultationId)
+      .populate('user_id', 'name email phoneNumber');
+      
     if (!medicalRecord) {
       return res.status(404).json({ 
         success: false, 
@@ -2291,8 +2363,23 @@ export const scheduleReExamination = async (req: AuthRequest, res: Response) => 
       });
     }
     
+    console.log('Medical record doctor_id (User ID):', medicalRecord.doctor_id);
+    
+    // Authorization check - kiểm tra xem doctor có phải là doctor được assign không
+    // SO SÁNH ĐÚNG: medicalRecord.doctor_id (User ID) với doctor.user_id (User ID)
+    if (medicalRecord.doctor_id.toString() !== doctor.user_id.toString()) {
+      return res.status(403).json({ 
+        success: false,
+        message: 'Forbidden: You can only schedule re-examination for your own patients',
+        medicalRecordDoctorId: medicalRecord.doctor_id.toString(),
+        currentDoctorUserId: doctor.user_id.toString()
+      });
+    }
+    
+    // Find the step
+    const stepNum = parseInt(stepNumber);
     const step = medicalRecord.treatment_plan.find(
-      s => s.stepNumber === parseInt(stepNumber)
+      (s: any) => s.stepNumber === stepNum
     );
     
     if (!step) {
@@ -2302,70 +2389,179 @@ export const scheduleReExamination = async (req: AuthRequest, res: Response) => 
       });
     }
 
+    // Check if step needs re-examination
+    if (!step.needsReExamination && !step.isReExaminationVisit) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Step does not require re-examination' 
+      });
+    }
+
     const appointmentDate = new Date(appointmentDateTime);
-    let appointment;
+    let appointment = null;
+    let isExistingAppointment = false;
     
-    // 1. Tìm theo appointmentId đã có trong step (nếu có)
+    console.log('🔍 Searching for existing appointment...');
+    console.log('Step has appointmentId:', step.reExaminationAppointmentId);
+    console.log('Step has _id:', step._id);
+    
+    // ========== IMPROVED SEARCH LOGIC ==========
+    const searchCriteria = [];
+    
+    // 1. Tìm theo appointmentId trong step
     if (step.reExaminationAppointmentId) {
-      appointment = await Appointment.findById(step.reExaminationAppointmentId);
-      console.log('🔍 Found appointment by ID:', step.reExaminationAppointmentId);
+      searchCriteria.push({ _id: step.reExaminationAppointmentId });
+      console.log('🔍 Search 1: By step.reExaminationAppointmentId');
     }
     
-    // 2. Nếu không tìm thấy, tìm theo step._id (nếu có)
-    if (!appointment && step._id) {
-      appointment = await Appointment.findOne({
-        re_examination_step_id: step._id,
-        is_re_examination: true,
-        user_id: medicalRecord.user_id,
-        doctor_id: doctor._id
+    // 2. Tìm theo step._id
+    if (step._id) {
+      searchCriteria.push({ re_examination_step_id: step._id });
+      console.log('🔍 Search 2: By step._id');
+    }
+    
+    // 3. Tìm theo metadata
+    searchCriteria.push({ 
+      'metadata.consultation_id': consultationId,
+      'metadata.step_number': stepNum,
+      is_re_examination: true
+    });
+    console.log('🔍 Search 3: By metadata');
+    
+    // 4. Tìm theo điều kiện chung
+    searchCriteria.push({
+      user_id: medicalRecord.user_id,
+      doctor_id: doctor._id, // Sử dụng doctor._id (Doctor ID) để tìm appointment
+      is_re_examination: true,
+      'metadata.consultation_id': consultationId
+    });
+    console.log('🔍 Search 4: By general criteria');
+    
+    // Thực hiện tìm kiếm theo thứ tự ưu tiên
+    for (const criteria of searchCriteria) {
+      if (appointment) break; // Đã tìm thấy thì dừng
+      
+      try {
+        appointment = await Appointment.findOne(criteria);
+        if (appointment) {
+          isExistingAppointment = true;
+          console.log(`✅ Found existing appointment with criteria:`, Object.keys(criteria));
+          console.log(`   Appointment ID: ${appointment._id}`);
+          console.log(`   Appointment status: ${appointment.status}`);
+          console.log(`   Appointment date: ${appointment.appointment_date}`);
+          console.log(`   Appointment doctor_id: ${appointment.doctor_id}`);
+          console.log(`   Current doctor._id: ${doctor._id}`);
+          break;
+        }
+      } catch (err) {
+        console.warn(`⚠️  Search failed for criteria:`, err.message);
+      }
+    }
+    
+    // ========== KIỂM TRA APPOINTMENT STATUS ==========
+    if (appointment && appointment.status === 'confirmed') {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot reschedule a confirmed appointment. Please cancel first or contact patient.',
+        appointment_id: appointment._id,
+        current_status: appointment.status,
+        current_date: appointment.appointment_date,
+        current_time: appointment.time_slot,
+        allowed_actions: ['cancel', 'complete']
       });
-      console.log('🔍 Searched appointment by step_id:', step._id, 'found:', appointment?._id);
     }
     
-    // 3. Nếu vẫn không tìm thấy, tìm theo consultationId và stepNumber
-    if (!appointment) {
-      appointment = await Appointment.findOne({
-        'metadata.consultation_id': consultationId,
-        'metadata.step_number': parseInt(stepNumber),
-        is_re_examination: true,
-        status: { $in: ['confirmed', 'scheduled', 'pending'] }
-      });
-      console.log('🔍 Searched appointment by metadata:', consultationId, stepNumber, 'found:', appointment?._id);
-    }
-    
+    // ========== APPOINTMENT HANDLING ==========
     if (appointment) {
-      // CẬP NHẬT lịch hẹn hiện có
+      // CẬP NHẬT lịch hẹn hiện có (chỉ cho phép nếu status không phải 'confirmed')
       console.log('✅ Updating existing appointment:', appointment._id);
+      console.log('Current appointment status:', appointment.status);
+      
+      // Check for time slot availability
+      const startOfDay = new Date(appointmentDate);
+      startOfDay.setHours(0, 0, 0, 0);
+      
+      const endOfDay = new Date(appointmentDate);
+      endOfDay.setHours(23, 59, 59, 999);
+      
+      const existingAppointment = await Appointment.findOne({
+        doctor_id: doctor._id, // Sử dụng doctor._id (Doctor ID)
+        appointment_date: { $gte: startOfDay, $lte: endOfDay },
+        time_slot: timeSlot || '09:00',
+        status: { $in: ['pending', 'confirmed', 'scheduled'] },
+        _id: { $ne: appointment._id } // Không tính chính appointment này
+      });
+      
+      if (existingAppointment) {
+        return res.status(409).json({
+          success: false,
+          message: `Doctor already has an appointment at ${timeSlot || '09:00'} on ${appointmentDate.toLocaleDateString()}`,
+          alternative_slots: await getAlternativeTimeSlots(doctor._id.toString(), appointmentDate)
+        });
+      }
+      
+      // Update appointment
+      const oldDate = appointment.appointment_date;
+      const oldTime = appointment.time_slot;
+      
       appointment.appointment_date = appointmentDate;
       appointment.time_slot = timeSlot || '09:00';
       appointment.notes = notes || `Re-examination: ${step.title}`;
-      appointment.status = 'pending';
+      appointment.status = 'scheduled'; // Giữ nguyên status nếu đang là 'pending' hoặc 'scheduled'
       appointment.updated_at = new Date();
       appointment.is_re_examination = true;
       appointment.re_examination_step_id = step._id;
+      appointment.specialty_id = doctor.specialty_id;
       
-      // Cập nhật metadata để dễ tìm kiếm sau này
-      appointment.metadata = {
-        ...appointment.metadata,
-        consultation_id: consultationId,
-        step_number: parseInt(stepNumber),
-        step_title: step.title,
-        updated_by: 'doctor',
-        updated_at: new Date()
-      };
+      // Update metadata
+      if (!appointment.metadata) {
+        appointment.metadata = {};
+      }
+      appointment.metadata.consultation_id = consultationId;
+      appointment.metadata.step_number = stepNum;
+      appointment.metadata.step_title = step.title;
+      appointment.metadata.updated_by = 'doctor';
+      appointment.metadata.updated_at = new Date();
+      appointment.metadata.previous_date = oldDate; // Lưu ngày cũ để tracking
+      appointment.metadata.previous_time = oldTime; // Lưu giờ cũ để tracking
+      appointment.metadata.rescheduled_at = new Date(); // Thời gian reschedule
       
       await appointment.save();
+      console.log('✅ Appointment updated successfully');
+      console.log(`   From: ${oldDate.toLocaleDateString()} ${oldTime}`);
+      console.log(`   To: ${appointmentDate.toLocaleDateString()} ${timeSlot || '09:00'}`);
       
     } else {
       // TẠO MỚI lịch hẹn
       console.log('🆕 Creating new appointment');
-      appointment = await createNewAppointment();
-    }
-    
-    async function createNewAppointment() {
-      const newAppointment = new Appointment({
+      
+      // Check for time slot availability
+      const startOfDay = new Date(appointmentDate);
+      startOfDay.setHours(0, 0, 0, 0);
+      
+      const endOfDay = new Date(appointmentDate);
+      endOfDay.setHours(23, 59, 59, 999);
+      
+      const existingAppointment = await Appointment.findOne({
+        doctor_id: doctor._id, // Sử dụng doctor._id (Doctor ID)
+        appointment_date: { $gte: startOfDay, $lte: endOfDay },
+        time_slot: timeSlot || '09:00',
+        status: { $in: ['pending', 'confirmed', 'scheduled'] }
+      });
+      
+      if (existingAppointment) {
+        return res.status(409).json({
+          success: false,
+          message: `Doctor already has an appointment at ${timeSlot || '09:00'} on ${appointmentDate.toLocaleDateString()}`,
+          alternative_slots: await getAlternativeTimeSlots(doctor._id.toString(), appointmentDate)
+        });
+      }
+      
+      // Create new appointment
+      appointment = new Appointment({
         user_id: medicalRecord.user_id,
-        doctor_id: doctor._id,
+        doctor_id: doctor._id, // Sử dụng doctor._id từ Doctor table (Doctor ID)
+        specialty_id: doctor.specialty_id, // Thêm specialty_id từ doctor
         appointment_date: appointmentDate,
         time_slot: timeSlot || '09:00',
         status: 'pending',
@@ -2375,91 +2571,185 @@ export const scheduleReExamination = async (req: AuthRequest, res: Response) => 
         re_examination_step_id: step._id,
         metadata: {
           consultation_id: consultationId,
-          step_number: parseInt(stepNumber),
+          step_number: stepNum,
           step_title: step.title,
           created_by: 'doctor',
           created_at: new Date()
         }
       });
-      await newAppointment.save();
-      return newAppointment;
+      
+      await appointment.save();
+      console.log('✅ New appointment created:', appointment._id);
     }
-    // ========== KẾT THÚC PHẦN QUAN TRỌNG ==========
     
-    // Cập nhật step
-    step.status = 'scheduled';
+    // ========== UPDATE STEP INFORMATION ==========
+    console.log('📝 Updating step information...');
+    
+    // Cập nhật step với appointmentId
+    step.reExaminationAppointmentId = appointment._id;
     step.reExaminationScheduled = true;
     step.reExaminationDate = appointmentDate;
     step.reExaminationTime = timeSlot || '09:00';
-    step.reExaminationAppointmentId = appointment._id;
-    step.needsReExamination = false; // Đã lập lịch xong
+    step.needsReExamination = false;
+    step.isReExaminationVisit = true;
     step.reExaminationNotes = notes;
+    
+    // Cập nhật trạng thái step
+    if (step.status !== 'scheduled') {
+      step.status = 'scheduled';
+      console.log(`📋 Step status changed to: scheduled`);
+    }
     
     // Đánh dấu consultation có follow-up nếu cần
     if (!medicalRecord.next_appointment || medicalRecord.next_appointment < appointmentDate) {
       medicalRecord.next_appointment = appointmentDate;
+      console.log('📅 Updated medical_record.next_appointment:', appointmentDate);
     }
     
-    await medicalRecord.save();
+    // Lưu medical record
+    await medicalRecord.save({ validateModifiedOnly: true });
+    console.log('✅ Medical record updated');
     
-    // Gửi thông báo cho bệnh nhân
+    // ========== SEND NOTIFICATION ==========
     try {
       const patient = await User.findById(medicalRecord.user_id);
-      const doctorUser = await User.findById(doctor.user_id);
+      const doctorUser = await User.findById(doctor.user_id); // Lấy thông tin user từ doctor
       
       if (patient) {
-        const isUpdate = step.reExaminationScheduled && step.reExaminationAppointmentId;
+        const isUpdate = isExistingAppointment;
+        
+        // Nội dung notification khác nhau cho trường hợp reschedule
+        let notificationTitle = 'Re-examination Scheduled';
+        let notificationMessage = `Dr. ${doctorUser?.name || 'Doctor'} has scheduled a re-examination for ${appointmentDate.toLocaleDateString()} at ${timeSlot || '09:00'}.`;
+        
+        if (isUpdate) {
+          // Lấy thông tin cũ từ metadata
+          const oldDate = appointment.metadata?.previous_date 
+            ? new Date(appointment.metadata.previous_date).toLocaleDateString() 
+            : 'previous date';
+          const oldTime = appointment.metadata?.previous_time || 'previous time';
+          
+          notificationTitle = 'Appointment Rescheduled';
+          notificationMessage = `Dr. ${doctorUser?.name || 'Doctor'} has rescheduled your re-examination from ${oldDate} ${oldTime} to ${appointmentDate.toLocaleDateString()} at ${timeSlot || '09:00'}.`;
+        }
         
         await notificationService.sendNotification({
           user_id: patient._id.toString(),
-          title: isUpdate ? 'Appointment Rescheduled' : 'Re-examination Scheduled',
-          message: isUpdate 
-            ? `Dr. ${doctorUser?.name || 'Doctor'} has rescheduled your re-examination to ${appointmentDate.toLocaleDateString()} at ${timeSlot}.`
-            : `Dr. ${doctorUser?.name || 'Doctor'} has scheduled a re-examination for ${appointmentDate.toLocaleDateString()} at ${timeSlot}.`,
+          title: notificationTitle,
+          message: notificationMessage,
           template_key: 're_examination_scheduled',
           variables: {
             doctor_name: doctorUser?.name || 'Doctor',
             appointment_date: appointmentDate.toLocaleDateString(),
-            appointment_time: timeSlot,
-            step_title: step.title
+            appointment_time: timeSlot || '09:00',
+            step_title: step.title,
+            ...(isUpdate && {
+              previous_date: appointment.metadata?.previous_date 
+                ? new Date(appointment.metadata.previous_date).toLocaleDateString()
+                : '',
+              previous_time: appointment.metadata?.previous_time || ''
+            })
           },
           type: 'appointment',
           category: 'info',
           priority: 'high',
           related_record: appointment._id,
           related_record_type: 'appointment',
+          data: {
+            appointment_id: appointment._id,
+            step_number: stepNum,
+            consultation_id: consultationId,
+            action: isUpdate ? 'rescheduled' : 'created',
+            old_date: isUpdate ? appointment.metadata?.previous_date : null,
+            old_time: isUpdate ? appointment.metadata?.previous_time : null,
+            new_date: appointmentDate,
+            new_time: timeSlot || '09:00'
+          },
           action_url: `/appointments/${appointment._id}`,
           action_label: 'View Appointment'
         });
+        
+        console.log('📧 Notification sent to patient');
       }
     } catch (err) {
-      console.error('Notification error:', err);
+      console.error('❌ Notification error:', err);
     }
     
-    res.status(200).json({
+    // ========== PREPARE RESPONSE ==========
+    const responseData = {
       success: true,
-      message: step.reExaminationScheduled ? 'Re-examination rescheduled successfully' : 'Re-examination scheduled successfully',
+      message: isExistingAppointment 
+        ? 'Re-examination rescheduled successfully' 
+        : 'Re-examination scheduled successfully',
       data: {
-        appointment: appointment,
-        step: step,
-        action: appointment ? 'updated' : 'created'
+        appointment: {
+          _id: appointment._id,
+          appointment_date: appointment.appointment_date,
+          time_slot: appointment.time_slot,
+          status: appointment.status,
+          notes: appointment.notes,
+          is_re_examination: appointment.is_re_examination,
+          re_examination_step_id: appointment.re_examination_step_id,
+          specialty_id: appointment.specialty_id,
+          metadata: appointment.metadata
+        },
+        step: {
+          stepNumber: stepNum,
+          title: step.title,
+          status: step.status,
+          reExaminationScheduled: step.reExaminationScheduled,
+          reExaminationDate: step.reExaminationDate,
+          reExaminationTime: step.reExaminationTime,
+          reExaminationAppointmentId: step.reExaminationAppointmentId
+        },
+        medical_record: {
+          _id: medicalRecord._id,
+          next_appointment: medicalRecord.next_appointment,
+          consultation_status: medicalRecord.consultation_status
+        },
+        action: isExistingAppointment ? 'rescheduled' : 'created',
+        is_reschedule: isExistingAppointment,
+        allowed_reschedule: appointment.status !== 'confirmed'
       }
-    });
+    };
+    
+    console.log('=== SCHEDULE RE-EXAMINATION COMPLETED ===');
+    res.status(200).json(responseData);
+    
   } catch (error: any) {
-    console.error('Error scheduling re-examination:', error);
-    res.status(500).json({ 
+    console.error('❌ Error in scheduleReExamination:', error);
+    console.error('Stack trace:', error.stack);
+    
+    let statusCode = 500;
+    let errorMessage = 'Error scheduling re-examination: ' + error.message;
+    
+    if (error.name === 'ValidationError') {
+      statusCode = 400;
+      errorMessage = 'Validation error: ' + error.message;
+    } else if (error.name === 'CastError') {
+      statusCode = 400;
+      errorMessage = 'Invalid ID format';
+    } else if (error.name === 'DuplicateAppointmentError') {
+      statusCode = 409;
+      errorMessage = error.message;
+    }
+    
+    res.status(statusCode).json({ 
       success: false, 
-      message: error.message 
+      message: errorMessage,
+      error_type: error.name,
+      timestamp: new Date().toISOString()
     });
   }
 };
 
 
+
 const getAlternativeTimeSlots = async (doctorId: string, date: Date): Promise<string[]> => {
   const start = new Date(date);
-  start.setHours(0,0,0,0);
+  start.setHours(0, 0, 0, 0);
   const end = new Date(date);
-  end.setHours(23,59,59,999);
+  end.setHours(23, 59, 59, 999);
 
   const allTimeSlots = [
     '09:00', '09:30', '10:00', '10:30', '11:00', '11:30',
@@ -2480,18 +2770,16 @@ const getAlternativeTimeSlots = async (doctorId: string, date: Date): Promise<st
 export const getAvailableSlots = async (req: Request, res: Response) => {
   try {
     const { date } = req.query;
-    
+
     console.log('✅ Available slots requested for date:', date);
-    
-    // Return all slots for now (simplest fix)
     const allSlots = [
       '09:00', '09:30', '10:00', '10:30', '11:00', '11:30',
       '13:00', '13:30', '14:00', '14:30', '15:00', '15:30',
       '16:00', '16:30'
     ];
-    
-    res.json({ 
-      success: true, 
+
+    res.json({
+      success: true,
       data: allSlots,
       message: 'Using all time slots (backend not fully implemented)'
     });
@@ -2504,52 +2792,52 @@ export const getAvailableSlots = async (req: Request, res: Response) => {
 export const cancelReExamination = async (req: AuthRequest, res: Response) => {
   try {
     const { consultationId, stepNumber } = req.params;
-    
+
     const medicalRecord = await MedicalRecord.findById(consultationId);
     if (!medicalRecord) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Medical record not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Medical record not found'
       });
     }
-    
+
     const step = medicalRecord.treatment_plan.find(
       s => s.stepNumber === parseInt(stepNumber)
     );
-    
+
     if (!step) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Step not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Step not found'
       });
     }
-    
+
     if (!step.reExaminationAppointmentId) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'No appointment to cancel' 
+      return res.status(400).json({
+        success: false,
+        message: 'No appointment to cancel'
       });
     }
-    
+
     // Cập nhật trạng thái appointment
     await Appointment.findByIdAndUpdate(
       step.reExaminationAppointmentId,
-      { 
+      {
         status: 'cancelled',
         cancellation_reason: 'Doctor cancelled re-examination',
         cancelled_at: new Date()
       }
     );
-    
+
     // Reset step status
     step.status = 'approved'; // Quay lại trạng thái approved
     step.reExaminationScheduled = false;
     step.reExaminationDate = undefined;
     step.reExaminationAppointmentId = undefined;
     step.needsReExamination = true; // Vẫn cần tái khám
-    
+
     await medicalRecord.save();
-    
+
     res.status(200).json({
       success: true,
       message: 'Re-examination cancelled successfully',
@@ -2559,9 +2847,9 @@ export const cancelReExamination = async (req: AuthRequest, res: Response) => {
     });
   } catch (error: any) {
     console.error('Error cancelling re-examination:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message 
+    res.status(500).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -2569,41 +2857,41 @@ export const cancelReExamination = async (req: AuthRequest, res: Response) => {
 export const confirmReExaminationArrival = async (req: AuthRequest, res: Response) => {
   try {
     const { consultationId, stepNumber } = req.params;
-    
+
     const doctor_user_id = req.user?._id;
     if (!doctor_user_id) {
-      return res.status(401).json({ 
+      return res.status(401).json({
         success: false,
-        message: 'Authentication required' 
+        message: 'Authentication required'
       });
     }
-    
+
     const doctor = await Doctor.findOne({ user_id: doctor_user_id });
     if (!doctor) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        message: 'Doctor not found' 
+        message: 'Doctor not found'
       });
     }
-    
+
     const medicalRecord = await MedicalRecord.findById(consultationId)
       .populate('user_id', 'name email');
-      
+
     if (!medicalRecord) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Medical record not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Medical record not found'
       });
     }
-    
+
     const step = medicalRecord.treatment_plan.find(
       s => s.stepNumber === parseInt(stepNumber)
     );
-    
+
     if (!step) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Step not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Step not found'
       });
     }
 
@@ -2627,7 +2915,7 @@ export const confirmReExaminationArrival = async (req: AuthRequest, res: Respons
     step.arrivalConfirmed = true;
     step.arrivalConfirmedAt = new Date();
     step.startedAt = new Date();
-    
+
     // Update current step
     medicalRecord.current_step = parseInt(stepNumber);
 
@@ -2651,7 +2939,7 @@ export const confirmReExaminationArrival = async (req: AuthRequest, res: Respons
     try {
       const patient = medicalRecord.user_id as any;
       const doctorUser = await User.findById(doctor.user_id);
-      
+
       await notificationService.sendNotification({
         user_id: patient._id.toString(),
         title: 'Re-Examination Started',
@@ -2684,9 +2972,143 @@ export const confirmReExaminationArrival = async (req: AuthRequest, res: Respons
 
   } catch (error: any) {
     console.error('Error confirming arrival:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message 
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+// Hoàn thành step tái khám và appointment
+export const completeReExaminationStep = async (req: AuthRequest, res: Response) => {
+  try {
+    const { consultationId, stepNumber } = req.params;
+    const { doctorNotes } = req.body;
+
+    const doctor_user_id = req.user?._id;
+    if (!doctor_user_id) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required'
+      });
+    }
+
+    const doctor = await Doctor.findOne({ user_id: doctor_user_id });
+    if (!doctor) {
+      return res.status(404).json({
+        success: false,
+        message: 'Doctor not found'
+      });
+    }
+
+    const medicalRecord = await MedicalRecord.findById(consultationId)
+      .populate('user_id', 'name email');
+
+    if (!medicalRecord) {
+      return res.status(404).json({
+        success: false,
+        message: 'Medical record not found'
+      });
+    }
+
+    const step = medicalRecord.treatment_plan.find(
+      s => s.stepNumber === parseInt(stepNumber)
+    );
+
+    if (!step) {
+      return res.status(404).json({
+        success: false,
+        message: 'Step not found'
+      });
+    }
+
+    // Validate step is a physical visit and in-progress
+    if (!step.isPhysicalVisit) {
+      return res.status(400).json({
+        success: false,
+        message: 'This step is not a physical re-examination'
+      });
+    }
+
+    if (step.status !== 'in-progress') {
+      return res.status(400).json({
+        success: false,
+        message: 'Step is not in progress'
+      });
+    }
+
+    // Complete the step
+    step.status = 'completed';
+    step.doctorNotes = doctorNotes || 'Physical examination completed';
+    step.completedAt = new Date();
+    step.approval_requested = true;
+
+    // Update appointment status if exists
+    if (step.reExaminationAppointmentId) {
+      const appointment = await Appointment.findById(step.reExaminationAppointmentId);
+      if (appointment) {
+        appointment.status = 'completed';
+        appointment.notes = `Physical re-examination completed: ${doctorNotes || 'Patient attended the appointment'}`;
+        appointment.metadata = {
+          ...appointment.metadata,
+          completed_at: new Date(),
+          completed_by: 'doctor',
+          step_number: parseInt(stepNumber)
+        };
+        await appointment.save();
+      }
+    }
+
+    // Activate next step if exists
+    const nextStep = medicalRecord.treatment_plan.find(s => s.stepNumber === parseInt(stepNumber) + 1);
+    if (nextStep && nextStep.status === 'pending') {
+      nextStep.status = 'in-progress';
+      nextStep.startedAt = new Date();
+      medicalRecord.current_step = parseInt(stepNumber) + 1;
+    }
+
+    await medicalRecord.save({ validateModifiedOnly: true });
+
+    // Send notification to patient
+    try {
+      const patient = medicalRecord.user_id as any;
+      const doctorUser = await User.findById(doctor.user_id);
+
+      await notificationService.sendNotification({
+        user_id: patient._id.toString(),
+        title: 'Re-Examination Completed',
+        message: `Dr. ${doctorUser?.name || 'Doctor'} has completed your physical re-examination. Please check your treatment plan for next steps.`,
+        template_key: 're_examination_completed',
+        variables: {
+          doctor_name: doctorUser?.name || 'Doctor',
+          step_title: step.title
+        },
+        type: 'treatment',
+        category: 'success',
+        priority: 'high',
+        related_record: consultationId,
+        related_record_type: 'medical_record',
+        action_url: `/medical-records/${consultationId}`,
+        action_label: 'View Treatment Plan'
+      });
+    } catch (err) {
+      console.error('Notification error:', err);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Re-examination completed successfully',
+      data: {
+        step: step,
+        medical_record: medicalRecord
+      }
+    });
+
+  } catch (error: any) {
+    console.error('Error completing re-examination:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
     });
   }
 };

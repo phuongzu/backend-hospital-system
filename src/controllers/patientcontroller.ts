@@ -2040,3 +2040,223 @@ export const checkRealTimeAvailability = async (req: Request, res: Response): Pr
   }
 };
 
+export const checkInAppointment = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { appointment_id } = req.params;
+    const user_id = req.user?._id;
+
+    console.log('=== CHECK-IN APPOINTMENT ===');
+    console.log('Appointment ID:', appointment_id);
+    console.log('User ID:', user_id);
+
+    if (!appointment_id || !user_id) {
+      res.status(400).json({ 
+        success: false,
+        message: 'Appointment ID and user authentication required' 
+      });
+      return;
+    }
+
+    // Tìm appointment
+    const appointment = await Appointment.findById(appointment_id)
+      .populate('user_id', 'name email')
+      .populate('doctor_id', 'user_id');
+
+    if (!appointment) {
+      res.status(404).json({ 
+        success: false,
+        message: 'Appointment not found' 
+      });
+      return;
+    }
+
+    // Kiểm tra quyền sở hữu
+    if (appointment.user_id._id.toString() !== user_id.toString()) {
+      res.status(403).json({ 
+        success: false,
+        message: 'You can only check in to your own appointments' 
+      });
+      return;
+    }
+
+    // Kiểm tra trạng thái - MỞ RỘNG cho phép confirm sớm
+    const validStatuses = ['scheduled', 'pending'];
+    if (!validStatuses.includes(appointment.status)) {
+      res.status(400).json({ 
+        success: false,
+        message: `Cannot check in. Current status: ${appointment.status}`,
+        valid_statuses: validStatuses
+      });
+      return;
+    }
+
+    // Kiểm tra ngày hẹn - CHO PHÉP CONFIRM SỚM
+    const appointmentDate = new Date(appointment.appointment_date);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const isToday = appointmentDate.toDateString() === today.toDateString();
+    const isFuture = appointmentDate > today;
+    
+    // Cho phép confirm sớm (trước ngày hẹn)
+    let newStatus = 'confirmed';
+    let checkInType = 'on_time';
+    
+    if (isFuture) {
+      // Nếu chưa đến ngày hẹn, đặt trạng thái "pre-confirmed"
+      newStatus = 'confirmed';
+      checkInType = 'early_confirmation';
+      console.log('✅ Early confirmation for future appointment');
+    }
+
+    // Cập nhật status
+    appointment.status = newStatus;
+    appointment.updated_at = new Date();
+    
+    // Thêm metadata check-in
+    appointment.metadata = {
+      ...appointment.metadata,
+      checked_in_at: new Date(),
+      checked_in_by: 'patient',
+      check_in_type: checkInType,
+      check_in_time: new Date(),
+      appointment_date_original: appointmentDate,
+      check_in_before_appointment_days: isFuture ? 
+        Math.ceil((appointmentDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)) : 0
+    };
+
+    await appointment.save();
+
+    console.log(`✅ Appointment ${checkInType}:`, appointment_id, 'New status:', newStatus);
+
+    // Gửi thông báo cho bác sĩ
+    try {
+      const doctorUserId = (appointment.doctor_id as any).user_id?._id;
+      if (doctorUserId) {
+        const message = isFuture 
+          ? `Patient ${(appointment.user_id as any).name} has confirmed they will attend their appointment on ${appointmentDate.toLocaleDateString()} at ${appointment.time_slot}.`
+          : `Patient ${(appointment.user_id as any).name} has checked in for their appointment at ${appointment.time_slot}.`;
+        
+        const templateKey = isFuture ? 'patient_pre_confirmed' : 'patient_checked_in';
+        
+        await notificationService.sendNotification({
+          user_id: doctorUserId.toString(),
+          title: isFuture ? 'Patient Confirmed Attendance' : 'Patient Arrived',
+          message: message,
+          template_key: templateKey,
+          variables: {
+            patient_name: (appointment.user_id as any).name,
+            appointment_date: appointmentDate.toLocaleDateString(),
+            appointment_time: appointment.time_slot,
+            check_in_time: new Date().toLocaleTimeString(),
+            days_before: isFuture ? Math.ceil((appointmentDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)) : 0
+          },
+          type: 'appointment',
+          category: 'info',
+          priority: 'medium',
+          related_record: appointment._id.toString(),
+          related_record_type: 'appointment',
+          data: {
+            appointment_id: appointment._id.toString(),
+            check_in_time: new Date().toISOString(),
+            check_in_type: checkInType,
+            patient: {
+              name: (appointment.user_id as any).name,
+              appointment_date: appointmentDate.toLocaleDateString(),
+              appointment_time: appointment.time_slot
+            },
+            is_early_confirmation: isFuture
+          },
+          action_url: `/doctor/appointments/${appointment._id}`,
+          action_label: 'View Appointment'
+        });
+        console.log(`📧 ${isFuture ? 'Early confirmation' : 'Check-in'} notification sent to doctor`);
+      }
+    } catch (notifError) {
+      console.error('❌ Error sending notification:', notifError);
+    }
+
+    // Cập nhật medical record nếu là re-examination
+    if (appointment.re_examination_step_id) {
+      try {
+        const medicalRecord = await MedicalRecord.findOne({
+          'treatment_plan._id': appointment.re_examination_step_id
+        });
+        
+        if (medicalRecord) {
+          const step = medicalRecord.treatment_plan.find(
+            (s: any) => s._id?.toString() === appointment.re_examination_step_id?.toString()
+          );
+          
+          if (step) {
+            step.arrivalConfirmed = true;
+            step.arrivalConfirmedAt = new Date();
+            step.arrivalConfirmedEarly = isFuture; // Thêm flag confirm sớm
+            
+            // Chỉ chuyển status nếu đến ngày hẹn
+            if (!isFuture) {
+              step.status = 'in-progress';
+            }
+            
+            await medicalRecord.save({ validateModifiedOnly: true });
+            console.log('✅ Updated medical record step arrival status');
+          }
+        }
+      } catch (recordError) {
+        console.error('❌ Error updating medical record:', recordError);
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: isFuture 
+        ? `Early confirmation successful! You have confirmed your attendance for ${appointmentDate.toLocaleDateString()}`
+        : 'Check-in successful!',
+      data: {
+        appointment: {
+          _id: appointment._id,
+          status: appointment.status,
+          appointment_date: appointment.appointment_date,
+          time_slot: appointment.time_slot,
+          checked_in_at: new Date(),
+          updated_at: appointment.updated_at,
+          is_early_confirmation: isFuture,
+          appointment_date_formatted: appointmentDate.toLocaleDateString()
+        },
+        next_steps: isFuture ? [
+          'Your attendance has been confirmed in advance',
+          'Please arrive 15 minutes before appointment time',
+          'Bring ID and insurance card',
+          'Complete any pre-appointment forms if required'
+        ] : [
+          'Wait in the waiting area',
+          'Doctor will see you shortly',
+          'Have your ID and insurance card ready'
+        ]
+      }
+    });
+
+  } catch (error: any) {
+    console.error('❌ Error checking in:', error);
+    
+    let statusCode = 500;
+    let errorMessage = 'Error checking in to appointment';
+    
+    if (error.name === 'CastError') {
+      statusCode = 400;
+      errorMessage = 'Invalid appointment ID format';
+    } else if (error.name === 'ValidationError') {
+      statusCode = 400;
+      errorMessage = 'Validation error: ' + error.message;
+    }
+    
+    res.status(statusCode).json({ 
+      success: false, 
+      message: errorMessage,
+      error_type: error.name,
+      timestamp: new Date().toISOString()
+    });
+  }
+};
+
+

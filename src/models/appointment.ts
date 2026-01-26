@@ -36,9 +36,7 @@ const appointmentSchema = new mongoose.Schema<IAppointment>({
 });
 appointmentSchema.pre('save', async function(next) {
   const appointment = this;
-  
-  // Kiểm tra trùng lịch trước khi save
-  if (appointment.isNew) {
+    if (appointment.isNew) {
     const startOfDay = new Date(appointment.appointment_date);
     startOfDay.setHours(0, 0, 0, 0);
     

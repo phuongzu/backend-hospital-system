@@ -26,6 +26,7 @@ import {
   uploadAvatar,
   deleteAvatar,
   getAvatar,
+  checkInAppointment
 } from '../controllers/patientcontroller';
 import { protect } from '../middlewares/authmiddleware';
 import multer from 'multer';
@@ -71,6 +72,8 @@ router.post('/doctors/:doctor_id/reviews', postDoctorReview);
 router.get('/reviews/user', getUserReviews);
 router.delete('/reviews/:review_id', deleteReview);
 router.get('/medical-records/my-records', protect, getMyMedicalRecords);
+router.patch('/appointments/:appointment_id/check-in', protect, checkInAppointment);
+
 
 
 

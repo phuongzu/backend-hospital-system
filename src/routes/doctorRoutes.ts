@@ -35,7 +35,8 @@ import {
   scheduleReExamination,
   confirmReExaminationArrival,
   getAvailableSlots,
-  cancelReExamination
+  cancelReExamination,
+  completeReExaminationStep
 } from '../controllers/doctorcontroller';
 import multer from 'multer';
 import path from 'path';
@@ -121,11 +122,8 @@ router.get('/notifications/:doctorId', getDoctorNotifications);
 
 // Get statistics for a specific doctor
 router.get('/stats/:doctorId', getDoctorStats);
-router.post(
-  '/consultations/:consultationId/steps/:stepNumber/review',
-  protect,
-  reviewAndDecideStep
-);
+router.post('/consultations/:consultationId/steps/:stepNumber/review', protect, reviewAndDecideStep);
+
 
 
 // Thêm vào doctor routes
@@ -179,7 +177,7 @@ router.post('/consultations/:consultationId/steps/:stepNumber/reject', rejectTre
 router.get('/drugs', getAllDrugs);
 router.get('/appointments/available-slots', getAvailableSlots);
 router.delete('/consultations/:consultationId/steps/:stepNumber/cancel-re-examination', cancelReExamination);
-
+router.post('/consultations/:consultationId/steps/:stepNumber/complete-re-examination', protect, completeReExaminationStep);
 // Patient routes
 router.get('/:doctorId/patients/all', getAllPatients);
 
