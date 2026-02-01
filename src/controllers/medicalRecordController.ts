@@ -1292,3 +1292,4 @@ export const getAllReExaminationAppointments = async (req: AuthRequest, res: Res
     });
   }
 };
+

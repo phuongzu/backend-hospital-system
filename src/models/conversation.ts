@@ -1,54 +1,116 @@
-import mongoose from 'mongoose';
+import mongoose, { Schema, Document, Types } from 'mongoose';
 
-const conversationSchema = new mongoose.Schema({
-  participant_ids: [{
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  }],
-  medical_record_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'MedicalRecord'
-  },
-  appointment_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Appointment'
-  },
-  last_message: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Message'
-  },
-  last_message_at: {
-    type: Date,
-    default: Date.now
-  },
-  unread_count: {
-    type: Number,
-    default: 0
-  }
-}, {
-  timestamps: true
-});
+export interface IConversation extends Document {
+  participant_ids: Types.ObjectId[];
+  medical_record_id?: Types.ObjectId | null;
+  appointment_id?: Types.ObjectId | null;
+  last_message?: Types.ObjectId | null;
+  last_message_at: Date;
+  unread_count: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
 
-// Tạo compound index để đảm bảo unique conversation cho mỗi cặp participant + medical_record
-conversationSchema.index(
-  { 
-    participant_ids: 1,
-    medical_record_id: 1 
-  }, 
-  { 
-    unique: true,
-    partialFilterExpression: { medical_record_id: { $exists: true } }
+const conversationSchema = new Schema<IConversation>(
+  {
+    participant_ids: {
+      type: [{ type: Schema.Types.ObjectId, ref: 'User' }],
+      required: true,
+      validate: {
+        validator: function (v: Types.ObjectId[]) {
+          return Array.isArray(v) && v.length === 2;
+        },
+        message: 'Conversation must have exactly 2 participants'
+      }
+    },
+
+    medical_record_id: {
+      type: Schema.Types.ObjectId,
+      ref: 'MedicalRecord',
+      default: null
+    },
+
+    appointment_id: {
+      type: Schema.Types.ObjectId,
+      ref: 'Appointment',
+      default: null
+    },
+
+    last_message: {
+      type: Schema.Types.ObjectId,
+      ref: 'Message',
+      default: null
+    },
+
+    last_message_at: {
+      type: Date,
+      default: Date.now
+    },
+
+    unread_count: {
+      type: Number,
+      default: 0,
+      min: 0
+    }
+  },
+  {
+    timestamps: true
   }
 );
 
-// Index cho conversations không có medical_record_id
+/* ===========================
+   INDEXES
+=========================== */
+
+// 🔐 Unique conversation theo participant + medical_record
+conversationSchema.index(
+  { participant_ids: 1, medical_record_id: 1 },
+  {
+    unique: true,
+    name: 'unique_conversation_by_record',
+    partialFilterExpression: {
+      medical_record_id: { $ne: null }
+    }
+  }
+);
+
+// 🔐 Unique conversation KHÔNG có medical_record
 conversationSchema.index(
   { participant_ids: 1 },
-  { 
+  {
     unique: true,
-    partialFilterExpression: { medical_record_id: { $exists: false } }
+    name: 'unique_conversation_no_record',
+    partialFilterExpression: {
+      medical_record_id: null
+    }
   }
 );
 
-export default mongoose.model('Conversation', conversationSchema);
+// ⚡ Query nhanh
+conversationSchema.index({ participant_ids: 1 });
+conversationSchema.index({ last_message_at: -1 });
+
+/* ===========================
+   PRE SAVE HOOK
+=========================== */
+
+// ✅ Sort participant_ids để tránh duplicate conversation
+conversationSchema.pre('save', function (next) {
+  if (this.isModified('participant_ids')) {
+    this.participant_ids = this.participant_ids
+      .map(id => id.toString())
+      .sort()
+      .map(id => new mongoose.Types.ObjectId(id));
+  }
+  next();
+});
+
+/* ===========================
+   EXPORT MODEL (SAFE)
+=========================== */
+
+const Conversation =
+  mongoose.models.Conversation ||
+  mongoose.model<IConversation>('Conversation', conversationSchema);
+
+export default Conversation;

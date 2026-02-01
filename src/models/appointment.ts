@@ -6,12 +6,24 @@ export interface IAppointment extends Document {
   specialty_id: mongoose.Types.ObjectId;
   appointment_date: Date;
   time_slot: string;
-  status: 'pending' | 'confirmed' | 'completed' | 'cancelled'| 'scheduled';
+  status: 'pending' | 'scheduled' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled';
   reason?: string;
-  re_examination_step_id?: mongoose.Types.ObjectId;
-  is_re_examination?: boolean;
   notes?: string;
   created_at: Date;
+
+    // === RE-EXAMINATION SPECIFIC ===
+  is_re_examination: boolean;
+  re_examination_step_id?: mongoose.Types.ObjectId;
+  re_examination_type?: 'followup' | 'physical' | 'lab';
+  
+  // Metadata for tracking
+  metadata?: {
+    consultation_id?: string;
+    step_number?: number;
+    step_title?: string;
+    arrival_confirmed_at?: Date;
+    physical_exam_completed_at?: Date;
+  };
 }
 
 const appointmentSchema = new mongoose.Schema<IAppointment>({

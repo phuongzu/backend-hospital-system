@@ -17,6 +17,7 @@ export interface AIResponse {
   category?: string;
   relatedSpecialties?: string[];
   language?: 'en' | 'vi';
+  usedFallback?: boolean; // Indicate if fallback was used
 }
 
 export interface MedicationInfo {
@@ -49,6 +50,11 @@ export class AIMedicalService {
   private languageCache = new Map<string, 'en' | 'vi'>();
   private categoryCache = new Map<string, string>();
 
+  // Rate limiting
+  private requestCount = 0;
+  private requestResetTime = Date.now() + 60000; // Reset every minute
+  private readonly maxRequestsPerMinute = 10;
+
   constructor() {
     if (!config.geminiApiKey) {
       throw new Error('Gemini API key is required');
@@ -65,6 +71,27 @@ export class AIMedicalService {
       },
       systemInstruction: this.getSystemPrompt()
     });
+  }
+
+  // ==================== RATE LIMITING ====================
+
+  private checkRateLimit(): boolean {
+    const now = Date.now();
+    
+    // Reset counter if time window has passed
+    if (now > this.requestResetTime) {
+      this.requestCount = 0;
+      this.requestResetTime = now + 60000;
+    }
+
+    // Check if we're over the limit
+    if (this.requestCount >= this.maxRequestsPerMinute) {
+      console.warn('⚠️ Rate limit reached, using fallback response');
+      return false;
+    }
+
+    this.requestCount++;
+    return true;
   }
 
   // ==================== LANGUAGE DETECTION ====================
@@ -338,8 +365,23 @@ IMMEDIATE ACTIONS:
         language: detectedLanguage
       });
 
-      // Generate AI response
-      const responseText = await this.generateAIResponse(userMessage, category, detectedLanguage);
+      // Generate AI response with fallback
+      let responseText: string;
+      let usedFallback = false;
+
+      // Check rate limit before making API call
+      if (!this.checkRateLimit()) {
+        responseText = this.generateFallbackAIResponse(userMessage, category, detectedLanguage);
+        usedFallback = true;
+      } else {
+        try {
+          responseText = await this.generateAIResponse(userMessage, category, detectedLanguage);
+        } catch (error: any) {
+          console.error('AI generation error:', error);
+          responseText = this.generateFallbackAIResponse(userMessage, category, detectedLanguage);
+          usedFallback = true;
+        }
+      }
 
       // Add AI response to history
       this.addToHistory({
@@ -355,12 +397,13 @@ IMMEDIATE ACTIONS:
 
       return {
         response: responseText,
-        confidence: analysis.confidence,
+        confidence: usedFallback ? 0.5 : analysis.confidence,
         suggestedActions: analysis.suggestedActions,
         emergencyAlert: false,
         category,
         relatedSpecialties: this.getRelatedSpecialties(category),
-        language: detectedLanguage
+        language: detectedLanguage,
+        usedFallback
       };
 
     } catch (error) {
@@ -393,9 +436,154 @@ YÊU CẦU PHẢN HỒI:
 - Luôn nhắc nhở tham khảo chuyên gia y tế
 - Định dạng rõ ràng để dễ đọc`;
 
-    const result = await this.model.generateContent(prompt);
-    const response = await result.response;
-    return response.text();
+    try {
+      const result = await this.model.generateContent(prompt);
+      const response = await result.response;
+      return response.text();
+    } catch (error: any) {
+      // Handle quota exceeded errors
+      if (error.status === 429 || error.message?.includes('quota') || error.message?.includes('Too Many Requests')) {
+        console.warn('⚠️ Gemini API quota exceeded, using fallback response');
+        throw new Error('QUOTA_EXCEEDED');
+      }
+      throw error; // Re-throw other errors
+    }
+  }
+
+  private generateFallbackAIResponse(userMessage: string, category: string, language: 'en' | 'vi'): string {
+    // Generate a basic response when API is unavailable
+    const responses = {
+      vi: {
+        general: `Cảm ơn bạn đã chia sẻ. Tôi hiện đang gặp vấn đề kỹ thuật với dịch vụ AI do vượt quá giới hạn sử dụng API.
+
+⚠️ LƯU Ý QUAN TRỌNG:
+- Vui lòng tham khảo ý kiến bác sĩ chuyên khoa để được tư vấn chính xác
+- Nếu có triệu chứng nghiêm trọng, hãy gọi cấp cứu 115 ngay lập tức
+- Không tự ý dùng thuốc mà không có chỉ định của bác sĩ
+
+💡 Đề xuất:
+1. Đặt lịch khám với bác sĩ
+2. Chuẩn bị danh sách triệu chứng chi tiết
+3. Mang theo kết quả xét nghiệm (nếu có)
+
+Hệ thống sẽ sớm hoạt động trở lại. Xin lỗi vì sự bất tiện này.`,
+        
+        cardiology: `Về vấn đề tim mạch của bạn, đây là thông tin quan trọng:
+
+⚠️ KHUYẾN CÁO:
+- Hãy đặt lịch khám tim mạch ngay
+- Theo dõi huyết áp thường xuyên
+- Tránh stress và vận động quá sức
+- Duy trì chế độ ăn ít muối, ít mỡ
+
+🚨 GỌI CẤP CỨU 115 NẾU CÓ:
+- Đau ngực dữ dội
+- Khó thở nặng
+- Chóng mặt, ngất xỉu
+- Tim đập nhanh bất thường
+
+Tôi đang gặp sự cố kỹ thuật nên không thể phân tích chi tiết. Vui lòng gặp bác sĩ tim mạch.`,
+        
+        emergency: `🚨 CẢNH BÁO CẤP CỨU!
+
+Dựa trên nội dung bạn mô tả, đây có thể là tình huống khẩn cấp.
+
+HÀNH ĐỘNG NGAY:
+1. 🚑 GỌI CẤP CỨU 115 NGAY LẬP TỨC
+2. 🏥 ĐẾN BỆNH VIỆN GẦN NHẤT
+3. 📞 THÔNG BÁO CHO NGƯỜI THÂN
+
+⚠️ ĐỪNG TỰ Ý LÁI XE - GỌI CẤP CỨU!
+⚠️ ĐỪNG CHỜ ĐỢI - THỜI GIAN RẤT QUAN TRỌNG!
+
+Tôi không thể cung cấp tư vấn chi tiết do sự cố kỹ thuật, nhưng bạn cần được chăm sóc y tế ngay lập tức.`,
+
+        medications: `Về thông tin thuốc bạn hỏi:
+
+⚠️ QUAN TRỌNG:
+- Tham khảo dược sĩ hoặc bác sĩ về liều lượng
+- Đọc kỹ hướng dẫn sử dụng
+- Báo cáo tác dụng phụ nếu có
+- Không tự ý thay đổi liều dùng
+
+💊 LƯU Ý:
+- Uống đúng giờ, đúng liều
+- Bảo quản thuốc đúng cách
+- Kiểm tra hạn sử dụng
+- Tránh tương tác thuốc
+
+Tôi đang gặp sự cố kỹ thuật. Vui lòng tham khảo dược sĩ để được tư vấn chi tiết.`
+      },
+      en: {
+        general: `Thank you for sharing. I'm currently experiencing technical issues with the AI service due to API quota limitations.
+
+⚠️ IMPORTANT NOTICE:
+- Please consult a qualified doctor for accurate medical advice
+- If experiencing severe symptoms, call emergency services (911/115) immediately
+- Do not self-medicate without medical supervision
+
+💡 Recommendations:
+1. Schedule an appointment with your doctor
+2. Prepare a detailed list of symptoms
+3. Bring any test results (if available)
+
+The system will be back online soon. We apologize for the inconvenience.`,
+        
+        cardiology: `Regarding your cardiac concern, here is important information:
+
+⚠️ RECOMMENDATIONS:
+- Schedule a cardiology appointment immediately
+- Monitor your blood pressure regularly
+- Avoid stress and excessive physical activity
+- Maintain a low-salt, low-fat diet
+
+🚨 CALL EMERGENCY (911/115) IF YOU HAVE:
+- Severe chest pain
+- Severe shortness of breath
+- Dizziness or fainting
+- Irregular rapid heartbeat
+
+I'm experiencing technical difficulties and cannot provide detailed analysis. Please see a cardiologist.`,
+        
+        emergency: `🚨 EMERGENCY ALERT!
+
+Based on what you've described, this may be an emergency situation.
+
+IMMEDIATE ACTIONS:
+1. 🚑 CALL EMERGENCY SERVICES (911/115) NOW
+2. 🏥 GO TO NEAREST HOSPITAL
+3. 📞 NOTIFY FAMILY MEMBERS
+
+⚠️ DO NOT DRIVE YOURSELF - CALL EMERGENCY!
+⚠️ DO NOT WAIT - TIME IS CRITICAL!
+
+I cannot provide detailed advice due to technical issues, but you need immediate medical attention.`,
+
+        medications: `Regarding the medication you asked about:
+
+⚠️ IMPORTANT:
+- Consult pharmacist or doctor about dosage
+- Read instructions carefully
+- Report any side effects
+- Do not change dosage without approval
+
+💊 NOTES:
+- Take on time, correct dose
+- Store properly
+- Check expiration date
+- Avoid drug interactions
+
+I'm experiencing technical difficulties. Please consult a pharmacist for detailed advice.`
+      }
+    };
+
+    const languageResponses = responses[language];
+    const categoryKey = category === 'emergency' ? 'emergency' 
+                      : category === 'cardiology' ? 'cardiology'
+                      : category === 'medications' ? 'medications'
+                      : 'general';
+    
+    return languageResponses[categoryKey as keyof typeof languageResponses];
   }
 
   private getCategoryPrompt(category: string, language: 'en' | 'vi'): string {
@@ -563,7 +751,16 @@ Provide general medical information and basic healthcare guidance.`
     Trả lời bằng tiếng Việt, định dạng rõ ràng, dễ hiểu.
     `;
 
-    const response = await this.generateAIResponse(prompt, 'medications', 'vi');
+    let response: string;
+    try {
+      if (this.checkRateLimit()) {
+        response = await this.generateAIResponse(prompt, 'medications', 'vi');
+      } else {
+        response = this.generateFallbackAIResponse(medicationName, 'medications', 'vi');
+      }
+    } catch (error) {
+      response = this.generateFallbackAIResponse(medicationName, 'medications', 'vi');
+    }
     
     return {
       name: medicationName,
@@ -587,7 +784,16 @@ Provide general medical information and basic healthcare guidance.`
     Trả lời bằng tiếng Việt, sử dụng ngôn ngữ thông thường.
     `;
 
-    const response = await this.generateAIResponse(prompt, 'general', 'vi');
+    let response: string;
+    try {
+      if (this.checkRateLimit()) {
+        response = await this.generateAIResponse(prompt, 'general', 'vi');
+      } else {
+        response = `Xin lỗi, hiện tại không thể tra cứu thuật ngữ "${term}" do vượt quá giới hạn API. Vui lòng tham khảo từ điển y khoa hoặc hỏi bác sĩ.`;
+      }
+    } catch (error) {
+      response = `Xin lỗi, hiện tại không thể tra cứu thuật ngữ "${term}" do vượt quá giới hạn API. Vui lòng tham khảo từ điển y khoa hoặc hỏi bác sĩ.`;
+    }
     
     return {
       term,
@@ -610,7 +816,16 @@ Provide general medical information and basic healthcare guidance.`
     Trả lời bằng tiếng Việt, thực tế và dễ áp dụng.
     `;
 
-    const response = await this.generateAIResponse(prompt, 'general', 'vi');
+    let response: string;
+    try {
+      if (this.checkRateLimit()) {
+        response = await this.generateAIResponse(prompt, 'general', 'vi');
+      } else {
+        response = this.generateFallbackAIResponse(topic, 'general', 'vi');
+      }
+    } catch (error) {
+      response = this.generateFallbackAIResponse(topic, 'general', 'vi');
+    }
     
     return {
       topic,
@@ -646,38 +861,48 @@ Provide general medical information and basic healthcare guidance.`
     return lastMessage.language || null;
   }
 
+  public getRateLimitStatus(): { remaining: number; resetIn: number } {
+    const now = Date.now();
+    const resetIn = Math.max(0, this.requestResetTime - now);
+    const remaining = Math.max(0, this.maxRequestsPerMinute - this.requestCount);
+    
+    return { remaining, resetIn };
+  }
+
   // ==================== ERROR HANDLING ====================
 
   private getFallbackResponse(language: 'en' | 'vi' = 'en'): AIResponse {
     if (language === 'vi') {
       return {
-        response: `Xin lỗi, tôi đang gặp sự cố kỹ thuật. Vui lòng:
+        response: `Xin lỗi, tôi đang gặp sự cố kỹ thuật do vượt quá giới hạn sử dụng API. Vui lòng:
 
 1. Liên hệ trực tiếp với nhà cung cấp dịch vụ y tế của bạn
 2. Gọi dịch vụ cấp cứu 115 nếu cần thiết
 3. Đến cơ sở y tế gần nhất cho các vấn đề khẩn cấp
 
-Chúng tôi sẽ giải quyết vấn đề này càng sớm càng tốt.`,
+Hệ thống sẽ tự động khôi phục trong vài phút. Cảm ơn sự thông cảm của bạn.`,
         confidence: 0.3,
         suggestedActions: ['Liên hệ nhà cung cấp dịch vụ y tế', 'Sử dụng dịch vụ cấp cứu nếu cần'],
         emergencyAlert: false,
         category: 'technical',
-        language: 'vi'
+        language: 'vi',
+        usedFallback: true
       };
     } else {
       return {
-        response: `I apologize, I'm experiencing technical difficulties. Please:
+        response: `I apologize, I'm experiencing technical difficulties due to API quota limitations. Please:
 
 1. Contact your healthcare provider directly
 2. Call emergency services (911/115) if needed
 3. Visit the nearest medical facility for urgent concerns
 
-We will resolve this issue as soon as possible.`,
+The system will automatically recover in a few minutes. Thank you for your understanding.`,
         confidence: 0.3,
         suggestedActions: ['Contact healthcare provider', 'Use emergency services if needed'],
         emergencyAlert: false,
         category: 'technical',
-        language: 'en'
+        language: 'en',
+        usedFallback: true
       };
     }
   }

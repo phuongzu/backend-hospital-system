@@ -349,7 +349,9 @@ io.on('connection', (socket: Socket) => {
       if (!conversation) return;
 
       // Notify other participant that messages were read
-      const otherParticipant = conversation.participants.find(p => p.toString() !== userId);
+      const otherParticipant = conversation.participant_ids.find(
+  (p: any) => p.toString() !== userId.toString()
+);
       if (otherParticipant) {
         const otherSocketId = userSocketMap.get(otherParticipant.toString());
         if (otherSocketId) {
@@ -539,6 +541,9 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
 const AVATAR_PUBLIC_ROUTE = '/uploads/avatars';
 const AVATAR_DIR = path.join(__dirname, '..', 'src', 'uploads', 'avatars');
+
+app.use('/api/chatting/messages', 
+  express.static(path.join(__dirname, 'chatting/messages'))); 
 
 // Đảm bảo thư mục tồn tại
 if (!fs.existsSync(AVATAR_DIR)) {

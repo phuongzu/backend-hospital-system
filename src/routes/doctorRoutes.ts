@@ -36,6 +36,10 @@ import {
   confirmReExaminationArrival,
   getAvailableSlots,
   cancelReExamination,
+  completeReExamination,
+  getReExaminationDetail,
+  getReExaminationAppointments,
+  markAppointmentCompleted,
   completeReExaminationStep
 } from '../controllers/doctorcontroller';
 import multer from 'multer';
@@ -124,11 +128,15 @@ router.get('/notifications/:doctorId', getDoctorNotifications);
 router.get('/stats/:doctorId', getDoctorStats);
 router.post('/consultations/:consultationId/steps/:stepNumber/review', protect, reviewAndDecideStep);
 
-
+router.get('/re-examinations/appointments/:appointmentId', protect, getReExaminationDetail);
+router.get('/re-examinations/appointments', protect, getReExaminationAppointments);
 
 // Thêm vào doctor routes
 router.post('/consultations/:consultationId/steps/:stepNumber/schedule-re-examination',protect, scheduleReExamination);
 router.post('/consultations/:consultationId/steps/:stepNumber/confirm-arrival', confirmReExaminationArrival);
+router.patch('/appointments/:appointmentId/complete-status', protect, markAppointmentCompleted);
+router.post('/consultations/:consultationId/steps/:stepNumber/complete-re-examination-step', protect, completeReExaminationStep);
+
 
 // upload image  doctor avatar
 router.post('/avatar', 
@@ -177,8 +185,8 @@ router.post('/consultations/:consultationId/steps/:stepNumber/reject', rejectTre
 router.get('/drugs', getAllDrugs);
 router.get('/appointments/available-slots', getAvailableSlots);
 router.delete('/consultations/:consultationId/steps/:stepNumber/cancel-re-examination', cancelReExamination);
-router.post('/consultations/:consultationId/steps/:stepNumber/complete-re-examination', protect, completeReExaminationStep);
-// Patient routes
+// Thêm route mới
+router.post('/consultations/:consultationId/steps/:stepNumber/complete-re-examination', protect, completeReExamination);// Patient routes
 router.get('/:doctorId/patients/all', getAllPatients);
 
 export default router;

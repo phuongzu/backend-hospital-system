@@ -1222,8 +1222,6 @@ export const getAllMedicalRecords = async (req: AuthRequest, res: Response): Pro
 
 export const getSystemLogs = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    // Trong thực tế, bạn sẽ có model SystemLog
-    // Tạm thời trả về mảng rỗng hoặc log từ console
     const logs: SystemLog[] = []; // Thay bằng SystemLog.find() nếu có model
     
     res.status(200).json({

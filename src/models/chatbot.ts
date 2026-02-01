@@ -58,7 +58,8 @@ const ChatMessageSchema = new Schema<IChatMessage>({
       'emergency',
       'nutrition',
       'exercise',
-      'mental_health'
+      'mental_health',
+      'technical'
     ],
     default: 'general'
   },
@@ -128,7 +129,8 @@ const ChatSessionSchema = new Schema<IChatSession>({
       'emergency',
       'nutrition',
       'exercise',
-      'mental_health'
+      'mental_health',
+      'technical'
     ],
     default: 'general'
   },

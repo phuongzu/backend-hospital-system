@@ -4,8 +4,14 @@ import mongoose, { Schema, Document } from 'mongoose';
 export interface IMessage extends Document {
   sender_id: mongoose.Types.ObjectId;
   receiver_id: mongoose.Types.ObjectId;
-  message: string;
+  message?: string;
   message_type: 'text' | 'image' | 'file';
+
+  media_url?: string;   
+  media_name?: string;   
+  media_size?: number;   
+  media_mime?: string;     
+
   medical_record_id?: mongoose.Types.ObjectId;
   appointment_id?: mongoose.Types.ObjectId;
   conversation_id: mongoose.Types.ObjectId;
@@ -29,13 +35,19 @@ const messageSchema = new mongoose.Schema({
   },
   message: {
     type: String,
-    required: true
+    default: ''
   },
   message_type: {
     type: String,
     enum: ['text', 'image', 'file'],
     default: 'text'
   },
+
+  media_url: { type: String },
+  media_name: { type: String },
+  media_size: { type: Number },
+  media_mime: { type: String },
+
   medical_record_id: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'MedicalRecord'
@@ -64,7 +76,6 @@ const messageSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// CÁCH ĐƠN GIẢN NHẤT: Kiểm tra xem model đã tồn tại chưa
 const Message = mongoose.models.Message || mongoose.model<IMessage>('Message', messageSchema);
 
 export default Message;

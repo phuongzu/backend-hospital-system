@@ -4,6 +4,7 @@ import Message from '../models/message';
 import Conversation from '../models/conversation';
 import { AuthRequest } from '../middlewares/authmiddleware';
 
+
 // Lấy tin nhắn theo medical record
 export const getMessagesByRecord = async (req: AuthRequest, res: Response) => {
   try {
@@ -55,45 +56,43 @@ export const getMessagesByRecord = async (req: AuthRequest, res: Response) => {
 
 export const sendMessage = async (req: AuthRequest, res: Response) => {
   try {
-    const {
-      receiver_id,
-      message,
-      message_type = 'text',
-      medical_record_id,
-      appointment_id
-    } = req.body;
+    const { receiver_id, message, message_type = 'text', medical_record_id, appointment_id } = req.body;
 
     if (!receiver_id || !message) {
-      return res.status(400).json({
-        success: false,
-        message: 'Receiver ID and message are required'
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Receiver ID and message are required' 
       });
     }
 
     const senderId = req.user?._id;
     
-    // Đảm bảo participant_ids là mảng có 2 phần tử và được sắp xếp
-    const participantIds = [senderId, receiver_id].sort();
+    // ✅ FIX: Ensure consistent sorting
+    const participantIds = [senderId.toString(), receiver_id.toString()].sort();
 
-    // Tìm hoặc tạo conversation với điều kiện đúng
-    let conversation = await Conversation.findOne({
-      participant_ids: { 
-        $all: participantIds,
-        $size: 2
-      },
-      ...(medical_record_id && { medical_record_id })
-    });
-
-    if (!conversation) {
-      conversation = new Conversation({
+    // ✅ FIX: Use findOneAndUpdate with upsert (atomic operation)
+    const conversation = await Conversation.findOneAndUpdate(
+      {
         participant_ids: participantIds,
-        medical_record_id: medical_record_id || null,
-        appointment_id: appointment_id || null
-      });
-      await conversation.save();
-    }
+        ...(medical_record_id && { medical_record_id })
+      },
+      {
+        $setOnInsert: {
+          participant_ids: participantIds,
+          medical_record_id: medical_record_id || null,
+          appointment_id: appointment_id || null,
+          unread_count: 0,
+          last_message_at: new Date()
+        }
+      },
+      {
+        upsert: true,
+        new: true,
+        setDefaultsOnInsert: true
+      }
+    );
 
-    // Tạo tin nhắn mới
+    // Create message
     const newMessage = new Message({
       sender_id: senderId,
       receiver_id,
@@ -108,41 +107,43 @@ export const sendMessage = async (req: AuthRequest, res: Response) => {
 
     await newMessage.save();
 
-    // Cập nhật conversation
-    conversation.last_message = newMessage._id;
-    conversation.last_message_at = new Date();
-    
-    // Chỉ tăng unread_count nếu người nhận không phải là người gửi
-    if (receiver_id !== senderId?.toString()) {
-      conversation.unread_count += 1;
-    }
-    
-    await conversation.save();
+    // ✅ FIX: Atomic update to prevent race conditions
+    await Conversation.findByIdAndUpdate(
+      conversation._id,
+      {
+        $set: {
+          last_message: newMessage._id,
+          last_message_at: new Date()
+        },
+        $inc: {
+          unread_count: receiver_id !== senderId.toString() ? 1 : 0
+        }
+      }
+    );
 
-    // Populate thông tin người gửi
+    // Populate for response
     await newMessage.populate('sender_id', 'name avatar role');
     await newMessage.populate('receiver_id', 'name avatar role');
 
     res.status(201).json({
       success: true,
-      data: {
-        message: newMessage
-      }
+      data: { message: newMessage }
     });
   } catch (error: any) {
     console.error('Error sending message:', error);
     
-    // Xử lý lỗi duplicate key cụ thể
+    // ✅ Better error handling
     if (error.code === 11000) {
-      return res.status(400).json({
+      return res.status(409).json({
         success: false,
-        message: 'Conversation already exists with these participants'
+        message: 'Duplicate conversation error'
       });
     }
     
     res.status(500).json({
       success: false,
-      message: 'Error sending message'
+      message: 'Error sending message',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
@@ -288,5 +289,75 @@ export const markMessagesAsRead = async (req: AuthRequest, res: Response) => {
       success: false,
       message: 'Error marking messages as read'
     });
+  }
+};
+
+
+export const sendMessageWithMedia = async (req: AuthRequest, res: Response) => {
+  try {
+    const {
+      receiver_id,
+      message,
+      medical_record_id,
+      appointment_id
+    } = req.body;
+
+    const senderId = req.user?._id;
+    const file = req.file;
+
+    if (!receiver_id || !file) {
+      return res.status(400).json({
+        success: false,
+        message: 'Receiver and media file are required'
+      });
+    }
+
+    const participantIds = [senderId, receiver_id].sort();
+
+    let conversation = await Conversation.findOne({
+      participant_ids: { $all: participantIds, $size: 2 },
+      ...(medical_record_id && { medical_record_id })
+    });
+
+    if (!conversation) {
+      conversation = await Conversation.create({
+        participant_ids: participantIds,
+        medical_record_id: medical_record_id || null,
+        appointment_id: appointment_id || null
+      });
+    }
+
+    const newMessage = await Message.create({
+      sender_id: senderId,
+      receiver_id,
+      message: message || '',
+      message_type: file.mimetype.startsWith('image') ? 'image' : 'file',
+
+      media_url: `/chatting/messages/${file.filename}`,
+      media_name: file.originalname,
+      media_size: file.size,
+      media_mime: file.mimetype,
+
+      medical_record_id,
+      appointment_id,
+      conversation_id: conversation._id,
+      read: false
+    });
+
+    conversation.last_message = newMessage._id;
+    conversation.last_message_at = new Date();
+    conversation.unread_count += 1;
+    await conversation.save();
+
+    await newMessage.populate('sender_id', 'name avatar role');
+    await newMessage.populate('receiver_id', 'name avatar role');
+
+    res.status(201).json({
+      success: true,
+      data: newMessage
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Send media failed' });
   }
 };

@@ -22,6 +22,7 @@ router.post('/:id/start-treatment', protect, startTreatment);
 router.get('/:recordId/re-examination/appointments', protect, getAllReExaminationAppointments);
 router.get('/:recordId/steps/:stepNumber/re-examination',protect, getReExaminationAppointment);
 
+
 // Routes for Treatment Plan Steps (Patient side)
 router.patch('/:id/steps/:stepNumber/activate', protect, activateTreatmentStep);
 router.patch('/:id/steps/:stepNumber/complete', protect, completeTreatmentStep); // Standardized
