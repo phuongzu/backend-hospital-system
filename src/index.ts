@@ -544,7 +544,8 @@ const AVATAR_DIR = path.join(__dirname, '..', 'src', 'uploads', 'avatars');
 
 app.use('/api/chatting/messages', 
   express.static(path.join(__dirname, 'chatting/messages'))); 
-
+  
+app.use('/chatting/messages', express.static(path.join(__dirname, 'chatting', 'messages')));
 // Đảm bảo thư mục tồn tại
 if (!fs.existsSync(AVATAR_DIR)) {
   fs.mkdirSync(AVATAR_DIR, { recursive: true });

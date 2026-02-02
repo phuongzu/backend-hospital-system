@@ -10,8 +10,11 @@ import {
   getConversations,
   getConversationMessages,
   markMessagesAsRead,
-  sendMessageWithMedia
+  sendMessageWithMedia,
+  editMessage,
+  deleteMessage
 } from '../controllers/messageController';
+
 
 const router = express.Router();
 
@@ -83,6 +86,9 @@ router.post('/send', sendMessage);
 router.get('/conversations', getConversations);
 router.get('/conversations/:conversationId/messages', getConversationMessages);
 router.patch('/conversations/:conversationId/read', markMessagesAsRead);
+router.patch('/messages/:messageId/edit', editMessage);
+router.delete('/messages/:messageId', deleteMessage);
+
 
 // ✅ File upload with error handling
 router.post(

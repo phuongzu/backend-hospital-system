@@ -274,7 +274,44 @@ class SocketService {
       timestamp: new Date(),
     });
   }
+
+    /* =======================
+     CHAT EVENTS
+  ======================= */
+
+  emitMessageNew(conversationId: string, message: any): void {
+    if (!this.io) return;
+
+    this.io
+      .to(`conversation:${conversationId}`)
+      .emit('message:new', message);
+  }
+
+  emitMessageEdited(conversationId: string, message: any): void {
+    if (!this.io) return;
+
+    this.io
+      .to(`conversation:${conversationId}`)
+      .emit('message:edited', {
+        messageId: message._id,
+        message,
+        timestamp: new Date(),
+      });
+  }
+
+  emitMessageDeleted(conversationId: string, message: any): void {
+    if (!this.io) return;
+
+    this.io
+      .to(`conversation:${conversationId}`)
+      .emit('message:deleted', {
+        messageId: message._id,
+        message,
+        timestamp: new Date(),
+      });
+  }
 }
+
 
 export const socketService = new SocketService();
 export default socketService;

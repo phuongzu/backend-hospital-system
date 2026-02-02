@@ -6,6 +6,8 @@ export interface IMessage extends Document {
   receiver_id: mongoose.Types.ObjectId;
   message?: string;
   message_type: 'text' | 'image' | 'file';
+  edited: boolean;
+  edited_at?: Date;
 
   media_url?: string;   
   media_name?: string;   
@@ -20,6 +22,10 @@ export interface IMessage extends Document {
   read_at?: Date;
   createdAt: Date;
   updatedAt: Date;
+
+  deleted: boolean;
+  deleted_at?: Date;
+  deleted_by?: mongoose.Types.ObjectId;
 }
 
 const messageSchema = new mongoose.Schema({
@@ -71,6 +77,25 @@ const messageSchema = new mongoose.Schema({
   },
   read_at: {
     type: Date
+  },
+  edited: {
+    type: Boolean,
+    default: false
+  },
+  edited_at: {
+    type: Date
+  },
+
+    deleted: {
+    type: Boolean,
+    default: false
+  },
+  deleted_at: {
+    type: Date
+  },
+  deleted_by: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
   }
 }, {
   timestamps: true

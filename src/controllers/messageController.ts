@@ -3,7 +3,7 @@ import { Request, Response } from 'express';
 import Message from '../models/message';
 import Conversation from '../models/conversation';
 import { AuthRequest } from '../middlewares/authmiddleware';
-
+import { socketService } from '../utils/socketService';
 
 // Lấy tin nhắn theo medical record
 export const getMessagesByRecord = async (req: AuthRequest, res: Response) => {
@@ -106,6 +106,12 @@ export const sendMessage = async (req: AuthRequest, res: Response) => {
     });
 
     await newMessage.save();
+    // 🔥 Emit realtime message
+    socketService.emitMessageNew(
+    conversation._id.toString(),
+    newMessage
+  );
+
 
     // ✅ FIX: Atomic update to prevent race conditions
     await Conversation.findByIdAndUpdate(
@@ -217,7 +223,8 @@ export const getConversationMessages = async (req: AuthRequest, res: Response) =
     }
 
     const messages = await Message.find({
-      conversation_id: conversationId
+      conversation_id: conversationId,
+      deleted: { $ne: true }
     })
       .populate('sender_id', 'name avatar role')
       .populate('receiver_id', 'name avatar role')
@@ -235,6 +242,7 @@ export const getConversationMessages = async (req: AuthRequest, res: Response) =
         read_at: new Date()
       }
     );
+  
 
     // Reset unread count
     conversation.unread_count = 0;
@@ -351,6 +359,10 @@ export const sendMessageWithMedia = async (req: AuthRequest, res: Response) => {
 
     await newMessage.populate('sender_id', 'name avatar role');
     await newMessage.populate('receiver_id', 'name avatar role');
+    socketService.emitMessageNew(
+      conversation._id.toString(),
+      newMessage
+    );
 
     res.status(201).json({
       success: true,
@@ -359,5 +371,98 @@ export const sendMessageWithMedia = async (req: AuthRequest, res: Response) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ success: false, message: 'Send media failed' });
+  }
+};
+
+
+export const editMessage = async (req: AuthRequest, res: Response) => {
+  try {
+    const { messageId } = req.params;
+    const { newMessage } = req.body;
+    const userId = req.user?._id;
+
+    if (!newMessage) {
+      return res.status(400).json({ success: false, message: 'New message is required' });
+    }
+
+    const message = await Message.findById(messageId);
+
+    if (!message) {
+      return res.status(404).json({ success: false, message: 'Message not found' });
+    }
+
+    if (message.sender_id.toString() !== userId.toString()) {
+      return res.status(403).json({ success: false, message: 'You can only edit your own message' });
+    }
+
+    if (message.deleted) {
+      return res.status(400).json({ success: false, message: 'Cannot edit deleted message' });
+    }
+
+    if (message.message_type !== 'text') {
+      return res.status(400).json({ success: false, message: 'Only text messages can be edited' });
+    }
+
+    message.message = newMessage;
+    message.edited = true;
+    message.edited_at = new Date();
+
+    await message.save();
+      socketService.emitMessageEdited(
+      message.conversation_id.toString(),
+      message
+    );
+
+    res.status(200).json({
+      success: true,
+      data: message
+    });
+  } catch (error) {
+    console.error('Edit message error:', error);
+    res.status(500).json({ success: false, message: 'Edit message failed' });
+  }
+};
+
+export const deleteMessage = async (req: AuthRequest, res: Response) => {
+  try {
+    const { messageId } = req.params;
+    const { type } = req.body;
+    const userId = req.user?._id;
+
+    const message = await Message.findById(messageId);
+
+    if (!message) {
+      return res.status(404).json({ success: false, message: 'Message not found' });
+    }
+    if (type === 'everyone' && message.sender_id.toString() !== userId.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only sender can delete message for everyone'
+      });
+    }
+    if (type === 'everyone') {
+      message.deleted = true;
+      message.deleted_at = new Date();
+      message.deleted_by = userId;
+      message.message = 'This message was deleted';
+    }
+
+    if (type === 'me') {
+      return res.status(200).json({ success: true });
+    }
+
+    await message.save();
+    socketService.emitMessageDeleted(
+      message.conversation_id.toString(),
+      message
+    );
+
+    res.status(200).json({
+      success: true,
+      data: message
+    });
+  } catch (error) {
+    console.error('Delete message error:', error);
+    res.status(500).json({ success: false, message: 'Delete message failed' });
   }
 };
