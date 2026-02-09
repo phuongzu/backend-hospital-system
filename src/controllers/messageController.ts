@@ -1,12 +1,13 @@
-// controllers/messageController.ts
-import { Request, Response } from 'express';
+import { Request, Response as ExpressResponse } from 'express';
 import Message from '../models/message';
 import Conversation from '../models/conversation';
 import { AuthRequest } from '../middlewares/authmiddleware';
 import { socketService } from '../utils/socketService';
 
-// Lấy tin nhắn theo medical record
-export const getMessagesByRecord = async (req: AuthRequest, res: Response) => {
+/* =======================
+   GET MESSAGES BY RECORD
+======================= */
+export const getMessagesByRecord = async (req: AuthRequest, res: ExpressResponse) => {
   try {
     const { recordId } = req.params;
     
@@ -24,7 +25,7 @@ export const getMessagesByRecord = async (req: AuthRequest, res: Response) => {
       .populate('receiver_id', 'name avatar role')
       .sort({ timestamp: 1 });
 
-    // Đánh dấu tin nhắn là đã đọc nếu người dùng hiện tại là receiver
+    // Mark messages as read if current user is receiver
     const userId = req.user?._id;
     await Message.updateMany(
       {
@@ -54,9 +55,18 @@ export const getMessagesByRecord = async (req: AuthRequest, res: Response) => {
   }
 };
 
-export const sendMessage = async (req: AuthRequest, res: Response) => {
+/* =======================
+   SEND MESSAGE (REST API)
+======================= */
+export const sendMessage = async (req: AuthRequest, res: ExpressResponse) => {
   try {
-    const { receiver_id, message, message_type = 'text', medical_record_id, appointment_id } = req.body;
+    const { 
+      receiver_id, 
+      message, 
+      message_type = 'text', 
+      medical_record_id, 
+      appointment_id 
+    } = req.body;
 
     if (!receiver_id || !message) {
       return res.status(400).json({ 
@@ -67,10 +77,14 @@ export const sendMessage = async (req: AuthRequest, res: Response) => {
 
     const senderId = req.user?._id;
     
-    // ✅ FIX: Ensure consistent sorting
-    const participantIds = [senderId.toString(), receiver_id.toString()].sort();
+    // Ensure consistent sorting
+    const participantIds = [senderId, receiver_id].sort((a, b) => {
+      const aStr = a.toString();
+      const bStr = b.toString();
+      return aStr.localeCompare(bStr);
+    });
 
-    // ✅ FIX: Use findOneAndUpdate with upsert (atomic operation)
+    // Find or create conversation
     const conversation = await Conversation.findOneAndUpdate(
       {
         participant_ids: participantIds,
@@ -106,14 +120,8 @@ export const sendMessage = async (req: AuthRequest, res: Response) => {
     });
 
     await newMessage.save();
-    // 🔥 Emit realtime message
-    socketService.emitMessageNew(
-    conversation._id.toString(),
-    newMessage
-  );
 
-
-    // ✅ FIX: Atomic update to prevent race conditions
+    // Update conversation
     await Conversation.findByIdAndUpdate(
       conversation._id,
       {
@@ -127,18 +135,26 @@ export const sendMessage = async (req: AuthRequest, res: Response) => {
       }
     );
 
-    // Populate for response
+    // Populate
     await newMessage.populate('sender_id', 'name avatar role');
     await newMessage.populate('receiver_id', 'name avatar role');
 
+    // Emit to Socket.IO
+    socketService.emitNewMessage(
+      conversation._id.toString(),
+      newMessage
+    );
+
     res.status(201).json({
       success: true,
-      data: { message: newMessage }
+      data: { 
+        message: newMessage,
+        conversationId: conversation._id
+      }
     });
   } catch (error: any) {
     console.error('Error sending message:', error);
     
-    // ✅ Better error handling
     if (error.code === 11000) {
       return res.status(409).json({
         success: false,
@@ -154,8 +170,10 @@ export const sendMessage = async (req: AuthRequest, res: Response) => {
   }
 };
 
-// Lấy danh sách conversations
-export const getConversations = async (req: AuthRequest, res: Response) => {
+/* =======================
+   GET CONVERSATIONS
+======================= */
+export const getConversations = async (req: AuthRequest, res: ExpressResponse) => {
   try {
     const userId = req.user?._id;
 
@@ -163,7 +181,13 @@ export const getConversations = async (req: AuthRequest, res: Response) => {
       participant_ids: userId
     })
       .populate('participant_ids', 'name avatar role')
-      .populate('last_message')
+      .populate({
+        path: 'last_message',
+        populate: {
+          path: 'sender_id receiver_id',
+          select: 'name avatar role'
+        }
+      })
       .populate('medical_record_id')
       .sort({ last_message_at: -1 });
 
@@ -185,7 +209,8 @@ export const getConversations = async (req: AuthRequest, res: Response) => {
           last_message: conversation.last_message,
           last_message_at: conversation.last_message_at,
           unread_count: unreadCount,
-          medical_record_id: conversation.medical_record_id
+          medical_record_id: conversation.medical_record_id,
+          appointment_id: conversation.appointment_id
         };
       })
     );
@@ -203,16 +228,17 @@ export const getConversations = async (req: AuthRequest, res: Response) => {
   }
 };
 
-// Lấy tin nhắn trong conversation
-export const getConversationMessages = async (req: AuthRequest, res: Response) => {
+/* =======================
+   GET CONVERSATION MESSAGES
+======================= */
+export const getConversationMessages = async (req: AuthRequest, res: ExpressResponse) => {
   try {
     const { conversationId } = req.params;
     const userId = req.user?._id;
 
-    // Kiểm tra xem user có trong conversation không
     const conversation = await Conversation.findOne({
       _id: conversationId,
-      participant_ids: userId
+      participant_ids: { $in: [userId] }
     });
 
     if (!conversation) {
@@ -230,7 +256,6 @@ export const getConversationMessages = async (req: AuthRequest, res: Response) =
       .populate('receiver_id', 'name avatar role')
       .sort({ timestamp: 1 });
 
-    // Đánh dấu tin nhắn là đã đọc
     await Message.updateMany(
       {
         conversation_id: conversationId,
@@ -242,11 +267,10 @@ export const getConversationMessages = async (req: AuthRequest, res: Response) =
         read_at: new Date()
       }
     );
-  
 
-    // Reset unread count
-    conversation.unread_count = 0;
-    await conversation.save();
+    await Conversation.findByIdAndUpdate(conversationId, {
+      unread_count: 0
+    });
 
     res.status(200).json({
       success: true,
@@ -261,8 +285,10 @@ export const getConversationMessages = async (req: AuthRequest, res: Response) =
   }
 };
 
-// Đánh dấu tin nhắn đã đọc
-export const markMessagesAsRead = async (req: AuthRequest, res: Response) => {
+/* =======================
+   MARK MESSAGES AS READ
+======================= */
+export const markMessagesAsRead = async (req: AuthRequest, res: ExpressResponse) => {
   try {
     const { conversationId } = req.params;
     const userId = req.user?._id;
@@ -279,7 +305,6 @@ export const markMessagesAsRead = async (req: AuthRequest, res: Response) => {
       }
     );
 
-    // Cập nhật unread count trong conversation
     await Conversation.findByIdAndUpdate(conversationId, {
       unread_count: 0
     });
@@ -300,8 +325,10 @@ export const markMessagesAsRead = async (req: AuthRequest, res: Response) => {
   }
 };
 
-
-export const sendMessageWithMedia = async (req: AuthRequest, res: Response) => {
+/* =======================
+   SEND MESSAGE WITH MEDIA
+======================= */
+export const sendMessageWithMedia = async (req: AuthRequest, res: ExpressResponse) => {
   try {
     const {
       receiver_id,
@@ -320,46 +347,56 @@ export const sendMessageWithMedia = async (req: AuthRequest, res: Response) => {
       });
     }
 
-    const participantIds = [senderId, receiver_id].sort();
+    const participantIds = [senderId.toString(), receiver_id.toString()].sort();
 
-    let conversation = await Conversation.findOne({
-      participant_ids: { $all: participantIds, $size: 2 },
-      ...(medical_record_id && { medical_record_id })
-    });
-
-    if (!conversation) {
-      conversation = await Conversation.create({
+    const conversation = await Conversation.findOneAndUpdate(
+      {
         participant_ids: participantIds,
-        medical_record_id: medical_record_id || null,
-        appointment_id: appointment_id || null
-      });
-    }
+        ...(medical_record_id && { medical_record_id })
+      },
+      {
+        $setOnInsert: {
+          participant_ids: participantIds,
+          medical_record_id: medical_record_id || null,
+          appointment_id: appointment_id || null,
+          unread_count: 0,
+          last_message_at: new Date()
+        }
+      },
+      {
+        upsert: true,
+        new: true,
+        setDefaultsOnInsert: true
+      }
+    );
 
     const newMessage = await Message.create({
       sender_id: senderId,
       receiver_id,
       message: message || '',
       message_type: file.mimetype.startsWith('image') ? 'image' : 'file',
-
       media_url: `/chatting/messages/${file.filename}`,
       media_name: file.originalname,
       media_size: file.size,
       media_mime: file.mimetype,
-
       medical_record_id,
       appointment_id,
       conversation_id: conversation._id,
       read: false
     });
 
-    conversation.last_message = newMessage._id;
-    conversation.last_message_at = new Date();
-    conversation.unread_count += 1;
-    await conversation.save();
+    await Conversation.findByIdAndUpdate(conversation._id, {
+      $set: {
+        last_message: newMessage._id,
+        last_message_at: new Date()
+      },
+      $inc: { unread_count: 1 }
+    });
 
     await newMessage.populate('sender_id', 'name avatar role');
     await newMessage.populate('receiver_id', 'name avatar role');
-    socketService.emitMessageNew(
+
+    socketService.emitNewMessage(
       conversation._id.toString(),
       newMessage
     );
@@ -370,45 +407,68 @@ export const sendMessageWithMedia = async (req: AuthRequest, res: Response) => {
     });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ success: false, message: 'Send media failed' });
+    res.status(500).json({ 
+      success: false, 
+      message: 'Send media failed' 
+    });
   }
 };
 
-
-export const editMessage = async (req: AuthRequest, res: Response) => {
+/* =======================
+   EDIT MESSAGE
+======================= */
+export const editMessage = async (req: AuthRequest, res: ExpressResponse) => {
   try {
     const { messageId } = req.params;
     const { newMessage } = req.body;
     const userId = req.user?._id;
 
     if (!newMessage) {
-      return res.status(400).json({ success: false, message: 'New message is required' });
+      return res.status(400).json({ 
+        success: false, 
+        message: 'New message is required' 
+      });
     }
 
     const message = await Message.findById(messageId);
 
     if (!message) {
-      return res.status(404).json({ success: false, message: 'Message not found' });
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Message not found' 
+      });
     }
 
     if (message.sender_id.toString() !== userId.toString()) {
-      return res.status(403).json({ success: false, message: 'You can only edit your own message' });
+      return res.status(403).json({ 
+        success: false, 
+        message: 'You can only edit your own message' 
+      });
     }
 
     if (message.deleted) {
-      return res.status(400).json({ success: false, message: 'Cannot edit deleted message' });
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Cannot edit deleted message' 
+      });
     }
 
     if (message.message_type !== 'text') {
-      return res.status(400).json({ success: false, message: 'Only text messages can be edited' });
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Only text messages can be edited' 
+      });
     }
 
     message.message = newMessage;
     message.edited = true;
     message.edited_at = new Date();
-
     await message.save();
-      socketService.emitMessageEdited(
+
+    await message.populate('sender_id', 'name avatar role');
+    await message.populate('receiver_id', 'name avatar role');
+
+    socketService.emitMessageEdited(
       message.conversation_id.toString(),
       message
     );
@@ -419,50 +479,326 @@ export const editMessage = async (req: AuthRequest, res: Response) => {
     });
   } catch (error) {
     console.error('Edit message error:', error);
-    res.status(500).json({ success: false, message: 'Edit message failed' });
+    res.status(500).json({ 
+      success: false, 
+      message: 'Edit message failed' 
+    });
   }
 };
 
-export const deleteMessage = async (req: AuthRequest, res: Response) => {
+/* =======================
+   DELETE MESSAGE
+======================= */
+export const deleteMessage = async (req: AuthRequest, res: ExpressResponse) => {
   try {
     const { messageId } = req.params;
-    const { type } = req.body;
+    const { type } = req.body; // 'everyone' or 'me'
     const userId = req.user?._id;
 
     const message = await Message.findById(messageId);
 
     if (!message) {
-      return res.status(404).json({ success: false, message: 'Message not found' });
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Message not found' 
+      });
     }
+
     if (type === 'everyone' && message.sender_id.toString() !== userId.toString()) {
       return res.status(403).json({
         success: false,
         message: 'Only sender can delete message for everyone'
       });
     }
+
     if (type === 'everyone') {
       message.deleted = true;
       message.deleted_at = new Date();
       message.deleted_by = userId;
       message.message = 'This message was deleted';
+      await message.save();
+
+      await message.populate('sender_id', 'name avatar role');
+      await message.populate('receiver_id', 'name avatar role');
+
+      socketService.emitMessageDeleted(
+        message.conversation_id.toString(),
+        message
+      );
+
+      return res.status(200).json({
+        success: true,
+        data: message
+      });
     }
 
     if (type === 'me') {
-      return res.status(200).json({ success: true });
+      return res.status(200).json({ 
+        success: true,
+        message: 'Message deleted for you only'
+      });
     }
 
-    await message.save();
-    socketService.emitMessageDeleted(
-      message.conversation_id.toString(),
-      message
+    res.status(400).json({
+      success: false,
+      message: 'Invalid delete type'
+    });
+  } catch (error) {
+    console.error('Delete message error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Delete message failed' 
+    });
+  }
+};
+
+/* =======================
+   ADD REACTION
+======================= */
+export const addReaction = async (req: AuthRequest, res: ExpressResponse) => {
+  try {
+    const { messageId } = req.params;
+    const { reaction } = req.body;
+    const userId = req.user?._id;
+
+    if (!reaction || !messageId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Reaction and message ID are required'
+      });
+    }
+
+    if (reaction.length > 10) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid emoji'
+      });
+    }
+
+    const message = await Message.findById(messageId);
+    
+    if (!message) {
+      return res.status(404).json({
+        success: false,
+        message: 'Message not found'
+      });
+    }
+
+    // Fix 403: Check participation manually instead of using query
+    const conversation = await Conversation.findById(message.conversation_id);
+
+    if (!conversation) {
+      return res.status(404).json({
+        success: false,
+        message: 'Conversation not found'
+      });
+    }
+
+    const isParticipant = conversation.participant_ids.some(
+      (participant: any) => participant.toString() === userId.toString()
+    );
+
+    if (!isParticipant) {
+      return res.status(403).json({
+        success: false,
+        message: 'You are not part of this conversation'
+      });
+    }
+
+    // Toggle Reaction
+    const existingReactionIndex = message.reactions.findIndex(
+      (r: any) => r.user_id.toString() === userId.toString() && r.emoji === reaction
+    );
+
+    if (existingReactionIndex !== -1) {
+      message.reactions.splice(existingReactionIndex, 1);
+      message.reactions_count = Math.max(0, message.reactions_count - 1);
+    } else {
+      message.reactions.push({
+        user_id: userId,
+        emoji: reaction,
+        createdAt: new Date()
+      });
+      message.reactions_count = message.reactions.length;
+    }
+    
+    const updatedMessage = await message.save();
+    
+    // Populate before emitting
+    await updatedMessage.populate('reactions.user_id', 'name avatar');
+
+    // EMIT EVENT
+    socketService.emitToRoom(
+      `conversation:${message.conversation_id}`,
+      existingReactionIndex !== -1 ? 'reaction_removed' : 'reaction_added',
+      {
+        messageId: message._id,
+        conversationId: message.conversation_id,
+        userId,
+        reaction,
+        message: updatedMessage.toObject(), // Send full updated object
+        timestamp: new Date()
+      }
     );
 
     res.status(200).json({
       success: true,
-      data: message
+      data: {
+        message: updatedMessage,
+        reaction,
+        action: existingReactionIndex !== -1 ? 'removed' : 'added'
+      }
     });
+
   } catch (error) {
-    console.error('Delete message error:', error);
-    res.status(500).json({ success: false, message: 'Delete message failed' });
+    console.error('Error adding reaction:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error processing reaction'
+    });
+  }
+};
+
+/* =======================
+   GET MESSAGE REACTIONS
+======================= */
+export const getMessageReactions = async (req: AuthRequest, res: ExpressResponse) => {
+  try {
+    const { messageId } = req.params;
+    const userId = req.user?._id;
+
+    const message = await Message.findById(messageId)
+      .select('reactions reactions_count')
+      .populate('reactions.user_id', 'name avatar');
+
+    if (!message) {
+      return res.status(404).json({
+        success: false,
+        message: 'Message not found'
+      });
+    }
+
+    const conversation = await Conversation.findOne({
+      _id: message.conversation_id,
+      participant_ids: userId
+    });
+
+    if (!conversation) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied'
+      });
+    }
+
+    const groupedReactions = message.reactions.reduce((acc: any, reaction: any) => {
+      if (!acc[reaction.emoji]) {
+        acc[reaction.emoji] = {
+          emoji: reaction.emoji,
+          count: 0,
+          users: [],
+          isReactedByMe: false
+        };
+      }
+      
+      acc[reaction.emoji].count++;
+      acc[reaction.emoji].users.push({
+        _id: reaction.user_id._id,
+        name: reaction.user_id.name,
+        avatar: reaction.user_id.avatar
+      });
+      
+      if (reaction.user_id._id.toString() === userId.toString()) {
+        acc[reaction.emoji].isReactedByMe = true;
+      }
+      
+      return acc;
+    }, {});
+
+    const reactionsList = Object.values(groupedReactions);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        reactions: reactionsList,
+        totalCount: message.reactions_count,
+        myReactions: message.reactions
+          .filter((r: any) => r.user_id._id.toString() === userId.toString())
+          .map((r: any) => r.emoji)
+      }
+    });
+
+  } catch (error) {
+    console.error('Error getting reactions:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching reactions'
+    });
+  }
+};
+
+/* =======================
+   REMOVE ALL MY REACTIONS
+======================= */
+export const removeMyReactions = async (req: AuthRequest, res: ExpressResponse) => {
+  try {
+    const { messageId } = req.params;
+    const userId = req.user?._id;
+
+    const message = await Message.findById(messageId);
+    
+    if (!message) {
+      return res.status(404).json({
+        success: false,
+        message: 'Message not found'
+      });
+    }
+
+    const reactionsToRemove = message.reactions.filter(
+      (r: any) => r.user_id.toString() === userId.toString()
+    );
+
+    if (reactionsToRemove.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No reactions to remove'
+      });
+    }
+
+    message.reactions = message.reactions.filter(
+      (r: any) => r.user_id.toString() !== userId.toString()
+    );
+    message.reactions_count = message.reactions.length;
+    
+    const updatedMessage = await message.save();
+
+    reactionsToRemove.forEach((reaction: any) => {
+      socketService.emitToRoom(
+        `conversation:${message.conversation_id}`,
+        'reaction_removed',
+        {
+          messageId: message._id,
+          userId,
+          reaction: reaction.emoji,
+          conversationId: message.conversation_id,
+          reactionsCount: updatedMessage.reactions_count,
+          timestamp: new Date()
+        }
+      );
+    });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        message: updatedMessage,
+        removedCount: reactionsToRemove.length
+      }
+    });
+
+  } catch (error) {
+    console.error('Error removing reactions:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error removing reactions'
+    });
   }
 };

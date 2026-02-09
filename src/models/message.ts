@@ -1,6 +1,12 @@
 // src/models/Message.ts
 import mongoose, { Schema, Document } from 'mongoose';
 
+export interface IReaction {
+  user_id: mongoose.Types.ObjectId;
+  emoji: string;
+  createdAt: Date;
+}
+
 export interface IMessage extends Document {
   sender_id: mongoose.Types.ObjectId;
   receiver_id: mongoose.Types.ObjectId;
@@ -26,7 +32,27 @@ export interface IMessage extends Document {
   deleted: boolean;
   deleted_at?: Date;
   deleted_by?: mongoose.Types.ObjectId;
+  
+  // ✅ THÊM PHẦN NÀY CHO REACTION
+  reactions: IReaction[];
+  reactions_count: number;
 }
+
+const reactionSchema = new Schema({
+  user_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  emoji: {
+    type: String,
+    required: true
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  }
+});
 
 const messageSchema = new mongoose.Schema({
   sender_id: {
@@ -85,8 +111,7 @@ const messageSchema = new mongoose.Schema({
   edited_at: {
     type: Date
   },
-
-    deleted: {
+  deleted: {
     type: Boolean,
     default: false
   },
@@ -96,10 +121,21 @@ const messageSchema = new mongoose.Schema({
   deleted_by: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
+  },
+  
+  // ✅ THÊM PHẦN NÀY CHO REACTION
+  reactions: [reactionSchema],
+  reactions_count: {
+    type: Number,
+    default: 0
   }
 }, {
   timestamps: true
 });
+
+// Index để optimize query reaction
+messageSchema.index({ 'reactions.user_id': 1 });
+messageSchema.index({ conversation_id: 1, 'reactions.createdAt': -1 });
 
 const Message = mongoose.models.Message || mongoose.model<IMessage>('Message', messageSchema);
 

@@ -12,7 +12,10 @@ import {
   markMessagesAsRead,
   sendMessageWithMedia,
   editMessage,
-  deleteMessage
+  deleteMessage,
+  addReaction,
+  getMessageReactions,
+  removeMyReactions
 } from '../controllers/messageController';
 
 
@@ -88,7 +91,10 @@ router.get('/conversations/:conversationId/messages', getConversationMessages);
 router.patch('/conversations/:conversationId/read', markMessagesAsRead);
 router.patch('/messages/:messageId/edit', editMessage);
 router.delete('/messages/:messageId', deleteMessage);
-
+// Thêm vào file routes/messageRoutes.ts
+router.post('/messages/:messageId/react', protect, addReaction);
+router.get('/messages/:messageId/reactions', protect, getMessageReactions);
+router.delete('/messages/:messageId/reactions/me', protect, removeMyReactions);
 
 // ✅ File upload with error handling
 router.post(
