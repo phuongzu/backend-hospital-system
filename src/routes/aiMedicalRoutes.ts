@@ -13,6 +13,7 @@ import {
   getMedicalTermExplanation
 } from '../controllers/aiMedicalController';
 import { protect } from '../middlewares/authmiddleware';
+import { validateRequest } from '../middlewares/validateRequest';
 
 const router = express.Router();
 

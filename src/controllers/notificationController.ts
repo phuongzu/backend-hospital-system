@@ -4,6 +4,7 @@ import { notificationService } from '../utils/notificationService';
 import Notification from '../models/notification';
 import NotificationDevice from '../models/notificationDevice';
 import User from '../models/user';
+import Doctor from '../models/doctor';
 
 // ================================
 // GET USER NOTIFICATIONS
@@ -108,27 +109,107 @@ export const markAsRead = async (req: AuthRequest, res: Response): Promise<void>
 
 export const markAllAsRead = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    if (!req.user) {
-      res.status(401).json({ success: false, message: 'Authentication required' });
+    const userId = req.user?._id;
+    if (!userId) {
+      res.status(401).json({ success: false, message: 'Unauthorized' });
       return;
     }
 
-    const count = await notificationService.markAllAsRead(req.user._id);
-        const updatedNotifications = await Notification.find({ 
-      user_id: req.user._id 
-    }).sort({ created_at: -1 }).limit(20).lean();
-    
-    res.status(200).json({ 
-      success: true, 
-      message: `${count} notifications marked as read`, 
-      data: { 
-        count,
-        notifications: updatedNotifications
-      } 
+    // ============= DEBUG: Xem DB đang lưu field gì =============
+    // Chạy lần đầu để biết schema thực tế, sau đó có thể xóa block này
+    const sampleNotif = await Notification.findOne().lean();
+    console.log('=== DEBUG NOTIFICATION SCHEMA ===');
+    console.log('Sample document keys:', sampleNotif ? Object.keys(sampleNotif) : 'No documents found');
+    console.log('Sample document:', JSON.stringify(sampleNotif, null, 2));
+    console.log('Current userId:', userId.toString());
+    // ============= END DEBUG =============
+
+    // Tìm doctor profile (nếu có)
+    const doctor = await Doctor.findOne({ user_id: userId }).lean();
+    console.log('Doctor found:', doctor ? doctor._id.toString() : 'null');
+
+    // Đếm trước khi update để verify
+    const beforeCount = await Notification.countDocuments({ isRead: false });
+    console.log('Total unread notifications in DB (all users):', beforeCount);
+
+    // Build filter linh hoạt — bao gồm tất cả các field có thể lưu userId
+    const orConditions: any[] = [
+      { user_id: userId },
+      { recipient_id: userId },
+      { recipient: userId },
+    ];
+
+    if (doctor) {
+      orConditions.push(
+        { doctor_id: doctor._id },
+        { user_id: doctor._id },
+      );
+    }
+
+    const filter = {
+      $or: orConditions,
+      isRead: false,
+    };
+
+    console.log('=== UPDATE FILTER ===');
+    console.log(JSON.stringify(filter, null, 2));
+
+    // Đếm số doc match filter (trước khi update)
+    const matchCount = await Notification.countDocuments(filter);
+    console.log('Documents matching filter:', matchCount);
+
+    if (matchCount === 0) {
+      // Không có gì để update — trả về thành công luôn (idempotent)
+      console.warn('⚠️ No matching notifications found. Check field names in DB vs filter.');
+      res.status(200).json({
+        success: true,
+        message: 'No unread notifications found',
+        modifiedCount: 0,
+        debug: {
+          userId: userId.toString(),
+          doctorId: doctor?._id?.toString() ?? null,
+          hint: 'Check if notification documents use user_id, doctor_id, or recipient_id'
+        }
+      });
+      return;
+    }
+
+    // Thực hiện update
+    const result = await Notification.updateMany(
+      filter,
+      {
+        $set: {
+          isRead: true,
+          readAt: new Date(),
+          updatedAt: new Date(),
+        }
+      }
+    );
+
+    console.log('=== UPDATE RESULT ===');
+    console.log('Matched:', result.matchedCount);
+    console.log('Modified:', result.modifiedCount);
+    console.log('Acknowledged:', result.acknowledged);
+
+    if (result.modifiedCount === 0 && result.matchedCount > 0) {
+      // Match được nhưng không sửa được → có thể field isRead không tồn tại trong schema
+      console.error('❌ Matched but not modified — isRead field might not be in schema');
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `${result.modifiedCount} notifications marked as read`,
+      modifiedCount: result.modifiedCount,
+      matchedCount: result.matchedCount,
     });
-  } catch (error) {
-    console.error('❌ Error marking all notifications as read:', error);
-    res.status(500).json({ success: false, message: 'Internal server error' });
+
+  } catch (error: any) {
+    console.error('❌ markAllAsRead error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 };
 

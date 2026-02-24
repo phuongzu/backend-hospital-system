@@ -1,10 +1,11 @@
 import nodemailer from 'nodemailer';
+import  logger  from './logger';
 
 class EmailService {
   private transporter: nodemailer.Transporter;
 
   constructor() {
-    console.log('📧 Initializing EmailService...');
+    logger.debug('📧 Initializing EmailService...');
     
     // Direct configuration - sử dụng trực tiếp giá trị từ .env
     const smtpConfig = {
@@ -20,7 +21,7 @@ class EmailService {
       }
     };
 
-    console.log('🔧 Email configuration:', {
+    logger.debug('🔧 Email configuration:', {
       host: smtpConfig.host,
       port: smtpConfig.port,
       user: smtpConfig.auth.user,
@@ -36,16 +37,16 @@ class EmailService {
   private async verifyConnection(): Promise<void> {
     try {
       await this.transporter.verify();
-      console.log('✅ SMTP connection verified successfully');
+      logger.info('✅ SMTP connection verified successfully', { service: 'EmailService' });
     } catch (error) {
-      console.error('❌ SMTP connection failed:', error);
+      logger.error('❌ SMTP connection failed:', { error: error instanceof Error ? error.message : String(error), service: 'EmailService' });
     }
   }
 
   // ========== BASIC EMAIL TEMPLATES ==========
 
   async sendVerificationCode(to: string, code: string, name: string): Promise<void> {
-    console.log(`📧 Sending verification code to: ${to}`);
+    logger.debug(`📧 Sending verification code to: ${to}`, { recipient: to, method: 'sendVerificationCode' });
 
     const mailOptions = {
       from: {
@@ -60,9 +61,10 @@ class EmailService {
 
     try {
       const info = await this.transporter.sendMail(mailOptions);
-      console.log(`✅ Email sent successfully! Message ID: ${info.messageId}`);
+      logger.info(`✅ Verification code email sent successfully!`, { messageId: info.messageId, recipient: to });
     } catch (error: any) {
-      console.error('❌ Email sending failed:', {
+      logger.error('❌ Verification email sending failed:', {
+        recipient: to,
         code: error.code,
         command: error.command,
         response: error.response,
@@ -234,10 +236,10 @@ class EmailService {
       };
 
       const info = await this.transporter.sendMail(mailOptions);
-      console.log(`✅ Treatment step approval email sent! Message ID: ${info.messageId}`);
+      logger.info(`✅ Treatment step approval email sent successfully!`, { messageId: info.messageId, recipient: to });
       return true;
     } catch (error) {
-      console.error('Error sending treatment step approval email:', error);
+      logger.error('Error sending treatment step approval email:', { recipient: to, error: error instanceof Error ? error.message : String(error) });
       return false;
     }
   }
@@ -386,10 +388,10 @@ class EmailService {
       };
 
       const info = await this.transporter.sendMail(mailOptions);
-      console.log(`✅ Consultation summary email sent! Message ID: ${info.messageId}`);
+      logger.info(`✅ Consultation summary email sent successfully!`, { messageId: info.messageId, recipient: to });
       return true;
     } catch (error) {
-      console.error('Error sending consultation summary email:', error);
+      logger.error('Error sending consultation summary email:', { recipient: to, error: error instanceof Error ? error.message : String(error) });
       return false;
     }
   }
@@ -414,7 +416,7 @@ class EmailService {
     }
   ): Promise<boolean> {
     try {
-      const subject = `✅ Appointment Confirmed - ${data.appointment_date} at ${data.appointment_time}`;
+      const subject = `✅ Appointment booked successfully - ${data.appointment_date} at ${data.appointment_time}`;
 
       const html = `
         <!DOCTYPE html>
@@ -537,10 +539,10 @@ class EmailService {
       };
 
       const info = await this.transporter.sendMail(mailOptions);
-      console.log(`✅ Appointment confirmation email sent! Message ID: ${info.messageId}`);
+      logger.info(`✅ Appointment confirmation email sent successfully!`, { messageId: info.messageId, recipient: to });
       return true;
     } catch (error) {
-      console.error('Error sending appointment confirmation email:', error);
+      logger.error('Error sending appointment confirmation email:', { recipient: to, error: error instanceof Error ? error.message : String(error) });
       return false;
     }
   }
@@ -637,10 +639,10 @@ class EmailService {
       };
 
       const info = await this.transporter.sendMail(mailOptions);
-      console.log(`✅ Appointment reminder email sent! Message ID: ${info.messageId}`);
+      logger.info(`✅ Appointment reminder email sent successfully!`, { messageId: info.messageId, recipient: to });
       return true;
     } catch (error) {
-      console.error('Error sending appointment reminder email:', error);
+      logger.error('Error sending appointment reminder email:', { recipient: to, error: error instanceof Error ? error.message : String(error) });
       return false;
     }
   }
@@ -654,7 +656,7 @@ class EmailService {
   ): Promise<void> {
     const formattedTime = estimatedTime.toLocaleString();
     
-    console.log(`📧 Sending unlock confirmation to: ${email}`);
+    logger.debug(`📧 Sending unlock confirmation to: ${email}`, { recipient: email, method: 'sendUnlockRequest' });
 
     const mailOptions = {
       from: {
@@ -708,9 +710,9 @@ class EmailService {
 
     try {
       const info = await this.transporter.sendMail(mailOptions);
-      console.log(`✅ Unlock confirmation sent successfully! Message ID: ${info.messageId}`);
+      logger.info(`✅ Unlock confirmation sent successfully!`, { messageId: info.messageId, recipient: email });
     } catch (error: any) {
-      console.error('❌ Failed to send unlock confirmation:', error);
+      logger.error('❌ Failed to send unlock confirmation:', { recipient: email, error: error.message });
       throw new Error(`Failed to send unlock confirmation email: ${error.message}`);
     }
   }
@@ -721,7 +723,7 @@ class EmailService {
     doctorEmail: string,
     reason?: string
   ): Promise<void> {
-    console.log(`📧 Sending unlock request notification to admin: ${adminEmail}`);
+    logger.debug(`📧 Sending unlock request notification to admin: ${adminEmail}`, { recipient: adminEmail, doctorName, method: 'sendUnlockRequestToAdmin' });
 
     const mailOptions = {
       from: {
@@ -782,9 +784,9 @@ class EmailService {
 
     try {
       const info = await this.transporter.sendMail(mailOptions);
-      console.log(`✅ Admin notification sent successfully! Message ID: ${info.messageId}`);
+      logger.info(`✅ Admin notification sent successfully!`, { messageId: info.messageId, recipient: adminEmail });
     } catch (error: any) {
-      console.error('❌ Failed to send admin notification:', error);
+      logger.error('❌ Failed to send admin notification:', { recipient: adminEmail, error: error instanceof Error ? error.message : String(error) });
       throw new Error(`Failed to send admin notification email: ${error.message}`);
     }
   }
@@ -794,7 +796,7 @@ class EmailService {
     name: string,
     unlockedBy: string
   ): Promise<void> {
-    console.log(`📧 Sending account unlocked notification to: ${email}`);
+    logger.debug(`📧 Sending account unlocked notification to: ${email}`, { recipient: email, method: 'sendAccountUnlockedNotification' });
 
     const mailOptions = {
       from: {
@@ -855,9 +857,9 @@ class EmailService {
 
     try {
       const info = await this.transporter.sendMail(mailOptions);
-      console.log(`✅ Account unlocked notification sent successfully! Message ID: ${info.messageId}`);
+      logger.info(`✅ Account unlocked notification sent successfully!`, { messageId: info.messageId, recipient: email });
     } catch (error: any) {
-      console.error('❌ Failed to send account unlocked notification:', error);
+      logger.error('❌ Failed to send account unlocked notification:', { recipient: email, error: error instanceof Error ? error.message : String(error) });
       throw new Error(`Failed to send account unlocked notification: ${error.message}`);
     }
   }
@@ -1176,10 +1178,10 @@ class EmailService {
   async testConnection(): Promise<boolean> {
     try {
       await this.transporter.verify();
-      console.log('✅ Email server connection verified');
+      logger.info('✅ Email server connection verified', { service: 'EmailService' });
       return true;
     } catch (error) {
-      console.error('❌ Email server connection failed:', error);
+      logger.error('❌ Email server connection failed:', { error: error instanceof Error ? error.message : String(error), service: 'EmailService' });
       return false;
     }
   }
@@ -1203,7 +1205,7 @@ class EmailService {
         const info = await this.transporter.sendMail(mailOptions);
         results.push({ email: recipient.email, success: true, messageId: info.messageId });
       } catch (error: any) {
-        console.error(`❌ Failed to send email to ${recipient.email}:`, error.message);
+        logger.error(`❌ Failed to send email to ${recipient.email}:`, { recipient: recipient.email, error: error.message });
         results.push({ email: recipient.email, success: false, error: error.message });
       }
     }

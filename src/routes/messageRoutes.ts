@@ -1,5 +1,7 @@
 import express from 'express';
 import { protect } from '../middlewares/authmiddleware';
+import { validateRequest } from '../middlewares/validateRequest';
+import { SendMessageSchema } from '../validations/schemas';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
@@ -83,9 +85,9 @@ const upload = multer({
 // ✅ All routes need authentication
 router.use(protect);
 
-// Routes
+// Routes with validation
 router.get('/record/:recordId', getMessagesByRecord);
-router.post('/send', sendMessage);
+router.post('/send', validateRequest(SendMessageSchema, 'body'), sendMessage);
 router.get('/conversations', getConversations);
 router.get('/conversations/:conversationId/messages', getConversationMessages);
 router.patch('/conversations/:conversationId/read', markMessagesAsRead);

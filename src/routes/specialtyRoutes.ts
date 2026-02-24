@@ -6,6 +6,7 @@ updateSpecialty,
 createSpecialty,
 deleteSpecialty
 } from '../controllers/specialtyController';
+import { validateRequest } from '../middlewares/validateRequest';
 
 const router = express.Router();
 

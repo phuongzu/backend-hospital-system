@@ -2,6 +2,9 @@
 import express, { Request, Response, NextFunction } from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
+import helmet from 'helmet';
+import mongoSanitize from 'express-mongo-sanitize';
+import rateLimit from 'express-rate-limit';
 import http from 'http';
 import path from 'path';
 import fs from 'fs';
@@ -13,6 +16,9 @@ import jwt from 'jsonwebtoken';
 import { connectDB } from './config/db';
 import Message from './models/message';
 import Conversation from './models/conversation';
+import logger from './utils/logger';
+import { AppError } from './utils/AppError';
+
 // Routes
 import authRoutes from './routes/authroutes';
 import doctorRoutes from './routes/doctorRoutes';
@@ -64,7 +70,7 @@ const socketAuthMiddleware = (socket: Socket, next: (err?: Error) => void) => {
   try {
     const token = socket.handshake.auth.token || socket.handshake.headers.authorization?.replace('Bearer ', '');
     
-    console.log('🔐 Socket auth attempt:', {
+    logger.debug('🔐 Socket auth attempt:', {
       hasToken: !!token,
       tokenLength: token?.length,
       tokenPreview: token ? token.substring(0, 50) + '...' : 'none',
@@ -78,10 +84,10 @@ const socketAuthMiddleware = (socket: Socket, next: (err?: Error) => void) => {
 
     // Verify token
     const decoded = jwt.verify(token, process.env.JWT_SECRET!) as any;
-    console.log('🔐 Decoded token:', decoded);
+    logger.debug('🔐 Decoded token:', decoded);
         const userId = decoded.userId || decoded.id;
     if (!userId) {
-      console.error('❌ No userId or id found in token:', decoded);
+      logger.error('❌ No userId or id found in token:', decoded);
       return next(new Error('Authentication error: No user ID in token'));
     }
     
@@ -90,10 +96,10 @@ const socketAuthMiddleware = (socket: Socket, next: (err?: Error) => void) => {
     socket.data.userRole = decoded.role || 'user';
     socket.data.userName = decoded.name || decoded.email || 'User';
     
-    console.log(`✅ Socket authenticated: ${socket.data.userName} (${userId})`);
+    logger.info(`✅ Socket authenticated: ${socket.data.userName} (${userId})`);
     next();
   } catch (error: any) {
-    console.error('❌ Socket authentication error:', {
+    logger.error('❌ Socket authentication error:', {
       message: error.message,
       token: token?.substring(0, 20) + '...'
     });
@@ -140,7 +146,7 @@ io.on('connection', (socket: Socket) => {
   const userName = socket.data.userName;
   const userRole = socket.data.userRole;
   
-  console.log(`🟢 User connected: ${userName} (${userId}) [${userRole}] - Socket: ${socket.id}`);
+  logger.info(`🟢 User connected: ${userName} (${userId}) [${userRole}] - Socket: ${socket.id}`);
 
   // Store user-socket mapping
   userSocketMap.set(userId, socket.id);
@@ -167,7 +173,7 @@ io.on('connection', (socket: Socket) => {
         medicalRecordId
       } = data;
 
-      console.log(`📤 Message from ${userId} to ${receiverId}:`, message.substring(0, 50) + '...');
+      logger.debug(`📤 Message from ${userId} to ${receiverId}:`, message.substring(0, 50) + '...');
 
       // Validate required fields
       if (!receiverId || !message) {
@@ -274,10 +280,15 @@ io.on('connection', (socket: Socket) => {
         });
       }
 
-      console.log(`✅ Message sent successfully from ${userId} to ${receiverId}`);
+      logger.info(`✅ Message sent successfully from ${userId} to ${receiverId}`);
 
     } catch (error: any) {
-      console.error('❌ Error sending message:', error);
+      logger.error('❌ Error sending message:', {
+        fromUser: userId,
+        toUser: receiverId,
+        errorMessage: error.message,
+        stack: error.stack
+      });
       socket.emit('message_error', { 
         error: 'Failed to send message',
         details: process.env.NODE_ENV === 'development' ? error.message : undefined
@@ -302,7 +313,11 @@ io.on('connection', (socket: Socket) => {
         });
       }
     } catch (error) {
-      console.error('Error handling typing event:', error);
+      logger.error('Error handling typing event:', {
+        errorMessage: (error as any).message,
+        userId,
+        stack: (error as any).stack
+      });
     }
   });
 
@@ -323,7 +338,11 @@ io.on('connection', (socket: Socket) => {
         });
       }
     } catch (error) {
-      console.error('Error handling stop typing event:', error);
+      logger.error('Error handling stop typing event:', {
+        errorMessage: (error as any).message,
+        userId,
+        stack: (error as any).stack
+      });
     }
   });
 
@@ -369,23 +388,27 @@ io.on('connection', (socket: Socket) => {
         unread_count: 0
       });
 
-      console.log(`📖 Messages marked as read by ${userId} in conversation ${conversationId}`);
+      logger.debug(`📖 Messages marked as read by ${userId} in conversation ${conversationId}`);
 
     } catch (error) {
-      console.error('Error marking messages as read:', error);
+      logger.error('Error marking messages as read:', {
+        conversationId,
+        userId,
+        errorMessage: (error as any).message
+      });
     }
   });
 
   // Join conversation room
   socket.on('join_conversation', (conversationId) => {
     socket.join(`conversation:${conversationId}`);
-    console.log(`User ${userId} joined conversation ${conversationId}`);
+    logger.debug(`User ${userId} joined conversation ${conversationId}`);
   });
 
   // Leave conversation room
   socket.on('leave_conversation', (conversationId) => {
     socket.leave(`conversation:${conversationId}`);
-    console.log(`User ${userId} left conversation ${conversationId}`);
+    logger.debug(`User ${userId} left conversation ${conversationId}`);
   });
 
   // Get online status
@@ -417,7 +440,10 @@ io.on('connection', (socket: Socket) => {
         io.emit('notification:receive', notification);
       }
     } catch (error) {
-      console.error('Error sending notification:', error);
+      logger.error('Error sending notification:', {
+        errorMessage: (error as any).message,
+        stack: (error as any).stack
+      });
     }
   });
 
@@ -426,7 +452,7 @@ io.on('connection', (socket: Socket) => {
   ===================================================== */
   
   socket.on('disconnect', (reason) => {
-    console.log(`🔴 User disconnected: ${userName} (${userId}) - Reason: ${reason}`);
+    logger.info(`🔴 User disconnected: ${userName} (${userId}) - Reason: ${reason}`);
     
     // Clean up mappings
     userSocketMap.delete(userId);
@@ -438,7 +464,11 @@ io.on('connection', (socket: Socket) => {
 
   // Handle client errors
   socket.on('error', (error) => {
-    console.error(`Socket error for user ${userId}:`, error);
+    logger.error(`Socket error for user ${userId}:`, {
+      errorMessage: (error as any).message || error,
+      userId,
+      socketId: socket.id
+    });
   });
 });
 
@@ -466,7 +496,11 @@ export const sendMessageViaSocket = async (data: {
     }
     return false;
   } catch (error) {
-    console.error('Error sending message via socket:', error);
+    logger.error('Error sending message via socket:', {
+      senderId: data.senderId,
+      receiverId: data.receiverId,
+      errorMessage: (error as any).message
+    });
     return false;
   }
 };
@@ -498,44 +532,88 @@ const requiredEnvVars = ['JWT_SECRET', 'MONGODB_URI'];
 const missingEnvVars = requiredEnvVars.filter(v => !process.env[v]);
 
 if (missingEnvVars.length > 0) {
-  console.error('Missing environment variables:', missingEnvVars);
+  logger.error('Missing environment variables:', {
+    missingVars: missingEnvVars,
+    requiredVars: requiredEnvVars
+  });
   process.exit(1);
 }
 
 // Lấy server URL từ env hoặc dùng mặc định
 const SERVER_URL = process.env.SERVER_URL || 'http://localhost:3000';
-console.log('Server URL:', SERVER_URL);
+logger.debug('Server configuration:', { SERVER_URL });
 
 /* =====================================================
    MIDDLEWARES
 ===================================================== */
+
+// ✅ Security middleware - Must come first
+logger.info('🔒 Initializing security middleware');
+app.use(helmet()); // Set security HTTP headers
+app.use(mongoSanitize()); // Sanitize data against NoSQL injection
+
+// ✅ Rate limiting
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 1000, // Limit each IP to 100 requests per windowMs
+  message: 'Too many requests from this IP, please try again later.',
+  standardHeaders: true, // Return rate limit info in `RateLimit-*` headers
+  legacyHeaders: false, // Disable `X-RateLimit-*` headers
+  skip: (req) => req.path === '/' // Skip health check
+});
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // Stricter limit for auth endpoints
+  message: 'Too many login attempts, please try again later.',
+  skipSuccessfulRequests: true // Don't count successful requests
+});
+
+app.use('/api/', apiLimiter);
+app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/register', authLimiter);
+
+// ✅ CORS configuration
 app.use(cors({
   origin: function (origin, callback) {
-    // Cho phép tất cả trong development
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) {
+      callback(null, true);
+      return;
+    }
+
+    // Development: allow all
     if (process.env.NODE_ENV === 'development') {
       callback(null, true);
       return;
     }
     
-    // Production: chỉ cho phép các domain được cấu hình
-    const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [];
-    if (!origin || allowedOrigins.includes(origin)) {
+    // Production: strict CORS policy
+    const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000').split(',').map(o => o.trim());
+    if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
+      logger.warn('CORS request blocked', { origin });
       callback(new Error('Not allowed by CORS'));
     }
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With','Cache-Control']
+  optionsSuccessStatus: 200,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With','Cache-Control'],
+  maxAge: 600 // Pre-flight response cache time in seconds
 }));
 
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// ✅ Body parsing middleware with strict limits
+app.use(express.json({ limit: '5mb' }));
+app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 
-// Request logging
+// ✅ Request logging middleware
 app.use((req: Request, res: Response, next: NextFunction) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
+  logger.debug(`⮕ ${req.method} ${req.originalUrl}`, {
+    ip: req.ip,
+    userAgent: req.get('user-agent')
+  });
   next();
 });
 
@@ -549,7 +627,7 @@ app.use('/chatting/messages', express.static(path.join(__dirname, 'chatting', 'm
 // Đảm bảo thư mục tồn tại
 if (!fs.existsSync(AVATAR_DIR)) {
   fs.mkdirSync(AVATAR_DIR, { recursive: true });
-  console.log('✅ Created avatar directory:', AVATAR_DIR);
+  logger.info('✅ Created avatar directory:', { avatarDir: AVATAR_DIR });
 }
 
 // Serve static files với CORS đầy đủ và cache control
@@ -571,7 +649,7 @@ app.use(AVATAR_PUBLIC_ROUTE, (req, res, next) => {
   setHeaders: (res, filePath) => {
     // Thêm các headers bổ sung nếu cần
     if (process.env.NODE_ENV === 'development') {
-      console.log('📁 Serving static file:', filePath);
+      logger.debug('📁 Serving static file:', { filePath });
     }
   }
 }));
@@ -634,6 +712,102 @@ app.get('/health', (req: Request, res: Response) => {
 });
 
 /* =====================================================
+   404 NOT FOUND HANDLER
+===================================================== */
+app.use((req: Request, res: Response) => {
+  logger.warn('Route not found', {
+    method: req.method,
+    url: req.originalUrl,
+    ip: req.ip
+  });
+
+  res.status(404).json({
+    success: false,
+    message: `Route not found: ${req.method} ${req.originalUrl}`,
+    statusCode: 404,
+    timestamp: new Date().toISOString()
+  });
+});
+
+/* =====================================================
+   GLOBAL ERROR HANDLER (Must be last)
+===================================================== */
+app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+  // Default error values
+  let statusCode = err.statusCode || 500;
+  let message = err.message || 'Internal Server Error';
+  let isOperational = err.isOperational !== undefined ? err.isOperational : false;
+
+  // Handle Zod validation errors
+  if (err.errors && Array.isArray(err.errors)) {
+    statusCode = 400;
+    message = 'Validation failed';
+    isOperational = true;
+  }
+
+  // Handle MongoDB errors
+  if (err.name === 'MongoError' || err.code === 11000) {
+    statusCode = 409;
+    message = 'Duplicate entry';
+    isOperational = true;
+  }
+
+  if (err.name === 'CastError') {
+    statusCode = 400;
+    message = 'Invalid database ID format';
+    isOperational = true;
+  }
+
+  if (err.name === 'ValidationError') {
+    statusCode = 400;
+    message = Object.values(err.errors).map((e: any) => e.message).join(', ');
+    isOperational = true;
+  }
+
+  // Log error
+  logger.error('Global error handler', {
+    statusCode,
+    message,
+    isOperational,
+    path: req.path,
+    method: req.method,
+    ip: req.ip,
+    stack: err.stack,
+    body: req.body
+  });
+
+  // Development: send full error details
+  if (process.env.NODE_ENV === 'development') {
+    return res.status(statusCode).json({
+      success: false,
+      message,
+      statusCode,
+      error: {
+        message: err.message,
+        stack: err.stack,
+        ...(err.errors && { errors: err.errors })
+      },
+      timestamp: new Date().toISOString()
+    });
+  }
+
+  // Production: hide sensitive details
+  const response: any = {
+    success: false,
+    message: isOperational ? message : 'An unexpected error occurred. Please try again later.',
+    statusCode,
+    timestamp: new Date().toISOString()
+  };
+
+  // Include validation errors in production if it's a validation error
+  if (statusCode === 400 && err.errors) {
+    response.errors = err.errors;
+  }
+
+  return res.status(statusCode).json(response);
+});
+
+/* =====================================================
    GET AVATAR BY FILENAME ROUTE
 ===================================================== */
 app.get('/api/avatar/:filename', (req: Request, res: Response) => {
@@ -648,7 +822,7 @@ app.get('/api/avatar/:filename', (req: Request, res: Response) => {
     
     const filePath = path.join(AVATAR_DIR, filename);
     
-    console.log('🔍 Serving avatar:', {
+    logger.debug('🔍 Serving avatar:', {
       requestedFilename: filename,
       filePath: filePath,
       exists: fs.existsSync(filePath),
@@ -701,7 +875,11 @@ app.get('/api/avatar/:filename', (req: Request, res: Response) => {
     res.sendFile(filePath);
     
   } catch (error: any) {
-    console.error('❌ Error serving avatar:', error);
+    logger.error('❌ Error serving avatar:', {
+      filename,
+      errorMessage: error.message,
+      stack: error.stack
+    });
     res.status(500).json({
       success: false,
       message: 'Error serving avatar',
@@ -729,59 +907,83 @@ app.get('/api/socket/status', (_req: Request, res: Response) => {
 ===================================================== */
 const startServer = async () => {
   try {
-    console.log('🔧 Starting server with configuration:');
-    console.log('   Server URL:', SERVER_URL);
-    console.log('   Port:', PORT);
-    console.log('   Environment:', process.env.NODE_ENV || 'development');
-    console.log('   Avatar Directory:', AVATAR_DIR);
-    console.log('   Avatar Public Route:', AVATAR_PUBLIC_ROUTE);
-    console.log('   Socket.IO enabled: ✅');
-    
+    logger.info('🔧 Starting server with configuration:', {
+      serverUrl: SERVER_URL,
+      port: PORT,
+      environment: process.env.NODE_ENV || 'development',
+      avatarDirectory: AVATAR_DIR,
+      socketIOEnabled: true
+    });
+
     // 1️⃣ Connect DB FIRST
     await connectDB();
-    console.log('✅ MongoDB connected');
+    logger.info('✅ MongoDB connected successfully');
 
     // 2️⃣ Initialize services AFTER DB is ready
     await notificationService.initializeTemplates();
-    notificationScheduler.initialize();
+    logger.info('✅ Notification templates initialized');
 
-    // 4️⃣ Start server
+    notificationScheduler.initialize();
+    logger.info('✅ Notification scheduler initialized');
+
+    // 3️⃣ Start server
     server.listen(PORT, '0.0.0.0', () => {
-      console.log(`Server running at:`);
-      console.log(`   Local: http://localhost:${PORT}`);
-      console.log(`   Socket.IO: ws://localhost:${PORT}`);
-      console.log(`   Connected users: ${userSocketMap.size}`);
+      logger.info(`🚀 Server started successfully!`);
+      logger.info(`   Local: http://localhost:${PORT}`);
+      logger.info(`   Socket.IO: ws://localhost:${PORT}`);
+      logger.info(`   Health Check: http://localhost:${PORT}/health`);
+      logger.info(`   Connected users: ${userSocketMap.size}`);
     });
 
-  } catch (error) {
-    console.error('Server startup failed:', error);
+  } catch (error: any) {
+    logger.error('❌ Server startup failed!', {
+      message: error.message,
+      stack: error.stack
+    });
     process.exit(1);
   }
 };
 
 // Handle graceful shutdown
-process.on('SIGINT', () => {
-  console.log('🔻 Shutting down server gracefully...');
+const gracefulShutdown = async (signal: string) => {
+  logger.info(`✋ ${signal} received, starting graceful shutdown...`);
   
   // Disconnect all sockets
-  io.disconnectSockets();
+  io.disconnectSockets(true);
+  logger.info('🔌 All socket connections closed');
   
-  server.close(() => {
-    console.log('Server closed');
+  // Close database connection
+  server.close(async () => {
+    logger.info('🛑 HTTP server closed');
     process.exit(0);
   });
+
+  // Force shutdown after 10 seconds if not graceful
+  setTimeout(() => {
+    logger.error('❌ Forced shutdown (timeout exceeded)');
+    process.exit(1);
+  }, 10000);
+};
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error: Error) => {
+  logger.error('❌ Uncaught Exception!', {
+    message: error.message,
+    stack: error.stack
+  });
+  process.exit(1);
 });
 
-process.on('SIGTERM', () => {
-  console.log('🔻 Received SIGTERM, shutting down...');
-  
-  // Disconnect all sockets
-  io.disconnectSockets();
-  
-  server.close(() => {
-    console.log('Server closed');
-    process.exit(0);
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason: any) => {
+  logger.error('❌ Unhandled Rejection!', {
+    reason: reason instanceof Error ? reason.message : String(reason),
+    stack: reason instanceof Error ? reason.stack : undefined
   });
+  process.exit(1);
 });
 
 startServer();

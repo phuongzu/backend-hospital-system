@@ -25,6 +25,7 @@ import {
   createDrug
 } from '../controllers/adminController';
 import { protect } from '../middlewares/authmiddleware';
+import { validateRequest } from '../middlewares/validateRequest';
 
 const router = express.Router();
 

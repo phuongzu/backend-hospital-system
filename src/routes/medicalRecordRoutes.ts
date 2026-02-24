@@ -14,6 +14,8 @@ import {
   getReExaminationAppointment,
 } from '../controllers/medicalRecordController';
 import { protect } from '../middlewares/authmiddleware';
+import { validateRequest } from '../middlewares/validateRequest';
+import { CreateMedicalRecordSchema } from '../validations/schemas';
 
 const router = express.Router();
 

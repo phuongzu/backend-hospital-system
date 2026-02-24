@@ -46,6 +46,8 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import { protect } from '../middlewares/authmiddleware';
+import { validateRequest } from '../middlewares/validateRequest';
+import logger from '../utils/logger';
 
 const router = express.Router();
 
@@ -60,14 +62,14 @@ const storage = multer.diskStorage({
     cb(null, uploadsDir);
   },
   filename: (req, file, cb) => {
-    console.log('=== MULTER FILENAME DEBUG ===');
+    logger.debug('=== MULTER FILENAME DEBUG ===');
     
     let doctorId = req.query.doctorId as string;
     
-    console.log('DoctorId from query:', doctorId);
+    logger.debug('DoctorId from query:', { doctorId });
     
     if (!doctorId || doctorId === 'undefined') {
-      console.error('❌ Doctor ID not found in query parameters');
+      logger.error('❌ Doctor ID not found in query parameters');
       return cb(new Error('Doctor ID is required'), '');
     }
     
@@ -77,7 +79,7 @@ const storage = multer.diskStorage({
     const ext = path.extname(file.originalname).toLowerCase();
     const timestamp = Date.now();
     const filename = `doctor-${doctorId}-${timestamp}${ext}`;
-    console.log('✅ Final filename:', filename);
+    logger.debug('✅ Final filename:', { filename });
     cb(null, filename);
   }
 });
@@ -141,9 +143,9 @@ router.post('/consultations/:consultationId/steps/:stepNumber/complete-re-examin
 // upload image  doctor avatar
 router.post('/avatar', 
   (req, res, next) => {
-    console.log('=== AVATAR UPLOAD MIDDLEWARE ===');
-    console.log('Query params:', req.query);
-    console.log('Doctor ID from query:', req.query.doctorId);
+    logger.debug('=== AVATAR UPLOAD MIDDLEWARE ===');
+    logger.debug('Query params:', { queryParams: req.query });
+    logger.debug('Doctor ID from query:', { doctorId: req.query.doctorId });
     next();
   },
   upload.single('avatar'),

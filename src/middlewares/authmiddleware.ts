@@ -6,7 +6,6 @@ export interface AuthRequest extends Request {
   user?: any;
 }
 
-// middlewares/authmiddleware.ts - CẬP NHẬT
 export const protect = async (req: AuthRequest, res: Response, next: NextFunction) => {
   const authHeader = req.headers.authorization;
   console.log('🔐 Authorization Header:', authHeader);

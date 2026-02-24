@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Request, Response } from 'express';
 import {
   getAllDoctors,
   updateUser,
@@ -29,8 +29,16 @@ import {
   checkInAppointment
 } from '../controllers/patientcontroller';
 import { protect } from '../middlewares/authmiddleware';
+import { validateRequest } from '../middlewares/validateRequest';
+import  logger  from '../utils/logger';
+import {
+  UpdatePatientInfoSchema,
+  EmergencyContactSchema,
+  CreateReviewSchema
+} from '../validations/schemas';
 import multer from 'multer';
 import path from 'path';
+import fs from 'fs';
 
 
 const router = express.Router();
@@ -48,12 +56,12 @@ router.put('/profile', updateUser);
 
 // Patient info routes
 router.get('/patient-info', getPatientInfo);
-router.post('/patient-info', updatePatientInfo);
-router.patch('/patient-info/edit', editInfoPatient);
+router.post('/patient-info', validateRequest(UpdatePatientInfoSchema, 'body'), updatePatientInfo);
+router.patch('/patient-info/edit', validateRequest(UpdatePatientInfoSchema, 'body'), editInfoPatient);
 
 // Emergency contact routes
-router.put('/emergency-contact', updateEmergencyContact);
-router.post('/emergency-contact', postEmergencyContact);
+router.put('/emergency-contact', validateRequest(EmergencyContactSchema, 'body'), updateEmergencyContact);
+router.post('/emergency-contact', validateRequest(EmergencyContactSchema, 'body'), postEmergencyContact);
 
 // Medications routes
 router.put('/medications', updateMedications);
@@ -68,7 +76,7 @@ router.get('/appointments/history', getAllAppointmentsForPatient);
 router.patch('/appointments/:appointment_id/edit', editAppointment);
 router.patch('/appointments/:appointment_id/cancel', cancelAppointment);
 router.patch('/reviews/:review_id', updateReview);
-router.post('/doctors/:doctor_id/reviews', postDoctorReview);
+router.post('/doctors/:doctor_id/reviews', validateRequest(CreateReviewSchema, 'body'), postDoctorReview);
 router.get('/reviews/user', getUserReviews);
 router.delete('/reviews/:review_id', deleteReview);
 router.get('/medical-records/my-records', protect, getMyMedicalRecords);
@@ -103,7 +111,7 @@ const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 } // 5MB
 });
 router.post('/upload-avatar', protect, uploadAvatar);
-console.log('uploadAvatar =', uploadAvatar);
+logger.debug('uploadAvatar function loaded');
 router.delete('/remove-avatar', protect, deleteAvatar);
 router.get('/avatar', protect, getAvatar);
 
@@ -121,7 +129,7 @@ router.get('/avatar/:filename', async (req: Request, res: Response) => {
     // Đường dẫn đầy đủ tới file
     const avatarPath = path.join(__dirname, '..', 'uploads', 'avatars', filename);
     
-    console.log('🔍 Serving avatar:', {
+    logger.debug('🔍 Serving avatar:', {
       requested: filename,
       fullPath: avatarPath,
       exists: fs.existsSync(avatarPath)
@@ -129,7 +137,7 @@ router.get('/avatar/:filename', async (req: Request, res: Response) => {
 
     // Kiểm tra file tồn tại
     if (!fs.existsSync(avatarPath)) {
-      console.error('❌ Avatar not found:', avatarPath);
+      logger.warn('❌ Avatar not found:', { avatarPath });
       
       // Trả về ảnh mặc định nếu không tìm thấy
       const defaultAvatarPath = path.join(__dirname, '..', 'public', 'default-avatar.jpg');
@@ -167,7 +175,7 @@ router.get('/avatar/:filename', async (req: Request, res: Response) => {
     res.setHeader('Cache-Control', 'public, max-age=86400'); // Cache 1 ngày
     res.setHeader('Access-Control-Allow-Origin', '*'); // CORS
     
-    console.log('✅ Serving avatar with headers:', {
+    logger.debug('✅ Serving avatar with headers:', {
       'Content-Type': contentType,
       'Cache-Control': 'public, max-age=86400'
     });
@@ -175,7 +183,11 @@ router.get('/avatar/:filename', async (req: Request, res: Response) => {
     res.sendFile(avatarPath);
     
   } catch (error: any) {
-    console.error('❌ Error serving avatar:', error);
+    logger.error('❌ Error serving avatar:', {
+      filename: req.params.filename,
+      errorMessage: error.message,
+      stack: error.stack
+    });
     res.status(500).json({ 
       success: false, 
       message: 'Error serving avatar',
