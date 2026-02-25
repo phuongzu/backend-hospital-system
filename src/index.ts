@@ -163,7 +163,7 @@ io.on('connection', (socket: Socket) => {
   ===================================================== */
   
   // Send message event
-  socket.on('send_message', async (data) => {
+  socket.on('send_message', async (data, callback) => {
     try {
       const {
         conversationId,
@@ -242,10 +242,10 @@ io.on('connection', (socket: Socket) => {
       };
 
       // Emit to sender (confirmation)
-      socket.emit('message_sent', {
-        success: true,
-        message: messageData
-      });
+      callback({
+      success: true,
+      message: messageData
+    });
 
       // Emit to receiver if online
       const receiverSocketId = userSocketMap.get(receiverId);
@@ -283,16 +283,12 @@ io.on('connection', (socket: Socket) => {
       logger.info(`✅ Message sent successfully from ${userId} to ${receiverId}`);
 
     } catch (error: any) {
-      logger.error('❌ Error sending message:', {
-        fromUser: userId,
-        toUser: receiverId,
-        errorMessage: error.message,
-        stack: error.stack
+    if (callback) {
+      callback({
+        success: false,
+        error: 'Failed to send message'
       });
-      socket.emit('message_error', { 
-        error: 'Failed to send message',
-        details: process.env.NODE_ENV === 'development' ? error.message : undefined
-      });
+    }
     }
   });
 
@@ -620,16 +616,20 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 const AVATAR_PUBLIC_ROUTE = '/uploads/avatars';
 const AVATAR_DIR = path.join(__dirname, '..', 'src', 'uploads', 'avatars');
 
-app.use('/api/chatting/messages', 
-  express.static(path.join(__dirname, 'chatting/messages'))); 
   
-app.use('/chatting/messages', express.static(path.join(__dirname, 'chatting', 'messages')));
-// Đảm bảo thư mục tồn tại
-if (!fs.existsSync(AVATAR_DIR)) {
-  fs.mkdirSync(AVATAR_DIR, { recursive: true });
-  logger.info('✅ Created avatar directory:', { avatarDir: AVATAR_DIR });
-}
+app.use('/api/chatting/messages', (req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+  res.header('Cross-Origin-Resource-Policy', 'cross-origin');
+  res.header('Cross-Origin-Embedder-Policy', 'credentialless');
+  next();
+}, express.static(path.join(__dirname, 'chatting/messages')));
 
+app.use('/chatting/messages', (req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Cross-Origin-Resource-Policy', 'cross-origin');
+  next();
+}, express.static(path.join(__dirname, 'chatting', 'messages')));
 // Serve static files với CORS đầy đủ và cache control
 app.use(AVATAR_PUBLIC_ROUTE, (req, res, next) => {
   // CORS cho tất cả static files - cho phép tất cả trong dev
