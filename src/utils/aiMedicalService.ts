@@ -1,12 +1,27 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import Groq from 'groq-sdk';
 import { config } from '../config/config';
 
+// ==================== TYPES ====================
+
+export type Language = 'en' | 'vi';
+export type MessageRole = 'user' | 'assistant';
+export type MedicalCategory =
+  | 'cardiology'
+  | 'dermatology'
+  | 'neurology'
+  | 'pediatrics'
+  | 'orthopedics'
+  | 'ophthalmology'
+  | 'medications'
+  | 'emergency'
+  | 'general';
+
 export interface AIMessage {
-  role: 'user' | 'assistant';
+  role: MessageRole;
   content: string;
   timestamp: Date;
-  category?: string;
-  language?: 'en' | 'vi';
+  category?: MedicalCategory;
+  language?: Language;
 }
 
 export interface AIResponse {
@@ -16,8 +31,9 @@ export interface AIResponse {
   emergencyAlert?: boolean;
   category?: string;
   relatedSpecialties?: string[];
-  language?: 'en' | 'vi';
-  usedFallback?: boolean; // Indicate if fallback was used
+  language?: Language;
+  usedFallback?: boolean;
+  provider?: string;
 }
 
 export interface MedicationInfo {
@@ -40,234 +56,114 @@ export interface LifestyleAdvice {
   category: string;
 }
 
-export class AIMedicalService {
-  private genAI: GoogleGenerativeAI;
-  private model: any;
-  private conversationHistory: AIMessage[] = [];
-  private readonly maxHistoryLength = 10;
+// ==================== CUSTOM ERRORS ====================
 
-  // Cache for language detection
-  private languageCache = new Map<string, 'en' | 'vi'>();
-  private categoryCache = new Map<string, string>();
-
-  // Rate limiting
-  private requestCount = 0;
-  private requestResetTime = Date.now() + 60000; // Reset every minute
-  private readonly maxRequestsPerMinute = 10;
-
+class QuotaExceededError extends Error {
   constructor() {
-    if (!config.geminiApiKey) {
-      throw new Error('Gemini API key is required');
-    }
-
-    this.genAI = new GoogleGenerativeAI(config.geminiApiKey);
-    this.model = this.genAI.getGenerativeModel({ 
-      model: "gemini-2.0-flash",
-      generationConfig: {
-        temperature: 0.7,
-        topK: 40,
-        topP: 0.95,
-        maxOutputTokens: 2048,
-      },
-      systemInstruction: this.getSystemPrompt()
-    });
+    super('QUOTA_EXCEEDED');
+    this.name = 'QuotaExceededError';
   }
+}
 
-  // ==================== RATE LIMITING ====================
-
-  private checkRateLimit(): boolean {
-    const now = Date.now();
-    
-    // Reset counter if time window has passed
-    if (now > this.requestResetTime) {
-      this.requestCount = 0;
-      this.requestResetTime = now + 60000;
-    }
-
-    // Check if we're over the limit
-    if (this.requestCount >= this.maxRequestsPerMinute) {
-      console.warn('⚠️ Rate limit reached, using fallback response');
-      return false;
-    }
-
-    this.requestCount++;
-    return true;
+class EmptyMessageError extends Error {
+  constructor() {
+    super('Empty message provided');
+    this.name = 'EmptyMessageError';
   }
+}
 
-  // ==================== LANGUAGE DETECTION ====================
+// ==================== CONSTANTS ====================
 
-  private detectLanguage(message: string): 'en' | 'vi' {
-    // Check cache first
-    const cached = this.languageCache.get(message);
-    if (cached) return cached;
+const MAX_HISTORY_LENGTH = 6;
+const MAX_REQUESTS_PER_MINUTE = 25; // Groq free: 30 req/min → đặt 25 để an toàn
+const LANGUAGE_CACHE_MAX_SIZE = 100;
+const CATEGORY_CACHE_MAX_SIZE = 100;
+const QUOTA_COOLDOWN_MS = 3 * 60 * 1000; // 3 phút cooldown
 
-    const vietnameseRegex = /[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i;
-    
-    const vietnameseKeywords = [
-      'tôi', 'bạn', 'của', 'và', 'có', 'là', 'trong', 'cho', 'với', 'không',
-      'bị', 'đau', 'thuốc', 'bệnh', 'khám', 'bác sĩ', 'bệnh viện', 'điều trị',
-      'triệu chứng', 'làm sao', 'như thế nào', 'tại sao', 'khi nào', 'ở đâu'
-    ];
+// Groq free tier: llama-3.3-70b-versatile — mạnh nhất, miễn phí hoàn toàn
+const GROQ_MODEL = 'llama-3.3-70b-versatile';
+const MAX_OUTPUT_TOKENS = 512;
 
-    const englishKeywords = [
-      'what', 'how', 'when', 'where', 'why', 'who', 'which', 'can', 'could',
-      'would', 'should', 'pain', 'disease', 'treatment', 'symptom', 'doctor',
-      'hospital', 'medicine', 'medication', 'test', 'diagnosis'
-    ];
+// ==================== DETECTION PATTERNS ====================
 
-    const lowerMessage = message.toLowerCase();
+const VIETNAMESE_CHAR_REGEX =
+  /[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i;
 
-    // Priority 1: Vietnamese characters
-    if (vietnameseRegex.test(message)) {
-      this.languageCache.set(message, 'vi');
-      return 'vi';
-    }
+const VIETNAMESE_KEYWORDS = [
+  'tôi', 'bạn', 'của', 'và', 'có', 'là', 'trong', 'cho', 'với', 'không',
+  'bị', 'đau', 'thuốc', 'bệnh', 'khám', 'bác sĩ', 'bệnh viện',
+  'điều trị', 'triệu chứng', 'làm sao', 'như thế nào', 'tại sao',
+  'khi nào', 'ở đâu', 'sức khỏe', 'xét nghiệm', 'uống thuốc',
+];
 
-    // Priority 2: Keyword counting
-    const vietnameseCount = vietnameseKeywords.filter(keyword => 
-      lowerMessage.includes(keyword)
-    ).length;
+const ENGLISH_KEYWORDS = [
+  'what', 'how', 'when', 'where', 'why', 'who', 'which', 'can', 'could',
+  'would', 'should', 'pain', 'disease', 'treatment', 'symptom',
+  'doctor', 'hospital', 'medicine', 'medication', 'test', 'diagnosis',
+  'health', 'feel', 'taking', 'blood', 'heart', 'skin',
+];
 
-    const englishCount = englishKeywords.filter(keyword => 
-      lowerMessage.includes(keyword)
-    ).length;
+const CATEGORY_KEYWORDS: Record<MedicalCategory, string[]> = {
+  cardiology: [
+    'heart', 'cardio', 'huyết áp', 'tim mạch', 'chest pain', 'đau ngực',
+    'tim', 'mạch máu', 'blood pressure', 'cholesterol', 'arrhythmia', 'nhồi máu',
+  ],
+  dermatology: [
+    'skin', 'da', 'rash', 'phát ban', 'acne', 'mụn', 'da liễu',
+    'ngứa', 'eczema', 'vảy nến', 'psoriasis', 'dị ứng da', 'allergy skin',
+  ],
+  neurology: [
+    'brain', 'não', 'headache', 'đau đầu', 'stroke', 'đột quỵ',
+    'thần kinh', 'chóng mặt', 'migraine', 'động kinh', 'epilepsy', 'tê tay',
+  ],
+  pediatrics: [
+    'child', 'trẻ em', 'baby', 'trẻ sơ sinh', 'pediatric', 'nhi',
+    'con', 'bé', 'infant', 'trẻ nhỏ', 'sốt trẻ em', 'vaccination', 'tiêm chủng',
+  ],
+  orthopedics: [
+    'bone', 'xương', 'joint', 'khớp', 'fracture', 'gãy xương',
+    'chỉnh hình', 'arthritis', 'viêm khớp', 'đau lưng', 'back pain', 'spine',
+  ],
+  ophthalmology: [
+    'eye', 'mắt', 'vision', 'thị lực', 'cataract', 'đục thủy tinh thể',
+    'nhãn khoa', 'glaucoma', 'cận thị', 'myopia', 'đau mắt', 'mờ mắt',
+  ],
+  medications: [
+    'medicine', 'thuốc', 'pill', 'viên thuốc', 'prescription', 'đơn thuốc',
+    'dược', 'medication', 'liều dùng', 'dosage', 'tác dụng phụ', 'side effect',
+  ],
+  emergency: [
+    'emergency', 'cấp cứu', 'urgent', 'khẩn cấp', '911', '115',
+    'ambulance', 'xe cấp cứu', 'nguy hiểm', 'critical', 'severe', 'ngất xỉu',
+  ],
+  general: [],
+};
 
-    let detectedLanguage: 'en' | 'vi' = 'en';
-    
-    if (vietnameseCount > englishCount) {
-      detectedLanguage = 'vi';
-    } else if (englishCount > vietnameseCount) {
-      detectedLanguage = 'en';
-    }
+type EmergencyProtocol = 'cardiac_emergency' | 'stroke_emergency' | 'respiratory_emergency';
 
-    this.languageCache.set(message, detectedLanguage);
-    return detectedLanguage;
-  }
+const EMERGENCY_KEYWORDS: Record<EmergencyProtocol, string[]> = {
+  cardiac_emergency: [
+    'chest pain', 'đau ngực', 'heart pain', 'đau tim', 'palpitations',
+    'đánh trống ngực', 'shortness of breath', 'khó thở', 'tightness in chest',
+    'tức ngực', 'heart attack', 'nhồi máu cơ tim',
+  ],
+  stroke_emergency: [
+    'facial drooping', 'mặt xệ', 'méo miệng', 'arm weakness', 'tay yếu',
+    'liệt tay', 'speech difficulty', 'nói khó', 'nói ngọng', 'sudden numbness',
+    'tê liệt đột ngột', 'đột quỵ', 'stroke',
+  ],
+  respiratory_emergency: [
+    'breathing difficulty', 'khó thở nặng', 'choking', 'ngạt thở',
+    'nghẹt thở', 'blue lips', 'môi tím', 'severe asthma', 'hen nặng',
+    'không thở được', 'cannot breathe',
+  ],
+};
 
-  // ==================== SYSTEM PROMPT ====================
+// ==================== EMERGENCY MESSAGES ====================
 
-  private getSystemPrompt(): string {
-    return `Bạn là trợ lý AI y tế thông minh và đồng cảm với khả năng SONG NGỮ (Tiếng Anh và Tiếng Việt).
-
-QUY TẮC NGÔN NGỮ QUAN TRỌNG:
-🌐 LUÔN trả lời bằng ĐÚNG NGÔN NGỮ mà người dùng sử dụng
-- Người dùng hỏi bằng tiếng Anh → Trả lời 100% bằng TIẾNG ANH
-- Người dùng hỏi bằng tiếng Việt → Trả lời 100% bằng TIẾNG VIỆT
-- KHÔNG trộn lẫn ngôn ngữ trừ khi được yêu cầu rõ ràng
-- Duy trì tính nhất quán ngôn ngữ trong toàn bộ câu trả lời
-
-VAI TRÒ VÀ PHẠM VI:
-- Trợ lý y tế ảo cung cấp thông tin y tế toàn diện
-- Hỗ trợ bệnh nhân hiểu về tình trạng sức khỏe trên tất cả các chuyên khoa
-- Giải thích thuật ngữ y tế, thủ tục và kế hoạch điều trị
-- Cung cấp lời khuyên sức khỏe dựa trên bằng chứng và khuyến nghị lối sống
-- Hỗ trợ thông tin về thuốc và hiểu biết về thiết bị y tế
-
-NGUYÊN TẮC AN TOÀN:
-🚨 QUAN TRỌNG: LUÔN khuyên bệnh nhân tham khảo ý kiến bác sĩ trước khi áp dụng bất kỳ thay đổi nào
-🚨 CẤP CỨU: Ngay lập tức hướng dẫn đến dịch vụ cấp cứu cho các triệu chứng nguy hiểm
-❌ KHÔNG BAO GIỜ chẩn đoán bệnh hoặc kê đơn thuốc
-❌ KHÔNG BAO GIỜ thay thế các chuyên gia y tế có trình độ
-❌ KHÔNG BAO GIỜ đưa ra lời khuyên y tế dứt khoát mà không có tư vấn
-
-GIAO THỨC CẤP CỨU:
-Cho người nói tiếng Anh:
-- "🚨 THIS IS A MEDICAL EMERGENCY! Please call emergency services (911/115) immediately."
-
-Cho người nói tiếng Việt:
-- "🚨 ĐÂY LÀ CẤP CỨU Y TẾ! Vui lòng gọi cấp cứu 115 ngay lập tức."
-
-CHUYÊN MÔN:
-Bạn được đào tạo về tất cả các chuyên khoa y tế bao gồm:
-1. TIM MẠCH - Tim và hệ thống tim mạch
-2. DA LIỄU - Tình trạng da
-3. THẦN KINH - Não và hệ thần kinh
-4. NHI KHOA - Sức khỏe trẻ em
-5. CHỈNH HÌNH - Xương và khớp
-6. NHÃN KHOA - Sức khỏe mắt
-7. NHA KHOA - Sức khỏe răng miệng
-8. TÂM THẦN - Sức khỏe tâm thần
-9. PHẪU THUẬT - Thủ thuật phẫu thuật
-10. PHỤ KHOA - Sức khỏe phụ nữ
-11. NỘI TIẾT - Hormone
-12. TIÊU HÓA - Hệ tiêu hóa
-
-ĐỊNH DẠNG PHẢN HỒI:
-- Sử dụng ngôn ngữ rõ ràng, đồng cảm phù hợp với ngôn ngữ của người dùng
-- Cung cấp thông tin thực tế và lời khuyên có thể hành động
-- Luôn bao gồm tuyên bố từ chối trách nhiệm an toàn bằng cùng ngôn ngữ
-- Định dạng phản hồi để dễ đọc
-
-Nhớ: Tính nhất quán ngôn ngữ là QUAN TRỌNG đối với trải nghiệm người dùng và sự tin tưởng.`;
-  }
-
-  // ==================== CATEGORY DETECTION ====================
-
-  private detectCategory(message: string): string {
-    // Check cache first
-    const cached = this.categoryCache.get(message);
-    if (cached) return cached;
-
-    const categories = {
-      cardiology: ['heart', 'cardio', 'huyết áp', 'tim mạch', 'chest pain', 'đau ngực', 'tim', 'mạch máu', 'blood pressure'],
-      dermatology: ['skin', 'da', 'rash', 'phát ban', 'acne', 'mụn', 'da liễu', 'ngứa', 'eczema'],
-      neurology: ['brain', 'não', 'headache', 'đau đầu', 'stroke', 'đột quỵ', 'thần kinh', 'chóng mặt', 'migraine'],
-      pediatrics: ['child', 'trẻ em', 'baby', 'trẻ sơ sinh', 'pediatric', 'nhi', 'con', 'bé', 'infant'],
-      orthopedics: ['bone', 'xương', 'joint', 'khớp', 'fracture', 'gãy xương', 'chỉnh hình', 'arthritis'],
-      ophthalmology: ['eye', 'mắt', 'vision', 'thị lực', 'cataract', 'đục thủy tinh thể', 'nhãn khoa', 'glaucoma'],
-      medications: ['medicine', 'thuốc', 'pill', 'viên thuốc', 'prescription', 'đơn thuốc', 'dược', 'medication'],
-      emergency: ['emergency', 'cấp cứu', 'urgent', 'khẩn cấp', '911', '115', 'ambulance', 'xe cấp cứu']
-    };
-
-    const lowerMessage = message.toLowerCase();
-    let detectedCategory = 'general';
-
-    for (const [category, keywords] of Object.entries(categories)) {
-      if (keywords.some(keyword => lowerMessage.includes(keyword.toLowerCase()))) {
-        detectedCategory = category;
-        break;
-      }
-    }
-
-    this.categoryCache.set(message, detectedCategory);
-    return detectedCategory;
-  }
-
-  // ==================== EMERGENCY DETECTION ====================
-
-  private detectEmergencyKeywords(message: string): { isEmergency: boolean; protocol?: string } {
-    const emergencyPatterns = {
-      cardiac_emergency: [
-        'chest pain', 'đau ngực', 'heart pain', 'đau tim', 'palpitations', 'đánh trống ngực',
-        'shortness of breath', 'khó thở', 'tightness in chest', 'tức ngực', 'heart attack'
-      ],
-      stroke_emergency: [
-        'facial drooping', 'mặt xệ', 'méo miệng', 'arm weakness', 'tay yếu', 'liệt tay',
-        'speech difficulty', 'nói khó', 'nói ngọng', 'sudden numbness', 'tê liệt đột ngột', 'đột quỵ'
-      ],
-      respiratory_emergency: [
-        'breathing difficulty', 'khó thở nặng', 'choking', 'ngạt thở', 'nghẹt thở',
-        'blue lips', 'môi tím', 'severe asthma', 'hen nặng', 'không thở được'
-      ]
-    };
-
-    const lowerMessage = message.toLowerCase();
-    
-    for (const [protocol, keywords] of Object.entries(emergencyPatterns)) {
-      if (keywords.some(keyword => lowerMessage.includes(keyword.toLowerCase()))) {
-        return { isEmergency: true, protocol };
-      }
-    }
-
-    return { isEmergency: false };
-  }
-
-  private getEmergencyProtocols(language: 'en' | 'vi'): { [key: string]: string } {
-    if (language === 'vi') {
-      return {
-        cardiac_emergency: `🚨 CẤP CỨU TIM MẠCH - HÀNH ĐỘNG NGAY LẬP TỨC!
-
-Triệu chứng: Đau ngực, đánh trống ngực, khó thở, chóng mặt
+const EMERGENCY_PROTOCOLS: Record<Language, Record<EmergencyProtocol, string>> = {
+  vi: {
+    cardiac_emergency: `🚨 CẤP CỨU TIM MẠCH - HÀNH ĐỘNG NGAY LẬP TỨC!
 
 HƯỚNG DẪN CẤP CỨU:
 1. 🚑 GỌI CẤP CỨU 115 NGAY LẬP TỨC
@@ -277,19 +173,17 @@ HƯỚNG DẪN CẤP CỨU:
 
 ⚠️ ĐỪNG TỰ Ý LÁI XE ĐẾN BỆNH VIỆN - GỌI CẤP CỨU!`,
 
-        stroke_emergency: `🚨 CẤP CỨU ĐỘT QUỴ - THỜI GIAN LÀ BỘ NÃO!
+    stroke_emergency: `🚨 CẤP CỨU ĐỘT QUỴ - THỜI GIAN LÀ BỘ NÃO!
 
 Nhớ khẩu hiệu FAST:
 F - MẶT: Miệng bị lệch sang một bên
-A - TAY: Một tay không giơ lên được  
+A - TAY: Một tay không giơ lên được
 S - NÓI: Nói ngọng, nói không rõ
 T - THỜI GIAN: GỌI CẤP CỨU 115 NGAY!
 
 ⚠️ VÀNG 4.5 TIẾNG ĐẦU LÀ QUYẾT ĐỊNH - ĐỪNG TRỄ!`,
 
-        respiratory_emergency: `🚨 CẤP CỨU HÔ HẤP - NGUY CẤP!
-
-Triệu chứng: Khó thở nặng, ngạt thở, môi tím tái
+    respiratory_emergency: `🚨 CẤP CỨU HÔ HẤP - NGUY CẤP!
 
 HÀNH ĐỘNG NGAY:
 1. 🚑 GỌI CẤP CỨU 115 NGAY LẬP TỨC
@@ -297,13 +191,10 @@ HÀNH ĐỘNG NGAY:
 3. 💨 GIỮ ĐƯỜNG THỞ THÔNG THOÁNG
 4. 🪑 ĐỂ BỆNH NHÂN NGỒI TƯ THẾ THOẢI MÁI
 
-⚠️ ĐÂY LÀ CẤP CỨU - ĐỪNG CHỜ ĐỢI!`
-      };
-    } else {
-      return {
-        cardiac_emergency: `🚨 CARDIAC EMERGENCY - IMMEDIATE ACTION REQUIRED!
-
-Symptoms: Chest pain, palpitations, shortness of breath, dizziness
+⚠️ ĐÂY LÀ CẤP CỨU - ĐỪNG CHỜ ĐỢI!`,
+  },
+  en: {
+    cardiac_emergency: `🚨 CARDIAC EMERGENCY - IMMEDIATE ACTION REQUIRED!
 
 EMERGENCY INSTRUCTIONS:
 1. 🚑 CALL EMERGENCY SERVICES (911/115) IMMEDIATELY
@@ -313,7 +204,7 @@ EMERGENCY INSTRUCTIONS:
 
 ⚠️ DO NOT DRIVE YOURSELF - CALL EMERGENCY SERVICES!`,
 
-        stroke_emergency: `🚨 STROKE EMERGENCY - TIME IS BRAIN!
+    stroke_emergency: `🚨 STROKE EMERGENCY - TIME IS BRAIN!
 
 Remember FAST:
 F - FACE: Facial drooping on one side
@@ -323,9 +214,7 @@ T - TIME: CALL 911/115 IMMEDIATELY!
 
 ⚠️ GOLDEN 4.5 HOURS - DON'T DELAY!`,
 
-        respiratory_emergency: `🚨 RESPIRATORY EMERGENCY - CRITICAL!
-
-Symptoms: Severe breathing difficulty, choking, blue lips
+    respiratory_emergency: `🚨 RESPIRATORY EMERGENCY - CRITICAL!
 
 IMMEDIATE ACTIONS:
 1. 🚑 CALL 911/115 IMMEDIATELY
@@ -333,128 +222,17 @@ IMMEDIATE ACTIONS:
 3. 💨 KEEP AIRWAY CLEAR
 4. 🪑 POSITION PATIENT COMFORTABLY
 
-⚠️ THIS IS AN EMERGENCY - DON'T WAIT!`
-      };
-    }
-  }
+⚠️ THIS IS AN EMERGENCY - DON'T WAIT!`,
+  },
+};
 
-  // ==================== MAIN PROCESSING METHOD ====================
+// ==================== FALLBACK RESPONSES ====================
 
-  public async processMessage(userMessage: string): Promise<AIResponse> {
-    try {
-      // Validate input
-      if (!userMessage || userMessage.trim().length === 0) {
-        throw new Error('Empty message provided');
-      }
+type FallbackKey = 'general' | 'cardiology' | 'emergency' | 'medications';
 
-      // Detect language and check for emergency
-      const detectedLanguage = this.detectLanguage(userMessage);
-      const emergencyCheck = this.detectEmergencyKeywords(userMessage);
-
-      if (emergencyCheck.isEmergency && emergencyCheck.protocol) {
-        return this.handleEmergencySituation(emergencyCheck.protocol, userMessage, detectedLanguage);
-      }
-
-      // Add to conversation history
-      const category = this.detectCategory(userMessage);
-      this.addToHistory({
-        role: 'user',
-        content: userMessage,
-        timestamp: new Date(),
-        category,
-        language: detectedLanguage
-      });
-
-      // Generate AI response with fallback
-      let responseText: string;
-      let usedFallback = false;
-
-      // Check rate limit before making API call
-      if (!this.checkRateLimit()) {
-        responseText = this.generateFallbackAIResponse(userMessage, category, detectedLanguage);
-        usedFallback = true;
-      } else {
-        try {
-          responseText = await this.generateAIResponse(userMessage, category, detectedLanguage);
-        } catch (error: any) {
-          console.error('AI generation error:', error);
-          responseText = this.generateFallbackAIResponse(userMessage, category, detectedLanguage);
-          usedFallback = true;
-        }
-      }
-
-      // Add AI response to history
-      this.addToHistory({
-        role: 'assistant',
-        content: responseText,
-        timestamp: new Date(),
-        category,
-        language: detectedLanguage
-      });
-
-      // Analyze response
-      const analysis = this.analyzeResponse(responseText, category, detectedLanguage);
-
-      return {
-        response: responseText,
-        confidence: usedFallback ? 0.5 : analysis.confidence,
-        suggestedActions: analysis.suggestedActions,
-        emergencyAlert: false,
-        category,
-        relatedSpecialties: this.getRelatedSpecialties(category),
-        language: detectedLanguage,
-        usedFallback
-      };
-
-    } catch (error) {
-      console.error('Error processing AI message:', error);
-      const language = this.detectLanguage(userMessage);
-      return this.getFallbackResponse(language);
-    }
-  }
-
-  // ==================== AI RESPONSE GENERATION ====================
-
-  private async generateAIResponse(userMessage: string, category: string, language: 'en' | 'vi'): Promise<string> {
-    const languageInstruction = language === 'vi' 
-      ? `\n\n🇻🇳 QUAN TRỌNG: Người dùng hỏi bằng TIẾNG VIỆT. Bạn PHẢI trả lời 100% bằng TIẾNG VIỆT.`
-      : `\n\n🇬🇧 IMPORTANT: User is asking in ENGLISH. You MUST respond 100% in ENGLISH.`;
-
-    const prompt = `${this.getCategoryPrompt(category, language)}
-
-${languageInstruction}
-
-LỊCH SỬ HỘI THOẠI:
-${this.getConversationHistory()}
-
-CÂU HỎI HIỆN TẠI: ${userMessage}
-
-YÊU CẦU PHẢN HỒI:
-- Trả lời CHỈ bằng ${language === 'vi' ? 'TIẾNG VIỆT' : 'ENGLISH'}
-- Sử dụng ngôn ngữ tự nhiên, đồng cảm
-- Cung cấp thông tin y tế chính xác
-- Luôn nhắc nhở tham khảo chuyên gia y tế
-- Định dạng rõ ràng để dễ đọc`;
-
-    try {
-      const result = await this.model.generateContent(prompt);
-      const response = await result.response;
-      return response.text();
-    } catch (error: any) {
-      // Handle quota exceeded errors
-      if (error.status === 429 || error.message?.includes('quota') || error.message?.includes('Too Many Requests')) {
-        console.warn('⚠️ Gemini API quota exceeded, using fallback response');
-        throw new Error('QUOTA_EXCEEDED');
-      }
-      throw error; // Re-throw other errors
-    }
-  }
-
-  private generateFallbackAIResponse(userMessage: string, category: string, language: 'en' | 'vi'): string {
-    // Generate a basic response when API is unavailable
-    const responses = {
-      vi: {
-        general: `Cảm ơn bạn đã chia sẻ. Tôi hiện đang gặp vấn đề kỹ thuật với dịch vụ AI do vượt quá giới hạn sử dụng API.
+const FALLBACK_RESPONSES: Record<Language, Record<FallbackKey, string>> = {
+  vi: {
+    general: `Xin lỗi, dịch vụ AI hiện đang tạm thời không khả dụng do quá tải.
 
 ⚠️ LƯU Ý QUAN TRỌNG:
 - Vui lòng tham khảo ý kiến bác sĩ chuyên khoa để được tư vấn chính xác
@@ -467,8 +245,8 @@ YÊU CẦU PHẢN HỒI:
 3. Mang theo kết quả xét nghiệm (nếu có)
 
 Hệ thống sẽ sớm hoạt động trở lại. Xin lỗi vì sự bất tiện này.`,
-        
-        cardiology: `Về vấn đề tim mạch của bạn, đây là thông tin quan trọng:
+
+    cardiology: `Về vấn đề tim mạch của bạn:
 
 ⚠️ KHUYẾN CÁO:
 - Hãy đặt lịch khám tim mạch ngay
@@ -482,11 +260,9 @@ Hệ thống sẽ sớm hoạt động trở lại. Xin lỗi vì sự bất ti�
 - Chóng mặt, ngất xỉu
 - Tim đập nhanh bất thường
 
-Tôi đang gặp sự cố kỹ thuật nên không thể phân tích chi tiết. Vui lòng gặp bác sĩ tim mạch.`,
-        
-        emergency: `🚨 CẢNH BÁO CẤP CỨU!
+Vui lòng gặp bác sĩ tim mạch để được tư vấn chi tiết.`,
 
-Dựa trên nội dung bạn mô tả, đây có thể là tình huống khẩn cấp.
+    emergency: `🚨 CẢNH BÁO CẤP CỨU!
 
 HÀNH ĐỘNG NGAY:
 1. 🚑 GỌI CẤP CỨU 115 NGAY LẬP TỨC
@@ -494,28 +270,26 @@ HÀNH ĐỘNG NGAY:
 3. 📞 THÔNG BÁO CHO NGƯỜI THÂN
 
 ⚠️ ĐỪNG TỰ Ý LÁI XE - GỌI CẤP CỨU!
-⚠️ ĐỪNG CHỜ ĐỢI - THỜI GIAN RẤT QUAN TRỌNG!
+⚠️ ĐỪNG CHỜ ĐỢI - THỜI GIAN RẤT QUAN TRỌNG!`,
 
-Tôi không thể cung cấp tư vấn chi tiết do sự cố kỹ thuật, nhưng bạn cần được chăm sóc y tế ngay lập tức.`,
-
-        medications: `Về thông tin thuốc bạn hỏi:
+    medications: `Về thông tin thuốc bạn hỏi:
 
 ⚠️ QUAN TRỌNG:
 - Tham khảo dược sĩ hoặc bác sĩ về liều lượng
-- Đọc kỹ hướng dẫn sử dụng
-- Báo cáo tác dụng phụ nếu có
+- Đọc kỹ hướng dẫn sử dụng trước khi dùng
+- Báo cáo tác dụng phụ cho bác sĩ nếu có
 - Không tự ý thay đổi liều dùng
 
 💊 LƯU Ý:
 - Uống đúng giờ, đúng liều
-- Bảo quản thuốc đúng cách
-- Kiểm tra hạn sử dụng
-- Tránh tương tác thuốc
+- Bảo quản thuốc đúng cách, tránh ánh sáng và ẩm
+- Kiểm tra hạn sử dụng trước khi uống
 
-Tôi đang gặp sự cố kỹ thuật. Vui lòng tham khảo dược sĩ để được tư vấn chi tiết.`
-      },
-      en: {
-        general: `Thank you for sharing. I'm currently experiencing technical issues with the AI service due to API quota limitations.
+Vui lòng tham khảo dược sĩ để được tư vấn chi tiết.`,
+  },
+
+  en: {
+    general: `I apologize, the AI service is temporarily unavailable due to high load.
 
 ⚠️ IMPORTANT NOTICE:
 - Please consult a qualified doctor for accurate medical advice
@@ -524,12 +298,12 @@ Tôi đang gặp sự cố kỹ thuật. Vui lòng tham khảo dược sĩ để
 
 💡 Recommendations:
 1. Schedule an appointment with your doctor
-2. Prepare a detailed list of symptoms
+2. Prepare a detailed list of your symptoms
 3. Bring any test results (if available)
 
 The system will be back online soon. We apologize for the inconvenience.`,
-        
-        cardiology: `Regarding your cardiac concern, here is important information:
+
+    cardiology: `Regarding your cardiac concern:
 
 ⚠️ RECOMMENDATIONS:
 - Schedule a cardiology appointment immediately
@@ -543,11 +317,9 @@ The system will be back online soon. We apologize for the inconvenience.`,
 - Dizziness or fainting
 - Irregular rapid heartbeat
 
-I'm experiencing technical difficulties and cannot provide detailed analysis. Please see a cardiologist.`,
-        
-        emergency: `🚨 EMERGENCY ALERT!
+Please see a cardiologist for detailed consultation.`,
 
-Based on what you've described, this may be an emergency situation.
+    emergency: `🚨 EMERGENCY ALERT!
 
 IMMEDIATE ACTIONS:
 1. 🚑 CALL EMERGENCY SERVICES (911/115) NOW
@@ -555,179 +327,536 @@ IMMEDIATE ACTIONS:
 3. 📞 NOTIFY FAMILY MEMBERS
 
 ⚠️ DO NOT DRIVE YOURSELF - CALL EMERGENCY!
-⚠️ DO NOT WAIT - TIME IS CRITICAL!
+⚠️ DO NOT WAIT - TIME IS CRITICAL!`,
 
-I cannot provide detailed advice due to technical issues, but you need immediate medical attention.`,
-
-        medications: `Regarding the medication you asked about:
+    medications: `Regarding the medication you asked about:
 
 ⚠️ IMPORTANT:
-- Consult pharmacist or doctor about dosage
-- Read instructions carefully
-- Report any side effects
-- Do not change dosage without approval
+- Consult a pharmacist or doctor about proper dosage
+- Read instructions carefully before taking
+- Report any side effects to your doctor
+- Do not change dosage without medical approval
 
 💊 NOTES:
-- Take on time, correct dose
-- Store properly
-- Check expiration date
-- Avoid drug interactions
+- Take on time and at the correct dose
+- Store medication properly, away from light and moisture
+- Check expiration date before taking
 
-I'm experiencing technical difficulties. Please consult a pharmacist for detailed advice.`
+Please consult a pharmacist for detailed advice.`,
+  },
+};
+
+// ==================== MAIN SERVICE CLASS ====================
+
+export class AIMedicalService {
+  private readonly groq: Groq;
+
+  private conversationHistory: AIMessage[] = [];
+
+  // Caches
+  private readonly languageCache = new Map<string, Language>();
+  private readonly categoryCache = new Map<string, MedicalCategory>();
+
+  // Rate limiting
+  private requestCount = 0;
+  private requestResetTime: number = Date.now() + 60_000;
+
+  // Circuit breaker
+  private quotaExceededUntil: number | null = null;
+
+  constructor() {
+    if (!config.groqApiKey) {
+      throw new Error(
+        'Groq API key is required. Get yours free at: https://console.groq.com/keys'
+      );
+    }
+
+    this.groq = new Groq({ apiKey: config.groqApiKey });
+
+    console.info(`✅ AIMedicalService initialized — provider: Groq (${GROQ_MODEL})`);
+  }
+
+  // ==================== RATE LIMITING ====================
+
+  private isRateLimited(): boolean {
+    const now = Date.now();
+
+    if (now > this.requestResetTime) {
+      this.requestCount = 0;
+      this.requestResetTime = now + 60_000;
+    }
+
+    return this.requestCount >= MAX_REQUESTS_PER_MINUTE;
+  }
+
+  private recordRequest(): void {
+    this.requestCount++;
+  }
+
+  // ==================== CIRCUIT BREAKER ====================
+
+  private isQuotaExceeded(): boolean {
+    if (this.quotaExceededUntil === null) return false;
+
+    if (Date.now() > this.quotaExceededUntil) {
+      this.quotaExceededUntil = null;
+      console.info('ℹ️ Groq quota cooldown expired — API calls re-enabled');
+      return false;
+    }
+
+    return true;
+  }
+
+  private markQuotaExceeded(): void {
+    this.quotaExceededUntil = Date.now() + QUOTA_COOLDOWN_MS;
+    const resetAt = new Date(this.quotaExceededUntil).toLocaleTimeString();
+    console.warn(`⚠️ Groq API rate limit hit. Circuit breaker active until ${resetAt}`);
+  }
+
+  // ==================== LANGUAGE DETECTION ====================
+
+  private detectLanguage(message: string): Language {
+    const cached = this.languageCache.get(message);
+    if (cached) return cached;
+
+    // Priority 1: Vietnamese diacritic characters
+    if (VIETNAMESE_CHAR_REGEX.test(message)) {
+      return this.setCachedLanguage(message, 'vi');
+    }
+
+    // Priority 2: Keyword frequency scoring
+    const lowerMsg = message.toLowerCase();
+    const viScore = VIETNAMESE_KEYWORDS.filter(kw => lowerMsg.includes(kw)).length;
+    const enScore = ENGLISH_KEYWORDS.filter(kw => lowerMsg.includes(kw)).length;
+
+    const lang: Language = viScore > enScore ? 'vi' : 'en';
+    return this.setCachedLanguage(message, lang);
+  }
+
+  private setCachedLanguage(message: string, lang: Language): Language {
+    if (this.languageCache.size >= LANGUAGE_CACHE_MAX_SIZE) this.languageCache.clear();
+    this.languageCache.set(message, lang);
+    return lang;
+  }
+
+  // ==================== CATEGORY DETECTION ====================
+
+  private detectCategory(message: string): MedicalCategory {
+    const cached = this.categoryCache.get(message);
+    if (cached) return cached;
+
+    const lowerMsg = message.toLowerCase();
+
+    for (const [cat, keywords] of Object.entries(CATEGORY_KEYWORDS) as [MedicalCategory, string[]][]) {
+      if (cat === 'general') continue;
+      if (keywords.some(kw => lowerMsg.includes(kw.toLowerCase()))) {
+        return this.setCachedCategory(message, cat);
       }
-    };
+    }
 
-    const languageResponses = responses[language];
-    const categoryKey = category === 'emergency' ? 'emergency' 
-                      : category === 'cardiology' ? 'cardiology'
-                      : category === 'medications' ? 'medications'
-                      : 'general';
-    
-    return languageResponses[categoryKey as keyof typeof languageResponses];
+    return this.setCachedCategory(message, 'general');
   }
 
-  private getCategoryPrompt(category: string, language: 'en' | 'vi'): string {
-    const prompts = {
-      cardiology: language === 'vi' 
-        ? `TIM MẠCH - SỨC KHỎE TIM VÀ MẠCH MÁU
-Giải thích các bệnh tim, triệu chứng, xét nghiệm và lối sống tốt cho tim.`
-        : `CARDIOLOGY - HEART AND CARDIOVASCULAR HEALTH
-Explain heart conditions, symptoms, tests, and heart-healthy lifestyle.`,
-
-      dermatology: language === 'vi'
-        ? `DA LIỄU - SỨC KHỎE DA, TÓC VÀ MÓNG
-Giải thích các bệnh da, chăm sóc da và điều trị.`
-        : `DERMATOLOGY - SKIN, HAIR, AND NAIL HEALTH
-Explain skin conditions, skincare, and treatments.`,
-
-      neurology: language === 'vi'
-        ? `THẦN KINH - BỘ NÃO VÀ HỆ THẦN KINH
-Giải thích các triệu chứng thần kinh, chức năng não và sức khỏe nhận thức.`
-        : `NEUROLOGY - BRAIN AND NERVOUS SYSTEM
-Explain neurological symptoms, brain function, and cognitive health.`,
-
-      general: language === 'vi'
-        ? `TỔNG QUÁT - TƯ VẤN Y TẾ CHUNG
-Cung cấp thông tin y tế tổng quát và hướng dẫn chăm sóc sức khỏe cơ bản.`
-        : `GENERAL - COMPREHENSIVE HEALTH CONSULTATION
-Provide general medical information and basic healthcare guidance.`
-    };
-
-    return prompts[category as keyof typeof prompts] || prompts.general;
+  private setCachedCategory(message: string, cat: MedicalCategory): MedicalCategory {
+    if (this.categoryCache.size >= CATEGORY_CACHE_MAX_SIZE) this.categoryCache.clear();
+    this.categoryCache.set(message, cat);
+    return cat;
   }
 
-  // ==================== UTILITY METHODS ====================
+  // ==================== EMERGENCY DETECTION ====================
 
-  private handleEmergencySituation(protocol: string, userMessage: string, language: 'en' | 'vi'): AIResponse {
-    const emergencyProtocols = this.getEmergencyProtocols(language);
-    const emergencyResponse = emergencyProtocols[protocol] || emergencyProtocols.cardiac_emergency;
+  private detectEmergency(message: string): {
+    isEmergency: boolean;
+    protocol?: EmergencyProtocol;
+  } {
+    const lowerMsg = message.toLowerCase();
 
-    const suggestedActions = language === 'vi' 
-      ? ['Gọi cấp cứu 115', 'Đến bệnh viện gần nhất', 'Liên hệ người thân']
-      : ['Call emergency 115', 'Go to nearest hospital', 'Contact family member'];
+    for (const [protocol, keywords] of Object.entries(EMERGENCY_KEYWORDS) as [EmergencyProtocol, string[]][]) {
+      if (keywords.some(kw => lowerMsg.includes(kw.toLowerCase()))) {
+        return { isEmergency: true, protocol };
+      }
+    }
+
+    return { isEmergency: false };
+  }
+
+  // ==================== SYSTEM PROMPT ====================
+
+  private buildSystemPrompt(): string {
+    return `Bạn là trợ lý AI y tế thông minh, đồng cảm và SONG NGỮ (Tiếng Anh & Tiếng Việt).
+
+QUY TẮC NGÔN NGỮ — BẮT BUỘC:
+- Người dùng hỏi bằng TIẾNG ANH → Trả lời 100% bằng TIẾNG ANH
+- Người dùng hỏi bằng TIẾNG VIỆT → Trả lời 100% bằng TIẾNG VIỆT
+- KHÔNG ĐƯỢC trộn lẫn hai ngôn ngữ trong cùng một câu trả lời
+
+PHẠM VI HỖ TRỢ:
+- Cung cấp thông tin y tế tổng quát trên mọi chuyên khoa
+- Giải thích thuật ngữ y khoa, thủ thuật, phác đồ điều trị
+- Tư vấn lối sống lành mạnh dựa trên bằng chứng khoa học
+- Thông tin về thuốc và thiết bị y tế
+
+NGUYÊN TẮC AN TOÀN — BẮT BUỘC:
+✅ LUÔN khuyến nghị gặp bác sĩ để được tư vấn chính xác
+✅ LUÔN thêm tuyên bố từ chối trách nhiệm ở cuối câu trả lời
+🚨 LUÔN hướng dẫn gọi 115 / 911 ngay cho các triệu chứng nguy hiểm
+❌ KHÔNG BAO GIỜ chẩn đoán bệnh hoặc kê đơn thuốc
+❌ KHÔNG BAO GIỜ tự nhận mình thay thế được bác sĩ
+
+CHUYÊN KHOA HỖ TRỢ:
+Tim mạch | Da liễu | Thần kinh | Nhi khoa | Chỉnh hình
+Nhãn khoa | Nha khoa | Tâm thần | Phụ khoa | Nội tiết | Tiêu hóa
+
+ĐỊNH DẠNG TRẢ LỜI:
+- Ngôn ngữ tự nhiên, ấm áp, dễ hiểu
+- Dùng emoji một cách có chọn lọc để tăng khả năng đọc
+- Chia thành các mục rõ ràng nếu câu trả lời dài
+- Kết thúc bằng tuyên bố từ chối trách nhiệm ngắn gọn`;
+  }
+
+  // ==================== PROMPT BUILDER ====================
+
+  private buildCategoryContext(category: MedicalCategory, language: Language): string {
+    const contexts: Partial<Record<MedicalCategory, Record<Language, string>>> = {
+      cardiology: {
+        vi: 'Chuyên khoa: TIM MẠCH. Tập trung vào bệnh tim, huyết áp, mạch máu và lối sống tốt cho tim.',
+        en: 'Specialty: CARDIOLOGY. Focus on heart disease, blood pressure, vascular health, and heart-healthy lifestyle.',
+      },
+      dermatology: {
+        vi: 'Chuyên khoa: DA LIỄU. Tập trung vào bệnh da, chăm sóc da và phương pháp điều trị.',
+        en: 'Specialty: DERMATOLOGY. Focus on skin conditions, skincare routines, and treatments.',
+      },
+      neurology: {
+        vi: 'Chuyên khoa: THẦN KINH. Tập trung vào não bộ, hệ thần kinh và các triệu chứng thần kinh.',
+        en: 'Specialty: NEUROLOGY. Focus on brain, nervous system, and neurological symptoms.',
+      },
+      pediatrics: {
+        vi: 'Chuyên khoa: NHI KHOA. Tập trung vào sức khỏe trẻ em, phát triển và tiêm chủng.',
+        en: 'Specialty: PEDIATRICS. Focus on child health, development, and immunizations.',
+      },
+      orthopedics: {
+        vi: 'Chuyên khoa: CHỈNH HÌNH. Tập trung vào xương, khớp, cơ bắp và chấn thương vận động.',
+        en: 'Specialty: ORTHOPEDICS. Focus on bones, joints, muscles, and sports injuries.',
+      },
+      ophthalmology: {
+        vi: 'Chuyên khoa: NHÃN KHOA. Tập trung vào sức khỏe mắt, thị lực và các bệnh về mắt.',
+        en: 'Specialty: OPHTHALMOLOGY. Focus on eye health, vision, and eye diseases.',
+      },
+      medications: {
+        vi: 'Chủ đề: THUỐC & DƯỢC PHẨM. Thông tin về thuốc, liều dùng, tác dụng phụ và tương tác thuốc.',
+        en: 'Topic: MEDICATIONS & PHARMACEUTICALS. Information on drugs, dosages, side effects, and interactions.',
+      },
+    };
+
+    return (
+      contexts[category]?.[language] ??
+      (language === 'vi'
+        ? 'Chuyên khoa: TỔNG QUÁT. Cung cấp tư vấn y tế toàn diện và hướng dẫn sức khỏe cơ bản.'
+        : 'Specialty: GENERAL MEDICINE. Provide comprehensive medical information and basic health guidance.')
+    );
+  }
+
+  private buildUserPrompt(
+    userMessage: string,
+    category: MedicalCategory,
+    language: Language,
+  ): string {
+    const langInstruction =
+      language === 'vi'
+        ? '🇻🇳 QUAN TRỌNG: Người dùng đang dùng TIẾNG VIỆT. Bạn PHẢI trả lời 100% bằng TIẾNG VIỆT.'
+        : '🇬🇧 IMPORTANT: User is writing in ENGLISH. You MUST respond 100% in ENGLISH.';
+
+    const historyText = this.serializeHistory();
+    const parts: string[] = [
+      this.buildCategoryContext(category, language),
+      langInstruction,
+    ];
+
+    if (historyText) {
+      parts.push(
+        language === 'vi'
+          ? `LỊCH SỬ HỘI THOẠI GẦN ĐÂY:\n${historyText}`
+          : `RECENT CONVERSATION HISTORY:\n${historyText}`,
+      );
+    }
+
+    parts.push(
+      language === 'vi'
+        ? `CÂU HỎI: ${userMessage}`
+        : `QUESTION: ${userMessage}`,
+    );
+
+    parts.push(
+      language === 'vi'
+        ? 'Hãy trả lời bằng TIẾNG VIỆT, ngôn ngữ tự nhiên, có cấu trúc rõ ràng và tuyên bố từ chối trách nhiệm.'
+        : 'Respond in ENGLISH, use natural language, clear structure, and include a safety disclaimer.',
+    );
+
+    return parts.join('\n\n');
+  }
+
+  // ==================== GROQ API CALL ====================
+
+  private async callGroqAPI(userPrompt: string, systemPrompt: string): Promise<string> {
+    this.recordRequest();
+
+    try {
+      const completion = await this.groq.chat.completions.create({
+        model: GROQ_MODEL,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        temperature: 0.7,
+        max_tokens: MAX_OUTPUT_TOKENS,
+        top_p: 0.95,
+        stream: false,
+      });
+
+      const text = completion.choices[0]?.message?.content ?? '';
+
+      if (!text.trim()) {
+        throw new Error('Empty response from Groq API');
+      }
+
+      return text;
+    } catch (error: unknown) {
+      const err = error as { status?: number; message?: string; error?: { type?: string } };
+
+      const isQuota =
+        err?.status === 429 ||
+        err?.error?.type === 'tokens' ||
+        err?.message?.toLowerCase().includes('rate limit') ||
+        err?.message?.toLowerCase().includes('quota') ||
+        err?.message?.toLowerCase().includes('too many requests');
+
+      if (isQuota) {
+        this.markQuotaExceeded();
+        throw new QuotaExceededError();
+      }
+
+      throw error;
+    }
+  }
+
+  // ==================== SMART GENERATE WITH FALLBACK ====================
+
+  private async tryGenerate(
+    userPrompt: string,
+    category: MedicalCategory,
+    language: Language,
+  ): Promise<{ text: string; usedFallback: boolean }> {
+    // Check circuit breaker
+    if (this.isQuotaExceeded()) {
+      console.info('ℹ️ Groq circuit breaker active — using fallback');
+      return { text: this.getFallbackText(category, language), usedFallback: true };
+    }
+
+    // Check local rate limit
+    if (this.isRateLimited()) {
+      console.warn('⚠️ Local rate limit reached — using fallback');
+      return { text: this.getFallbackText(category, language), usedFallback: true };
+    }
+
+    try {
+      const systemPrompt = this.buildSystemPrompt();
+      const text = await this.callGroqAPI(userPrompt, systemPrompt);
+      return { text, usedFallback: false };
+    } catch (error) {
+      if (error instanceof QuotaExceededError) {
+        return { text: this.getFallbackText(category, language), usedFallback: true };
+      }
+
+      console.error('❌ Unexpected Groq API error:', (error as Error)?.message);
+      return { text: this.getFallbackText(category, language), usedFallback: true };
+    }
+  }
+
+  // ==================== FALLBACK TEXT ====================
+
+  private getFallbackText(category: MedicalCategory, language: Language): string {
+    const key: FallbackKey =
+      category === 'emergency'
+        ? 'emergency'
+        : category === 'cardiology'
+          ? 'cardiology'
+          : category === 'medications'
+            ? 'medications'
+            : 'general';
+
+    return FALLBACK_RESPONSES[language][key];
+  }
+
+  // ==================== MAIN: PROCESS MESSAGE ====================
+
+  public async processMessage(userMessage: string): Promise<AIResponse> {
+    try {
+      if (!userMessage?.trim()) throw new EmptyMessageError();
+
+      const language = this.detectLanguage(userMessage);
+      const category = this.detectCategory(userMessage);
+
+      // Emergency fast-path — no API call needed
+      const emergencyCheck = this.detectEmergency(userMessage);
+      if (emergencyCheck.isEmergency && emergencyCheck.protocol) {
+        return this.buildEmergencyResponse(emergencyCheck.protocol, language);
+      }
+
+      this.addToHistory({
+        role: 'user',
+        content: userMessage,
+        timestamp: new Date(),
+        category,
+        language,
+      });
+
+      const userPrompt = this.buildUserPrompt(userMessage, category, language);
+      const { text: responseText, usedFallback } = await this.tryGenerate(
+        userPrompt,
+        category,
+        language,
+      );
+
+      this.addToHistory({
+        role: 'assistant',
+        content: responseText,
+        timestamp: new Date(),
+        category,
+        language,
+      });
+
+      const analysis = this.analyzeResponse(responseText, language);
+
+      return {
+        response: responseText,
+        confidence: usedFallback ? 0.5 : analysis.confidence,
+        suggestedActions: analysis.suggestedActions,
+        emergencyAlert: false,
+        category,
+        relatedSpecialties: this.getRelatedSpecialties(category),
+        language,
+        usedFallback,
+        provider: 'groq',
+      };
+    } catch (error) {
+      if (!(error instanceof EmptyMessageError)) {
+        console.error('❌ Unexpected error in processMessage:', error);
+      }
+
+      const language = this.detectLanguage(userMessage ?? '');
+      return this.buildErrorResponse(language);
+    }
+  }
+
+  // ==================== RESPONSE BUILDERS ====================
+
+  private buildEmergencyResponse(protocol: EmergencyProtocol, language: Language): AIResponse {
+    const responseText =
+      EMERGENCY_PROTOCOLS[language][protocol] ??
+      EMERGENCY_PROTOCOLS[language].cardiac_emergency;
 
     return {
-      response: emergencyResponse,
-      confidence: 0.95,
-      suggestedActions,
+      response: responseText,
+      confidence: 0.98,
+      suggestedActions:
+        language === 'vi'
+          ? ['Gọi cấp cứu 115', 'Đến bệnh viện gần nhất', 'Liên hệ người thân']
+          : ['Call emergency 911/115', 'Go to nearest hospital', 'Contact family member'],
       emergencyAlert: true,
       category: 'emergency',
       relatedSpecialties: ['Emergency Medicine'],
-      language
+      language,
+      provider: 'local',
     };
   }
 
-  private analyzeResponse(responseText: string, category: string, language: 'en' | 'vi'): { confidence: number; suggestedActions: string[] } {
-    let confidence = 0.7;
-    const suggestedActions: string[] = [];
+  private buildErrorResponse(language: Language): AIResponse {
+    const response =
+      language === 'vi'
+        ? `Xin lỗi, tôi đang gặp sự cố kỹ thuật. Vui lòng:\n1. Liên hệ trực tiếp với nhà cung cấp dịch vụ y tế\n2. Gọi 115 nếu cần cấp cứu\n3. Đến cơ sở y tế gần nhất`
+        : `I apologize for the technical difficulty. Please:\n1. Contact your healthcare provider directly\n2. Call 911/115 if this is an emergency\n3. Visit the nearest medical facility`;
 
-    // Confidence analysis
-    const highConfidenceIndicators = language === 'vi'
-      ? ['nghiên cứu cho thấy', 'nghiên cứu lâm sàng', 'dựa trên bằng chứng', 'hướng dẫn y khoa']
-      : ['research shows', 'clinical studies', 'evidence-based', 'medical guidelines'];
-    
-    const cautionIndicators = language === 'vi'
-      ? ['có thể', 'đôi khi', 'trong một số trường hợp', 'thường']
-      : ['may be', 'could possibly', 'sometimes', 'in some cases'];
-
-    if (highConfidenceIndicators.some(indicator => responseText.toLowerCase().includes(indicator))) {
-      confidence = 0.85;
-    }
-    if (cautionIndicators.some(indicator => responseText.toLowerCase().includes(indicator))) {
-      confidence = Math.min(confidence, 0.6);
-    }
-
-    // Suggested actions
-    const actionMap = {
-      vi: {
-        doctor: 'Đặt lịch khám với bác sĩ',
-        pharmacist: 'Tham khảo dược sĩ về thuốc',
-        test: 'Thảo luận các xét nghiệm với bác sĩ',
-        emergency: 'Tìm kiếm chăm sóc y tế ngay lập tức'
-      },
-      en: {
-        doctor: 'Schedule appointment with doctor',
-        pharmacist: 'Consult pharmacist about medications',
-        test: 'Discuss testing options with doctor',
-        emergency: 'Seek immediate medical attention'
-      }
+    return {
+      response,
+      confidence: 0.3,
+      suggestedActions:
+        language === 'vi'
+          ? ['Liên hệ nhà cung cấp y tế', 'Gọi cấp cứu nếu cần']
+          : ['Contact healthcare provider', 'Call emergency services if needed'],
+      emergencyAlert: false,
+      category: 'technical',
+      language,
+      usedFallback: true,
+      provider: 'none',
     };
+  }
 
-    const actions = actionMap[language];
+  // ==================== RESPONSE ANALYSIS ====================
 
-    if (responseText.toLowerCase().includes(language === 'vi' ? 'bác sĩ' : 'doctor')) {
-      suggestedActions.push(actions.doctor);
-    }
-    if (responseText.toLowerCase().includes(language === 'vi' ? 'thuốc' : 'medication')) {
-      suggestedActions.push(actions.pharmacist);
-    }
-    if (responseText.toLowerCase().includes(language === 'vi' ? 'xét nghiệm' : 'test')) {
-      suggestedActions.push(actions.test);
-    }
-    if (responseText.toLowerCase().includes(language === 'vi' ? 'cấp cứu' : 'emergency')) {
-      suggestedActions.push(actions.emergency);
+  private analyzeResponse(
+    responseText: string,
+    language: Language,
+  ): { confidence: number; suggestedActions: string[] } {
+    const lower = responseText.toLowerCase();
+    let confidence = 0.78;
+
+    const highConfidenceTerms =
+      language === 'vi'
+        ? ['nghiên cứu cho thấy', 'dựa trên bằng chứng', 'hướng dẫn y khoa', 'theo khuyến cáo']
+        : ['research shows', 'evidence-based', 'medical guidelines', 'clinical studies'];
+
+    const cautionTerms =
+      language === 'vi'
+        ? ['có thể', 'đôi khi', 'trong một số trường hợp', 'thường gặp']
+        : ['may be', 'could possibly', 'sometimes', 'in some cases'];
+
+    if (highConfidenceTerms.some(t => lower.includes(t))) confidence = 0.88;
+    if (cautionTerms.some(t => lower.includes(t))) confidence = Math.min(confidence, 0.65);
+
+    const actionMap =
+      language === 'vi'
+        ? {
+            doctor:     { trigger: 'bác sĩ',    label: 'Đặt lịch khám với bác sĩ' },
+            pharmacist: { trigger: 'dược sĩ',   label: 'Tham khảo dược sĩ về thuốc' },
+            test:       { trigger: 'xét nghiệm', label: 'Thực hiện xét nghiệm theo chỉ định' },
+            emergency:  { trigger: 'cấp cứu',   label: 'Tìm kiếm chăm sóc y tế ngay lập tức' },
+            specialist: { trigger: 'chuyên khoa', label: 'Tham khảo bác sĩ chuyên khoa' },
+          }
+        : {
+            doctor:     { trigger: 'doctor',     label: 'Schedule an appointment with your doctor' },
+            pharmacist: { trigger: 'pharmacist', label: 'Consult a pharmacist about medications' },
+            test:       { trigger: 'test',        label: 'Get recommended tests done' },
+            emergency:  { trigger: 'emergency',  label: 'Seek immediate medical attention' },
+            specialist: { trigger: 'specialist', label: 'See a specialist for further evaluation' },
+          };
+
+    const suggestedActions: string[] = [];
+    for (const { trigger, label } of Object.values(actionMap)) {
+      if (lower.includes(trigger) && !suggestedActions.includes(label)) {
+        suggestedActions.push(label);
+      }
     }
 
     return { confidence, suggestedActions };
-  }
-
-  private getRelatedSpecialties(category: string): string[] {
-    const specialtyMap: { [key: string]: string[] } = {
-      cardiology: ['Cardiology'],
-      dermatology: ['Dermatology'],
-      neurology: ['Neurology'],
-      pediatrics: ['Pediatrics'],
-      orthopedics: ['Orthopedics'],
-      ophthalmology: ['Ophthalmology'],
-      medications: ['All Specialties'],
-      emergency: ['Emergency Medicine'],
-      general: ['General Practice']
-    };
-
-    return specialtyMap[category] || ['General Practice'];
   }
 
   // ==================== HISTORY MANAGEMENT ====================
 
   private addToHistory(message: AIMessage): void {
     this.conversationHistory.push(message);
-    
-    // Maintain history length limit
-    if (this.conversationHistory.length > this.maxHistoryLength) {
-      this.conversationHistory = this.conversationHistory.slice(-this.maxHistoryLength);
-    }
 
-    // Clear cache if it gets too large
-    if (this.languageCache.size > 100) this.languageCache.clear();
-    if (this.categoryCache.size > 100) this.categoryCache.clear();
+    if (this.conversationHistory.length > MAX_HISTORY_LENGTH) {
+      this.conversationHistory = this.conversationHistory.slice(-MAX_HISTORY_LENGTH);
+    }
   }
 
-  private getConversationHistory(): string {
+  private serializeHistory(): string {
     return this.conversationHistory
       .map(msg => {
-        const role = msg.role === 'user' 
-          ? (msg.language === 'vi' ? 'Bệnh nhân' : 'Patient')
-          : (msg.language === 'vi' ? 'Trợ lý AI' : 'AI Assistant');
+        const role =
+          msg.role === 'user'
+            ? msg.language === 'vi' ? 'Bệnh nhân' : 'Patient'
+            : msg.language === 'vi' ? 'Trợ lý AI' : 'AI Assistant';
         return `${role}: ${msg.content}`;
       })
       .join('\n');
@@ -736,174 +865,135 @@ Provide general medical information and basic healthcare guidance.`
   // ==================== ADDITIONAL SERVICES ====================
 
   public async getMedicationInfo(medicationName: string): Promise<MedicationInfo> {
-    const prompt = `
-    Cung cấp thông tin chi tiết về thuốc: ${medicationName}
-    
-    Bao gồm:
-    1. Tên thương mại và tên generic
-    2. Công dụng và chỉ định
-    3. Liều dùng thông thường
-    4. Tác dụng phụ thường gặp
-    5. Chống chỉ định
-    6. Tương tác thuốc quan trọng
-    7. Lưu ý đặc biệt
-    
-    Trả lời bằng tiếng Việt, định dạng rõ ràng, dễ hiểu.
-    `;
+    const prompt = `Cung cấp thông tin chi tiết về thuốc: "${medicationName}"
 
-    let response: string;
-    try {
-      if (this.checkRateLimit()) {
-        response = await this.generateAIResponse(prompt, 'medications', 'vi');
-      } else {
-        response = this.generateFallbackAIResponse(medicationName, 'medications', 'vi');
-      }
-    } catch (error) {
-      response = this.generateFallbackAIResponse(medicationName, 'medications', 'vi');
-    }
-    
+Bao gồm:
+1. Tên thương mại và tên generic
+2. Công dụng và chỉ định điều trị
+3. Liều dùng thông thường cho người lớn
+4. Tác dụng phụ thường gặp và hiếm gặp
+5. Chống chỉ định
+6. Tương tác thuốc quan trọng
+7. Lưu ý đặc biệt (thai kỳ, người cao tuổi, v.v.)
+
+Trả lời bằng TIẾNG VIỆT, rõ ràng và có cấu trúc. Kết thúc bằng khuyến nghị tham khảo bác sĩ.`;
+
+    const { text } = await this.tryGenerate(prompt, 'medications', 'vi');
+
     return {
       name: medicationName,
-      information: response,
+      information: text,
       confidence: 0.85,
-      lastUpdated: new Date().toISOString()
+      lastUpdated: new Date().toISOString(),
     };
   }
 
   public async explainMedicalTerm(term: string): Promise<TermExplanation> {
-    const prompt = `
-    Giải thích thuật ngữ y khoa: "${term}"
-    
-    Bao gồm:
-    1. Định nghĩa đơn giản, dễ hiểu
-    2. Giải thích chi tiết
-    3. Ví dụ thực tế (nếu có)
-    4. Liên quan đến bệnh lý nào
-    5. Cách phát âm (nếu cần)
-    
-    Trả lời bằng tiếng Việt, sử dụng ngôn ngữ thông thường.
-    `;
+    const prompt = `Giải thích thuật ngữ y khoa: "${term}"
 
-    let response: string;
-    try {
-      if (this.checkRateLimit()) {
-        response = await this.generateAIResponse(prompt, 'general', 'vi');
-      } else {
-        response = `Xin lỗi, hiện tại không thể tra cứu thuật ngữ "${term}" do vượt quá giới hạn API. Vui lòng tham khảo từ điển y khoa hoặc hỏi bác sĩ.`;
-      }
-    } catch (error) {
-      response = `Xin lỗi, hiện tại không thể tra cứu thuật ngữ "${term}" do vượt quá giới hạn API. Vui lòng tham khảo từ điển y khoa hoặc hỏi bác sĩ.`;
-    }
-    
+Bao gồm:
+1. Định nghĩa đơn giản, dễ hiểu cho người không chuyên
+2. Giải thích chi tiết hơn về mặt y khoa
+3. Ví dụ thực tế trong lâm sàng
+4. Liên quan đến bệnh lý hoặc tình trạng nào
+5. Cách phát âm (nếu là từ tiếng Latin/Hy Lạp)
+
+Trả lời bằng TIẾNG VIỆT, ngôn ngữ gần gũi và dễ hiểu.`;
+
+    const { text } = await this.tryGenerate(prompt, 'general', 'vi');
+
     return {
       term,
-      explanation: response,
-      confidence: 0.9
+      explanation: text,
+      confidence: 0.9,
     };
   }
 
   public async getLifestyleAdvice(topic: string): Promise<LifestyleAdvice> {
-    const prompt = `
-    Cung cấp lời khuyên về lối sống cho: ${topic}
-    
-    Bao gồm:
-    1. Khuyến nghị về chế độ ăn uống
-    2. Hoạt động thể chất phù hợp
-    3. Thói quen sinh hoạt lành mạnh
-    4. Cần tránh những gì
-    5. Mẹo thực tế để áp dụng
-    
-    Trả lời bằng tiếng Việt, thực tế và dễ áp dụng.
-    `;
+    const prompt = `Cung cấp lời khuyên về lối sống cho chủ đề: "${topic}"
 
-    let response: string;
-    try {
-      if (this.checkRateLimit()) {
-        response = await this.generateAIResponse(prompt, 'general', 'vi');
-      } else {
-        response = this.generateFallbackAIResponse(topic, 'general', 'vi');
-      }
-    } catch (error) {
-      response = this.generateFallbackAIResponse(topic, 'general', 'vi');
-    }
-    
+Bao gồm:
+1. Khuyến nghị chế độ ăn uống phù hợp
+2. Hoạt động thể chất và tập luyện thích hợp
+3. Thói quen sinh hoạt hàng ngày tốt cho sức khỏe
+4. Những điều cần tránh
+5. Mẹo thực tế để áp dụng trong cuộc sống
+
+Trả lời bằng TIẾNG VIỆT, thực tế, có thể áp dụng ngay và dựa trên bằng chứng khoa học.`;
+
+    const { text } = await this.tryGenerate(prompt, 'general', 'vi');
+
     return {
       topic,
-      advice: response,
-      confidence: 0.8,
-      category: 'lifestyle'
+      advice: text,
+      confidence: 0.82,
+      category: 'lifestyle',
     };
   }
 
-  // ==================== PUBLIC METHODS ====================
+  // ==================== PUBLIC UTILITIES ====================
 
   public clearHistory(): void {
     this.conversationHistory = [];
     this.languageCache.clear();
     this.categoryCache.clear();
+    console.info('🗑️ Conversation history and caches cleared');
   }
 
   public getHistory(): AIMessage[] {
     return [...this.conversationHistory];
   }
 
+  public getLastDetectedLanguage(): Language | null {
+    return this.conversationHistory.at(-1)?.language ?? null;
+  }
+
+  public getRateLimitStatus(): {
+    remaining: number;
+    resetIn: number;
+    quotaCircuitActive: boolean;
+    provider: string;
+    model: string;
+  } {
+    const now = Date.now();
+    return {
+      remaining: Math.max(0, MAX_REQUESTS_PER_MINUTE - this.requestCount),
+      resetIn: Math.max(0, this.requestResetTime - now),
+      quotaCircuitActive: this.isQuotaExceeded(),
+      provider: 'groq',
+      model: GROQ_MODEL,
+    };
+  }
+
   public getAvailableSpecialties(): string[] {
     return [
-      'Cardiology', 'Dermatology', 'Neurology', 'Pediatrics',
-      'Orthopedics', 'Ophthalmology', 'Dentistry', 'Psychiatry',
-      'Surgery', 'Gynecology', 'Endocrinology', 'Gastroenterology'
+      'Cardiology',
+      'Dermatology',
+      'Neurology',
+      'Pediatrics',
+      'Orthopedics',
+      'Ophthalmology',
+      'Dentistry',
+      'Psychiatry',
+      'Surgery',
+      'Gynecology',
+      'Endocrinology',
+      'Gastroenterology',
     ];
   }
 
-  public getLastDetectedLanguage(): 'en' | 'vi' | null {
-    if (this.conversationHistory.length === 0) return null;
-    const lastMessage = this.conversationHistory[this.conversationHistory.length - 1];
-    return lastMessage.language || null;
-  }
-
-  public getRateLimitStatus(): { remaining: number; resetIn: number } {
-    const now = Date.now();
-    const resetIn = Math.max(0, this.requestResetTime - now);
-    const remaining = Math.max(0, this.maxRequestsPerMinute - this.requestCount);
-    
-    return { remaining, resetIn };
-  }
-
-  // ==================== ERROR HANDLING ====================
-
-  private getFallbackResponse(language: 'en' | 'vi' = 'en'): AIResponse {
-    if (language === 'vi') {
-      return {
-        response: `Xin lỗi, tôi đang gặp sự cố kỹ thuật do vượt quá giới hạn sử dụng API. Vui lòng:
-
-1. Liên hệ trực tiếp với nhà cung cấp dịch vụ y tế của bạn
-2. Gọi dịch vụ cấp cứu 115 nếu cần thiết
-3. Đến cơ sở y tế gần nhất cho các vấn đề khẩn cấp
-
-Hệ thống sẽ tự động khôi phục trong vài phút. Cảm ơn sự thông cảm của bạn.`,
-        confidence: 0.3,
-        suggestedActions: ['Liên hệ nhà cung cấp dịch vụ y tế', 'Sử dụng dịch vụ cấp cứu nếu cần'],
-        emergencyAlert: false,
-        category: 'technical',
-        language: 'vi',
-        usedFallback: true
-      };
-    } else {
-      return {
-        response: `I apologize, I'm experiencing technical difficulties due to API quota limitations. Please:
-
-1. Contact your healthcare provider directly
-2. Call emergency services (911/115) if needed
-3. Visit the nearest medical facility for urgent concerns
-
-The system will automatically recover in a few minutes. Thank you for your understanding.`,
-        confidence: 0.3,
-        suggestedActions: ['Contact healthcare provider', 'Use emergency services if needed'],
-        emergencyAlert: false,
-        category: 'technical',
-        language: 'en',
-        usedFallback: true
-      };
-    }
+  private getRelatedSpecialties(category: MedicalCategory): string[] {
+    const map: Record<MedicalCategory, string[]> = {
+      cardiology:    ['Cardiology', 'Internal Medicine'],
+      dermatology:   ['Dermatology'],
+      neurology:     ['Neurology'],
+      pediatrics:    ['Pediatrics', 'Family Medicine'],
+      orthopedics:   ['Orthopedics', 'Physical Therapy'],
+      ophthalmology: ['Ophthalmology'],
+      medications:   ['All Specialties', 'Pharmacy'],
+      emergency:     ['Emergency Medicine'],
+      general:       ['General Practice', 'Family Medicine'],
+    };
+    return map[category] ?? ['General Practice'];
   }
 }

@@ -668,7 +668,7 @@ export const getMessageReactions = async (req: AuthRequest, res: ExpressResponse
     const userId = req.user?._id;
 
     const message = await Message.findById(messageId)
-      .select('reactions reactions_count')
+      .select('reactions reactions_count conversation_id')
       .populate('reactions.user_id', 'name avatar');
 
     if (!message) {
@@ -678,12 +678,10 @@ export const getMessageReactions = async (req: AuthRequest, res: ExpressResponse
       });
     }
 
-    const conversation = await Conversation.findOne({
-      _id: message.conversation_id,
-      participant_ids: userId
-    });
+    // Ensure the requester is a participant in the conversation.
+    const conversation = await Conversation.findById(message.conversation_id);
 
-    if (!conversation) {
+    if (!conversation || !conversation.participant_ids.some((p: any) => p.toString() === userId.toString())) {
       return res.status(403).json({
         success: false,
         message: 'Access denied'

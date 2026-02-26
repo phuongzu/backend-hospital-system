@@ -38,7 +38,7 @@ const ChatMessageSchema = new Schema<IChatMessage>({
     type: String, 
     required: true,
     trim: true,
-    maxlength: 2000
+    maxlength: 10000
   },
   timestamp: { 
     type: Date, 

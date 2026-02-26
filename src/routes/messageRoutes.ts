@@ -91,12 +91,12 @@ router.post('/send', validateRequest(SendMessageSchema, 'body'), sendMessage);
 router.get('/conversations', getConversations);
 router.get('/conversations/:conversationId/messages', getConversationMessages);
 router.patch('/conversations/:conversationId/read', markMessagesAsRead);
-router.patch('/messages/:messageId/edit', editMessage);
-router.delete('/messages/:messageId', deleteMessage);
-// Thêm vào file routes/messageRoutes.ts
-router.post('/messages/:messageId/react', protect, addReaction);
-router.get('/messages/:messageId/reactions', protect, getMessageReactions);
-router.delete('/messages/:messageId/reactions/me', protect, removeMyReactions);
+router.patch('/:messageId/edit', editMessage);
+router.delete('/:messageId', deleteMessage);
+// Reaction routes (mounted under /api/messages)
+router.post('/:messageId/react', protect, addReaction);
+router.get('/:messageId/reactions', protect, getMessageReactions);
+router.delete('/:messageId/reactions/me', protect, removeMyReactions);
 
 // ✅ File upload with error handling
 router.post(

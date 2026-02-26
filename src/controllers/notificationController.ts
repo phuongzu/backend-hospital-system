@@ -129,9 +129,7 @@ export const markAllAsRead = async (req: AuthRequest, res: Response): Promise<vo
     console.log('Doctor found:', doctor ? doctor._id.toString() : 'null');
 
     // Đếm trước khi update để verify
-    const beforeCount = await Notification.countDocuments({ isRead: false });
-    console.log('Total unread notifications in DB (all users):', beforeCount);
-
+    const beforeCount = await Notification.countDocuments({ read: false });    console.log('Total unread notifications in DB (all users):', beforeCount);
     // Build filter linh hoạt — bao gồm tất cả các field có thể lưu userId
     const orConditions: any[] = [
       { user_id: userId },
@@ -148,7 +146,7 @@ export const markAllAsRead = async (req: AuthRequest, res: Response): Promise<vo
 
     const filter = {
       $or: orConditions,
-      isRead: false,
+      read: false,
     };
 
     console.log('=== UPDATE FILTER ===');
@@ -179,10 +177,10 @@ export const markAllAsRead = async (req: AuthRequest, res: Response): Promise<vo
       filter,
       {
         $set: {
-          isRead: true,
-          readAt: new Date(),
-          updatedAt: new Date(),
-        }
+        read: true,
+        read_at: new Date(),
+        updated_at: new Date(),
+      }
       }
     );
 
