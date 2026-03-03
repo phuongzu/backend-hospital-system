@@ -546,7 +546,11 @@ logger.debug('Server configuration:', { SERVER_URL });
 
 // ✅ Security middleware - Must come first
 logger.info('🔒 Initializing security middleware');
-app.use(helmet()); // Set security HTTP headers
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" }
+  })
+);
 app.use(mongoSanitize()); // Sanitize data against NoSQL injection
 
 // ✅ Rate limiting

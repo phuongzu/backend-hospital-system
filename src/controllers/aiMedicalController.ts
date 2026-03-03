@@ -2,8 +2,10 @@ import { Request, Response } from 'express';
 import ChatSession, { IChatSession } from '../models/chatbot';
 import { AuthRequest } from '../middlewares/authmiddleware';
 import { AIMedicalService } from '../utils/aiMedicalService';
-import DrugCategory from '../models/DrugCategory';
-import Drug from '../models/Drug';
+import Specialty from '../models/specialty';
+import Doctor from '../models/doctor';
+import Appointment from '../models/appointment';
+import Review from '../models/review';
 
 
 const aiService = new AIMedicalService();
@@ -58,22 +60,22 @@ export const sendMessage = async (req: AuthRequest, res: Response): Promise<void
 
     console.log('📝 [DEBUG] Starting sendMessage process for user:', req.user._id);
 
-    // Tìm hoặc tạo session active
+    // Find or create active session
     const session = await ChatSession.findOrCreateActiveSession(req.user._id);
     console.log('📝 [DEBUG] Session found/created:', session.session_id);
 
-    // Thêm tin nhắn user vào session
+    // Add user message to session
     await session.addMessage({
       role: 'user',
       content: message.trim()
     });
     console.log('📝 [DEBUG] User message saved to session');
 
-    // Xử lý tin nhắn với AI
+    // Process message with AI
     const aiResponse = await aiService.processMessage(message);
     console.log('📝 [DEBUG] AI response received');
 
-    // Thêm phản hồi AI vào session
+    // Add AI response to session
     await session.addMessage({
       role: 'assistant',
       content: aiResponse.response,
@@ -81,11 +83,12 @@ export const sendMessage = async (req: AuthRequest, res: Response): Promise<void
       confidence: aiResponse.confidence,
       suggestedActions: aiResponse.suggestedActions,
       emergencyAlert: aiResponse.emergencyAlert,
-      relatedSpecialties: aiResponse.relatedSpecialties
+      relatedSpecialties: aiResponse.relatedSpecialties,
+      appointmentRecommendation: aiResponse.appointmentRecommendation
     });
     console.log('📝 [DEBUG] AI message saved to session');
 
-    // Lấy lại session để kiểm tra
+    // Retrieve updated session for verification
     const updatedSession = await ChatSession.findById(session._id);
     console.log('📝 [DEBUG] Final message count:', updatedSession?.messages?.length);
 
@@ -98,6 +101,7 @@ export const sendMessage = async (req: AuthRequest, res: Response): Promise<void
         emergencyAlert: aiResponse.emergencyAlert,
         category: aiResponse.category,
         relatedSpecialties: aiResponse.relatedSpecialties,
+        appointmentRecommendation: aiResponse.appointmentRecommendation,
         session_id: session.session_id
       }
     });
@@ -110,7 +114,6 @@ export const sendMessage = async (req: AuthRequest, res: Response): Promise<void
     });
   }
 };
-
 
 export const getChatHistory = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
@@ -236,6 +239,7 @@ export const cleanupExpiredSessions = async (req: Request, res: Response): Promi
     });
   }
 };
+
 export const chatWithAI = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { message } = req.body;
@@ -281,6 +285,7 @@ export const chatWithAI = async (req: AuthRequest, res: Response): Promise<void>
         emergencyAlert: response.emergencyAlert,
         category: response.category,
         relatedSpecialties: response.relatedSpecialties,
+        appointmentRecommendation: response.appointmentRecommendation,
         timestamp: new Date()
       }
     });
@@ -316,7 +321,7 @@ export const getSpecialties = async (req: AuthRequest, res: Response): Promise<v
     const specialties = aiService.getAvailableSpecialties();
     
     res.status(200).json({
-      success: false,
+      success: true,
       data: specialties
     });
   } catch (error) {
@@ -327,7 +332,6 @@ export const getSpecialties = async (req: AuthRequest, res: Response): Promise<v
     });
   }
 };
-
 
 export const getChatSessions = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
@@ -351,13 +355,13 @@ export const getChatSessions = async (req: AuthRequest, res: Response): Promise<
     .limit(Number(limit))
     .lean();
 
-    // Format dữ liệu cho frontend
+    // Format data for frontend
     const formattedSessions = sessions.map(session => ({
       id: session.session_id,
       title: session.title,
       preview: session.messages.length > 0 
         ? session.messages[session.messages.length - 1].content.substring(0, 100) + '...'
-        : 'Chưa có tin nhắn',
+        : 'No messages yet',
       date: session.last_activity,
       messageCount: session.messages.length,
       category: session.category
@@ -383,7 +387,7 @@ export const getChatSessions = async (req: AuthRequest, res: Response): Promise<
   }
 };
 
-// Tìm kiếm trong lịch sử chat
+// Search chat history
 export const searchChatHistory = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -433,7 +437,7 @@ export const searchChatHistory = async (req: AuthRequest, res: Response): Promis
       success: true,
       data: {
         query,
-        results: searchResults.slice(0, 10) // Giới hạn kết quả
+        results: searchResults.slice(0, 10) // Limit results
       }
     });
   } catch (error) {
@@ -445,7 +449,7 @@ export const searchChatHistory = async (req: AuthRequest, res: Response): Promis
   }
 };
 
-// Lấy thông tin thuốc
+// Get medication information
 export const getMedicationInfo = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { medicationName } = req.params;
@@ -458,7 +462,7 @@ export const getMedicationInfo = async (req: AuthRequest, res: Response): Promis
       return;
     }
 
-    // Sử dụng AI service để lấy thông tin thuốc
+    // Use AI service to get medication information
     const medicationInfo = await aiService.getMedicationInfo(medicationName);
 
     res.status(200).json({
@@ -473,7 +477,6 @@ export const getMedicationInfo = async (req: AuthRequest, res: Response): Promis
     });
   }
 };
-
 
 export const getMedicalTermExplanation = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
@@ -499,5 +502,428 @@ export const getMedicalTermExplanation = async (req: AuthRequest, res: Response)
       success: false,
       message: 'Failed to get medical term explanation'
     });
+  }
+};
+
+// Create appointment from suggestion
+export const createAppointmentFromSuggestion = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({
+        success: false,
+        message: 'Authentication required'
+      });
+      return;
+    }
+
+    const { session_id, specialty, symptoms, urgencyLevel } = req.body;
+
+    // Find chat session
+    const session = await ChatSession.findOne({
+      session_id,
+      user_id: req.user._id
+    });
+
+    if (!session) {
+      res.status(404).json({
+        success: false,
+        message: 'Chat session not found'
+      });
+      return;
+    }
+
+    // TODO: Create appointment in your appointment booking system
+    // const appointment = await Appointment.create({ ... });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        message: 'Appointment created successfully',
+        appointment: {
+          specialty,
+          symptoms,
+          urgencyLevel,
+          suggestedDate: new Date(Date.now() + 24 * 60 * 60 * 1000) // Example: tomorrow
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Error creating appointment:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create appointment'
+    });
+  }
+};
+
+export const getAllSpecialties = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const specialties = await Specialty.find({ isActive: true })
+      .select('_id name description icon color doctorCount')
+      .sort({ name: 1 });
+
+    res.status(200).json({
+      success: true,
+      data: specialties.map(s => ({
+        id: s._id,
+        name: s.name,
+        description: s.description,
+        icon: s.icon,
+        color: s.color,
+        doctorCount: s.doctorCount
+      }))
+    });
+  } catch (error) {
+    console.error('Error fetching specialties:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching specialties'
+    });
+  }
+};
+
+/**
+ * Lấy danh sách bác sĩ theo specialty với availability
+ */
+export const getDoctorsBySpecialty = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { specialty_id } = req.params;
+    const { date } = req.query;
+
+    if (!specialty_id) {
+      res.status(400).json({
+        success: false,
+        message: 'Specialty ID is required'
+      });
+      return;
+    }
+
+    // Kiểm tra specialty tồn tại
+    const specialty = await Specialty.findById(specialty_id);
+    if (!specialty) {
+      res.status(404).json({
+        success: false,
+        message: 'Specialty not found'
+      });
+      return;
+    }
+
+    // Tìm bác sĩ theo specialty
+    const doctors = await Doctor.find({ 
+      specialty_id,
+      isAvailable: true 
+    })
+    .populate('user_id', 'name email phoneNumber avatar')
+    .select('consultation_fee years_of_experience qualifications achievements');
+
+    const targetDate = date ? new Date(date as string) : new Date();
+    if (targetDate <= new Date()) {
+      targetDate.setDate(targetDate.getDate() + 1);
+    }
+    const dateStr = targetDate.toISOString().split('T')[0];
+
+    const doctorsWithAvailability = [];
+
+    for (const doctor of doctors) {
+      // Kiểm tra availability
+      const startOfDay = new Date(targetDate);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(targetDate);
+      endOfDay.setHours(23, 59, 59, 999);
+
+      const bookedAppointments = await Appointment.find({
+        doctor_id: doctor._id,
+        appointment_date: { $gte: startOfDay, $lte: endOfDay },
+        status: { $in: ['pending', 'confirmed'] }
+      }).select('time_slot');
+
+      const bookedSlots = bookedAppointments.map(app => app.time_slot);
+      
+      const allTimeSlots = [
+        '09:00', '09:30', '10:00', '10:30', '11:00', '11:30',
+        '14:00', '14:30', '15:00', '15:30', '16:00', '16:30'
+      ];
+
+      const availableSlots = allTimeSlots.filter(slot => !bookedSlots.includes(slot));
+
+      // Tính rating trung bình
+      const reviews = await Review.aggregate([
+        { $match: { doctor_id: doctor._id } },
+        { $group: { 
+          _id: null, 
+          avgRating: { $avg: '$rating' },
+          totalReviews: { $sum: 1 }
+        }}
+      ]);
+
+      const avgRating = reviews.length > 0 ? reviews[0].avgRating : 0;
+      const totalReviews = reviews.length > 0 ? reviews[0].totalReviews : 0;
+
+      doctorsWithAvailability.push({
+        _id: doctor._id,
+        name: (doctor as any).user_id?.name || 'Doctor',
+        avatar: (doctor as any).user_id?.avatar,
+        email: (doctor as any).user_id?.email,
+        phone: (doctor as any).user_id?.phoneNumber,
+        specialty: {
+          id: specialty._id,
+          name: specialty.name,
+          icon: specialty.icon,
+          color: specialty.color
+        },
+        consultation_fee: doctor.consultation_fee,
+        years_of_experience: doctor.years_of_experience,
+        qualifications: doctor.qualifications,
+        achievements: doctor.achievements,
+        rating: {
+          average: avgRating,
+          total: totalReviews
+        },
+        available_slots: availableSlots,
+        next_available_date: dateStr,
+        is_available_today: availableSlots.length > 0
+      });
+    }
+
+    // Sắp xếp: bác sĩ có rating cao lên đầu, sau đó đến kinh nghiệm
+    doctorsWithAvailability.sort((a, b) => {
+      if (a.rating.average !== b.rating.average) {
+        return b.rating.average - a.rating.average;
+      }
+      return b.years_of_experience - a.years_of_experience;
+    });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        specialty: {
+          id: specialty._id,
+          name: specialty.name,
+          description: specialty.description,
+          icon: specialty.icon,
+          color: specialty.color
+        },
+        date: dateStr,
+        doctors: doctorsWithAvailability,
+        total_doctors: doctorsWithAvailability.length,
+        available_today: doctorsWithAvailability.filter(d => d.is_available_today).length
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching doctors by specialty:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching doctors'
+    });
+  }
+};
+
+// Update findDoctorsForAppointment để sử dụng dynamic specialty
+export const findDoctorsForAppointment = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({
+        success: false,
+        message: 'Authentication required'
+      });
+      return;
+    }
+
+    const { specialty_name, date, urgency_level } = req.query;
+
+    if (!specialty_name) {
+      res.status(400).json({
+        success: false,
+        message: 'Specialty name is required'
+      });
+      return;
+    }
+
+    // Tìm specialty theo tên (không phân biệt hoa thường)
+    const specialty = await Specialty.findOne({ 
+      name: { $regex: new RegExp(specialty_name as string, 'i') },
+      isActive: true 
+    });
+
+    if (!specialty) {
+      res.status(404).json({
+        success: false,
+        message: 'Specialty not found'
+      });
+      return;
+    }
+
+    // Tìm bác sĩ theo specialty
+    const doctors = await Doctor.find({ 
+      specialty_id: specialty._id,
+      isAvailable: true 
+    }).populate('user_id', 'name email');
+
+    const availableDoctors = [];
+    const targetDate = date ? new Date(date as string) : new Date();
+    targetDate.setDate(targetDate.getDate() + 1);
+    const dateStr = targetDate.toISOString().split('T')[0];
+
+    for (const doctor of doctors) {
+      const startOfDay = new Date(targetDate);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(targetDate);
+      endOfDay.setHours(23, 59, 59, 999);
+
+      const bookedAppointments = await Appointment.find({
+        doctor_id: doctor._id,
+        appointment_date: { $gte: startOfDay, $lte: endOfDay },
+        status: { $in: ['pending', 'confirmed'] }
+      }).select('time_slot');
+
+      const bookedSlots = bookedAppointments.map(app => app.time_slot);
+      
+      const allTimeSlots = [
+        '09:00', '09:30', '10:00', '10:30', '11:00', '11:30',
+        '14:00', '14:30', '15:00', '15:30', '16:00', '16:30'
+      ];
+
+      const availableSlots = allTimeSlots.filter(slot => !bookedSlots.includes(slot));
+
+      if (availableSlots.length > 0) {
+        availableDoctors.push({
+          _id: doctor._id,
+          name: (doctor as any).user_id?.name || 'Doctor',
+          specialty: {
+            id: specialty._id,
+            name: specialty.name,
+            icon: specialty.icon
+          },
+          consultation_fee: doctor.consultation_fee,
+          years_of_experience: doctor.years_of_experience,
+          available_slots: availableSlots.slice(0, 5),
+          next_available_date: dateStr,
+          urgency_level: urgency_level || 'medium'
+        });
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        specialty: {
+          id: specialty._id,
+          name: specialty.name,
+          icon: specialty.icon
+        },
+        date: dateStr,
+        doctors: availableDoctors,
+        total: availableDoctors.length
+      }
+    });
+
+  } catch (error) {
+    console.error('Error finding doctors:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error finding available doctors'
+    });
+  }
+};
+
+
+// aiMedicalController.ts — sửa hàm bookAppointmentFromAI
+
+export const bookAppointmentFromAI = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ success: false, message: 'Authentication required' });
+      return;
+    }
+
+    const {
+      doctor_id,
+      appointment_date,
+      time_slot,
+      symptoms,
+      reason,
+      urgency_level,
+      session_id
+    } = req.body;
+
+    if (!doctor_id || !appointment_date || !time_slot) {
+      res.status(400).json({
+        success: false,
+        message: 'doctor_id, appointment_date, and time_slot are required'
+      });
+      return;
+    }
+
+    // ── Kiểm tra doctor tồn tại ─────────────────────────────────────
+    const doctor = await Doctor.findById(doctor_id).populate('user_id', 'name email');
+    if (!doctor || !doctor.isAvailable) {
+      res.status(404).json({ success: false, message: 'Doctor not found or unavailable' });
+      return;
+    }
+
+    // ── Kiểm tra slot chưa bị book ──────────────────────────────────
+    const targetDate  = new Date(appointment_date);
+    const startOfDay  = new Date(targetDate); startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay    = new Date(targetDate); endOfDay.setHours(23, 59, 59, 999);
+
+    const existingAppointment = await Appointment.findOne({
+      doctor_id,
+      appointment_date: { $gte: startOfDay, $lte: endOfDay },
+      time_slot,
+      status: { $in: ['pending', 'confirmed'] }
+    });
+
+    if (existingAppointment) {
+      res.status(409).json({
+        success: false,
+        message: 'This time slot is already booked. Please choose another slot.'
+      });
+      return;
+    }
+
+    // ── Tạo appointment — dùng đúng field name theo model ───────────
+    const appointment = await Appointment.create({
+      user_id:          req.user._id,   // ✅ đổi patient_id → user_id
+      doctor_id,
+      appointment_date: targetDate,
+      time_slot,
+      status:           'pending',
+      reason:           reason || 'Booked via AI Medical Assistant',
+      notes:            `Urgency: ${urgency_level}. Symptoms: ${(symptoms || []).join(', ')}`
+    });
+
+    // ── Ghi log vào chat session nếu có ─────────────────────────────
+    if (session_id) {
+      const session = await ChatSession.findOne({ session_id, user_id: req.user._id });
+      if (session) {
+        await session.addMessage({
+          role:       'assistant',
+          content:    `✅ Appointment confirmed with Dr. ${(doctor as any).user_id?.name} on ${appointment_date} at ${time_slot}.`,
+          category:   'general',
+          confidence: 1.0
+        });
+      }
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'Appointment booked successfully',
+      data: {
+        appointment: {
+          _id:              appointment._id,
+          doctor_name:      (doctor as any).user_id?.name,
+          appointment_date,
+          time_slot,
+          status:           'pending',
+          consultation_fee: doctor.consultation_fee
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error booking appointment from AI:', error);
+    res.status(500).json({ success: false, message: 'Failed to book appointment' });
   }
 };

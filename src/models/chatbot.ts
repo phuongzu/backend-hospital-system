@@ -9,6 +9,14 @@ export interface IChatMessage {
   suggestedActions?: string[];
   emergencyAlert?: boolean;
   relatedSpecialties?: string[];
+  appointmentRecommendation?: {
+    shouldBook: boolean;
+    urgencyLevel: 'low' | 'medium' | 'high';
+    suggestedSpecialty?: string;
+    recommendedTimeframe?: string;
+    reason?: string;
+    symptoms?: string[];
+  };
 }
 
 export interface IChatSession extends Document {
@@ -80,7 +88,22 @@ const ChatMessageSchema = new Schema<IChatMessage>({
   relatedSpecialties: [{
     type: String,
     trim: true
-  }]
+  }],
+  appointmentRecommendation: {
+    shouldBook: { 
+      type: Boolean, 
+      required: false  // Changed from true to false
+    },
+    urgencyLevel: { 
+      type: String, 
+      enum: ['low', 'medium', 'high'],
+      required: false  // Changed from true to false
+    },
+    suggestedSpecialty: String,
+    recommendedTimeframe: String,
+    reason: String,
+    symptoms: [String]
+  }
 }, {
   _id: true
 });
@@ -110,7 +133,7 @@ const ChatSessionSchema = new Schema<IChatSession>({
     default: [],
     validate: {
       validator: function(messages: IChatMessage[]) {
-        return messages.length <= 100; // Giới hạn 100 tin nhắn mỗi session
+        return messages.length <= 100; // Limit 100 messages per session
       },
       message: 'Chat session cannot exceed 100 messages'
     }
@@ -200,7 +223,7 @@ ChatSessionSchema.pre('save', function(next) {
 ChatSessionSchema.statics.findOrCreateActiveSession = async function(userId: mongoose.Types.ObjectId) {
   const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
   
-  // Tìm session active trong 24h gần nhất
+  // Find active session in last 24 hours
   let activeSession = await this.findOne({
     user_id: userId,
     is_active: true,
@@ -208,7 +231,7 @@ ChatSessionSchema.statics.findOrCreateActiveSession = async function(userId: mon
   }).sort({ last_activity: -1 });
 
   if (!activeSession) {
-    // Nếu không tìm thấy session active trong 24h, tạo session mới
+    // If no active session found in 24 hours, create new session
     const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     
     activeSession = await this.create({

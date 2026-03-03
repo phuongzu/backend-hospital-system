@@ -424,6 +424,9 @@ export const completeConsultation = async (req: Request, res: Response) => {
     medicalRecord.status = 'resolved';
     medicalRecord.updated_at = new Date();
 
+    // Clear next_appointment when completing consultation since no follow-up is needed
+    medicalRecord.next_appointment = undefined;
+
     // Cập nhật các trường thông tin nếu có
     if (diagnosis) medicalRecord.diagnosis = diagnosis;
     if (notes) medicalRecord.notes = notes;
