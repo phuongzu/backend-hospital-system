@@ -1,6 +1,6 @@
 import Groq from 'groq-sdk';
 import { config } from '../config/config';
-import Specialty from '../models/specialty';
+import Specialty, { ISpecialty } from '../models/specialty';
 import Doctor from '../models/doctor';
 import Appointment from '../models/appointment';
 import Review from '../models/review';
@@ -9,22 +9,12 @@ import Review from '../models/review';
 
 export type Language = 'en' | 'vi';
 export type MessageRole = 'user' | 'assistant';
-export type MedicalCategory =
-  | 'cardiology'
-  | 'dermatology'
-  | 'neurology'
-  | 'pediatrics'
-  | 'orthopedics'
-  | 'ophthalmology'
-  | 'medications'
-  | 'emergency'
-  | 'general';
 
 export interface AIMessage {
   role: MessageRole;
   content: string;
   timestamp: Date;
-  category?: MedicalCategory;
+  category?: string;
   language?: Language;
 }
 
@@ -69,6 +59,7 @@ export interface AppointmentSuggestion {
   recommendedTimeframe?: string;
   reason?: string;
   symptoms: string[];
+  hasExistingAppointment?: boolean;
   suggestedDoctors?: Array<{
     id: string;
     name: string;
@@ -100,12 +91,15 @@ class EmptyMessageError extends Error {
 const MAX_HISTORY_LENGTH = 6;
 const MAX_REQUESTS_PER_MINUTE = 25;
 const LANGUAGE_CACHE_MAX_SIZE = 100;
-const CATEGORY_CACHE_MAX_SIZE = 100;
 const QUOTA_COOLDOWN_MS = 3 * 60 * 1000;
 const SPECIALTY_CACHE_TTL = 5 * 60 * 1000;
+const ALL_TIME_SLOTS = [
+  '09:00', '09:30', '10:00', '10:30', '11:00', '11:30',
+  '14:00', '14:30', '15:00', '15:30', '16:00', '16:30',
+];
 
 const GROQ_MODEL = 'llama-3.3-70b-versatile';
-const MAX_OUTPUT_TOKENS = 700; // tăng lên để đủ chỗ cho booking block
+const MAX_OUTPUT_TOKENS = 700;
 
 // ==================== DETECTION PATTERNS ====================
 
@@ -126,44 +120,10 @@ const ENGLISH_KEYWORDS = [
   'health', 'feel', 'taking', 'blood', 'heart', 'skin',
 ];
 
-const CATEGORY_KEYWORDS: Record<MedicalCategory, string[]> = {
-  cardiology: [
-    'heart', 'cardio', 'huyết áp', 'tim mạch', 'chest pain', 'đau ngực',
-    'tim', 'mạch máu', 'blood pressure', 'cholesterol', 'arrhythmia', 'nhồi máu',
-    'đau tim', 'heart pain', 'cardiac',
-  ],
-  dermatology: [
-    'skin', 'da', 'rash', 'phát ban', 'acne', 'mụn', 'da liễu',
-    'ngứa', 'eczema', 'vảy nến', 'psoriasis', 'dị ứng da', 'allergy skin',
-  ],
-  neurology: [
-    'brain', 'não', 'headache', 'đau đầu', 'stroke', 'đột quỵ',
-    'thần kinh', 'chóng mặt', 'migraine', 'động kinh', 'epilepsy', 'tê tay',
-  ],
-  pediatrics: [
-    'child', 'trẻ em', 'baby', 'trẻ sơ sinh', 'pediatric', 'nhi',
-    'con', 'bé', 'infant', 'trẻ nhỏ', 'sốt trẻ em', 'vaccination', 'tiêm chủng',
-  ],
-  orthopedics: [
-    'bone', 'xương', 'joint', 'khớp', 'fracture', 'gãy xương',
-    'chỉnh hình', 'arthritis', 'viêm khớp', 'đau lưng', 'back pain', 'spine',
-  ],
-  ophthalmology: [
-    'eye', 'mắt', 'vision', 'thị lực', 'cataract', 'đục thủy tinh thể',
-    'nhãn khoa', 'glaucoma', 'cận thị', 'myopia', 'đau mắt', 'mờ mắt',
-  ],
-  medications: [
-    'medicine', 'thuốc', 'pill', 'viên thuốc', 'prescription', 'đơn thuốc',
-    'dược', 'medication', 'liều dùng', 'dosage', 'tác dụng phụ', 'side effect',
-  ],
-  emergency: [
-    'emergency', 'cấp cứu', 'urgent', 'khẩn cấp', '911', '115',
-    'ambulance', 'xe cấp cứu', 'nguy hiểm', 'critical', 'severe', 'ngất xỉu',
-  ],
-  general: [],
-};
-
-type EmergencyProtocol = 'cardiac_emergency' | 'stroke_emergency' | 'respiratory_emergency';
+type EmergencyProtocol =
+  | 'cardiac_emergency'
+  | 'stroke_emergency'
+  | 'respiratory_emergency';
 
 const EMERGENCY_KEYWORDS: Record<EmergencyProtocol, string[]> = {
   cardiac_emergency: [
@@ -184,7 +144,6 @@ const EMERGENCY_KEYWORDS: Record<EmergencyProtocol, string[]> = {
 };
 
 // ==================== APPOINTMENT PATTERNS ====================
-// Những từ khoá này khi xuất hiện → gợi ý đặt lịch
 
 const APPOINTMENT_PATTERNS = {
   high: {
@@ -228,23 +187,187 @@ const APPOINTMENT_PATTERNS = {
   },
 };
 
-// ==================== SPECIALTY MAPPING ====================
+// ==================== SPECIALTY CACHE & LOADER ====================
 
-const CATEGORY_TO_SPECIALTY_NAME: Record<MedicalCategory, string[]> = {
-  cardiology:    ['Cardiology', 'Tim mạch', 'Cardiovascular'],
-  dermatology:   ['Dermatology', 'Da liễu', 'Skin'],
-  neurology:     ['Neurology', 'Thần kinh', 'Brain'],
-  pediatrics:    ['Pediatrics', 'Nhi khoa', 'Children'],
-  orthopedics:   ['Orthopedics', 'Chỉnh hình', 'Bone'],
-  ophthalmology: ['Ophthalmology', 'Nhãn khoa', 'Eye'],
-  medications:   ['General Medicine', 'Nội tổng quát', 'Internal Medicine'],
-  emergency:     ['Emergency', 'Cấp cứu', 'Emergency Medicine'],
-  general:       ['General Practice', 'Đa khoa', 'Family Medicine'],
-};
+interface SpecialtyData {
+  id: string;
+  name: string;
+  keywords: string[];
+  category: string;
+  icon?: string;
+  color?: string;
+  relatedSpecialties: string[];
+}
+
+class SpecialtyManager {
+  private specialties: Map<string, SpecialtyData> = new Map();
+  private categoryToSpecialtyIds: Map<string, string[]> = new Map();
+  private lastFetchTime = 0;
+  private fetchPromise: Promise<void> | null = null;
+
+  async loadSpecialties(force = false): Promise<void> {
+    const now = Date.now();
+    if (!force && now - this.lastFetchTime < SPECIALTY_CACHE_TTL) return;
+    if (this.fetchPromise) return this.fetchPromise;
+
+    this.fetchPromise = this.fetchSpecialtiesFromDB();
+    try {
+      await this.fetchPromise;
+    } finally {
+      this.fetchPromise = null;
+    }
+  }
+
+  private async fetchSpecialtiesFromDB(): Promise<void> {
+    try {
+      // ✅ FIX #4: Giờ `category` và `keywords` là field thực trong DB
+      const specialties = await Specialty.find({ isActive: true })
+        .select('_id name description icon color keywords category')
+        .lean();
+
+      this.specialties.clear();
+      this.categoryToSpecialtyIds.clear();
+
+      for (const spec of specialties) {
+        // Merge keywords từ DB với keywords tự sinh từ tên
+        const dbKeywords: string[] = Array.isArray(spec.keywords)
+          ? spec.keywords
+          : [];
+
+        const autoKeywords = [
+          spec.name.toLowerCase(),
+          ...spec.name.toLowerCase().split(' '),
+          ...(spec.description?.toLowerCase().split(' ') || []),
+        ].filter((k) => k.length > 2);
+
+        const uniqueKeywords = [...new Set([...dbKeywords, ...autoKeywords])];
+        const category = (spec as any).category || 'Other';
+
+        const specialtyData: SpecialtyData = {
+          id: spec._id.toString(),
+          name: spec.name,
+          keywords: uniqueKeywords,
+          category,
+          icon: spec.icon,
+          color: spec.color,
+          relatedSpecialties: [],
+        };
+
+        this.specialties.set(specialtyData.id, specialtyData);
+
+        if (!this.categoryToSpecialtyIds.has(category)) {
+          this.categoryToSpecialtyIds.set(category, []);
+        }
+        this.categoryToSpecialtyIds.get(category)!.push(specialtyData.id);
+      }
+
+      // Tính related specialties
+      for (const [, specIds] of this.categoryToSpecialtyIds) {
+        for (const specId of specIds) {
+          const spec = this.specialties.get(specId);
+          if (spec) {
+            spec.relatedSpecialties = specIds.filter((id) => id !== specId);
+          }
+        }
+      }
+
+      this.lastFetchTime = Date.now();
+      console.info(`✅ Loaded ${this.specialties.size} specialties from database`);
+    } catch (error) {
+      console.error('Error loading specialties from DB:', error);
+      throw error;
+    }
+  }
+
+  // ✅ FIX #8: Word boundary matching thay vì includes() đơn giản
+  async detectCategory(
+    message: string
+  ): Promise<{ category: string; specialtyId?: string }> {
+    await this.loadSpecialties();
+
+    const lowerMsg = message.toLowerCase();
+    let bestMatch: { category: string; specialtyId?: string; score: number } =
+      { category: 'general', score: 0 };
+
+    for (const [id, spec] of this.specialties) {
+      let score = 0;
+      for (const keyword of spec.keywords) {
+        // ✅ FIX #8: Dùng word boundary regex, tránh "tim" match "vitamin"
+        try {
+          const regex = new RegExp(`\\b${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+          if (regex.test(lowerMsg)) score++;
+        } catch {
+          // Fallback nếu regex lỗi
+          if (lowerMsg.includes(keyword)) score++;
+        }
+      }
+
+      if (score > bestMatch.score) {
+        bestMatch = { category: spec.category, specialtyId: id, score };
+      }
+    }
+
+    return { category: bestMatch.category, specialtyId: bestMatch.specialtyId };
+  }
+
+  async getSpecialtyById(id: string): Promise<SpecialtyData | undefined> {
+    await this.loadSpecialties();
+    return this.specialties.get(id);
+  }
+
+  async getSpecialtiesByCategory(category: string): Promise<SpecialtyData[]> {
+    await this.loadSpecialties();
+    const specIds = this.categoryToSpecialtyIds.get(category) || [];
+    return specIds
+      .map((id) => this.specialties.get(id))
+      .filter(Boolean) as SpecialtyData[];
+  }
+
+  async getAllCategories(): Promise<string[]> {
+    await this.loadSpecialties();
+    return [...this.categoryToSpecialtyIds.keys()];
+  }
+
+  async getAllSpecialties(): Promise<SpecialtyData[]> {
+    await this.loadSpecialties();
+    return Array.from(this.specialties.values());
+  }
+
+  async getRelatedSpecialties(specialtyId: string): Promise<string[]> {
+    await this.loadSpecialties();
+    const spec = this.specialties.get(specialtyId);
+    return spec?.relatedSpecialties || [];
+  }
+
+  async getSpecialtyContext(
+    specialtyId?: string,
+    language: Language = 'en'
+  ): Promise<string> {
+    if (!specialtyId) {
+      return language === 'vi'
+        ? 'Chuyên khoa: TỔNG QUÁT. Cung cấp tư vấn y tế toàn diện và hướng dẫn sức khỏe cơ bản.'
+        : 'Specialty: GENERAL MEDICINE. Provide comprehensive medical information and basic health guidance.';
+    }
+
+    const spec = await this.getSpecialtyById(specialtyId);
+    if (!spec) {
+      return language === 'vi'
+        ? 'Chuyên khoa: Y HỌC TỔNG QUÁT'
+        : 'Specialty: GENERAL MEDICINE';
+    }
+
+    return language === 'vi'
+      ? `Chuyên khoa: ${spec.name.toUpperCase()}. ${spec.category ? `Thuộc nhóm: ${spec.category}. ` : ''}Tư vấn về các vấn đề liên quan đến ${spec.name.toLowerCase()}.`
+      : `Specialty: ${spec.name.toUpperCase()}. ${spec.category ? `Category: ${spec.category}. ` : ''}Providing information related to ${spec.name.toLowerCase()}.`;
+  }
+}
 
 // ==================== EMERGENCY MESSAGES ====================
 
-const EMERGENCY_PROTOCOLS: Record<Language, Record<EmergencyProtocol, string>> = {
+const EMERGENCY_PROTOCOLS: Record<
+  Language,
+  Record<EmergencyProtocol, string>
+> = {
   vi: {
     cardiac_emergency: `🚨 CẤP CỨU TIM MẠCH - HÀNH ĐỘNG NGAY LẬP TỨC!
 
@@ -254,7 +377,9 @@ HƯỚNG DẪN CẤP CỨU:
 3. 💊 NẰM YÊN, TRÁNH MỌI VẬN ĐỘNG
 4. 📞 THÔNG BÁO CHO NGƯỜI THÂN NGAY
 
-⚠️ ĐỪNG TỰ Ý LÁI XE ĐẾN BỆNH VIỆN - GỌI CẤP CỨU!`,
+⚠️ ĐỪNG TỰ Ý LÁI XE ĐẾN BỆNH VIỆN - GỌI CẤP CỨU!
+
+⚕️ Đây là tình huống khẩn cấp y tế. Hãy hành động ngay!`,
     stroke_emergency: `🚨 CẤP CỨU ĐỘT QUỴ - THỜI GIAN LÀ BỘ NÃO!
 
 Nhớ khẩu hiệu FAST:
@@ -283,7 +408,9 @@ EMERGENCY INSTRUCTIONS:
 3. 💊 LIE DOWN, AVOID ALL MOVEMENT
 4. 📞 NOTIFY FAMILY MEMBERS IMMEDIATELY
 
-⚠️ DO NOT DRIVE YOURSELF - CALL EMERGENCY SERVICES!`,
+⚠️ DO NOT DRIVE YOURSELF - CALL EMERGENCY SERVICES!
+
+⚕️ This is a medical emergency. Act immediately!`,
     stroke_emergency: `🚨 STROKE EMERGENCY - TIME IS BRAIN!
 
 Remember FAST:
@@ -318,43 +445,45 @@ const FALLBACK_RESPONSES: Record<Language, Record<FallbackKey, string>> = {
 - Nếu có triệu chứng nghiêm trọng, hãy gọi cấp cứu 115 ngay lập tức
 - Không tự ý dùng thuốc mà không có chỉ định của bác sĩ
 
-Hệ thống sẽ sớm hoạt động trở lại. Xin lỗi vì sự bất tiện này.`,
+⚕️ Thông tin này chỉ mang tính giáo dục, không thay thế tư vấn y tế chuyên nghiệp.`,
     cardiology: `Về vấn đề tim mạch của bạn:
 
-⚠️ KHUYẾN CÁO:
-- Hãy đặt lịch khám tim mạch ngay
-- Theo dõi huyết áp thường xuyên
-- Tránh stress và vận động quá sức
+⚠️ KHUYẾN CÁO: Hãy đặt lịch khám tim mạch ngay
 
 🚨 GỌI CẤP CỨU 115 NẾU CÓ: Đau ngực dữ dội, Khó thở nặng, Ngất xỉu
 
-Vui lòng gặp bác sĩ tim mạch để được tư vấn chi tiết.`,
+⚕️ Thông tin này chỉ mang tính giáo dục, không thay thế tư vấn y tế chuyên nghiệp.`,
     emergency: `🚨 CẢNH BÁO CẤP CỨU!
 1. 🚑 GỌI CẤP CỨU 115 NGAY LẬP TỨC
 2. 🏥 ĐẾN BỆNH VIỆN GẦN NHẤT`,
     medications: `Về thông tin thuốc bạn hỏi:
 
 ⚠️ QUAN TRỌNG: Tham khảo dược sĩ hoặc bác sĩ về liều lượng.
-Vui lòng tham khảo dược sĩ để được tư vấn chi tiết.`,
+
+⚕️ Thông tin này chỉ mang tính giáo dục, không thay thế tư vấn y tế chuyên nghiệp.`,
   },
   en: {
     general: `I apologize, the AI service is temporarily unavailable.
 
 ⚠️ IMPORTANT: Please consult a qualified doctor for accurate medical advice.
-If experiencing severe symptoms, call emergency services (911/115) immediately.`,
+If experiencing severe symptoms, call emergency services (911/115) immediately.
+
+⚕️ This information is for educational purposes only and does not replace professional medical advice.`,
     cardiology: `Regarding your cardiac concern:
 
 ⚠️ RECOMMENDATIONS: Schedule a cardiology appointment immediately.
 
 🚨 CALL EMERGENCY (911/115) IF YOU HAVE: Severe chest pain, Severe shortness of breath, Fainting
 
-Please see a cardiologist for detailed consultation.`,
+⚕️ This information is for educational purposes only and does not replace professional medical advice.`,
     emergency: `🚨 EMERGENCY ALERT!
 1. 🚑 CALL EMERGENCY SERVICES (911/115) NOW
 2. 🏥 GO TO NEAREST HOSPITAL`,
     medications: `Regarding the medication you asked about:
 
-⚠️ IMPORTANT: Consult a pharmacist or doctor about proper dosage.`,
+⚠️ IMPORTANT: Consult a pharmacist or doctor about proper dosage.
+
+⚕️ This information is for educational purposes only and does not replace professional medical advice.`,
   },
 };
 
@@ -362,24 +491,48 @@ Please see a cardiologist for detailed consultation.`,
 
 export class AIMedicalService {
   private readonly groq: Groq;
+  // ✅ FIX #3: conversationHistory là per-instance (không shared)
   private conversationHistory: AIMessage[] = [];
-
+  private readonly specialtyManager: SpecialtyManager;
   private readonly languageCache = new Map<string, Language>();
-  private readonly categoryCache = new Map<string, MedicalCategory>();
-  private readonly specialtyCache = new Map<string, { id: string; name: string }>();
-
   private requestCount = 0;
   private requestResetTime: number = Date.now() + 60_000;
-
   private quotaExceededUntil: number | null = null;
-  private lastSpecialtyFetch = 0;
 
   constructor() {
-    if (!config.groqApiKey) {
-      throw new Error('Groq API key is required.');
-    }
+    if (!config.groqApiKey) throw new Error('Groq API key is required.');
     this.groq = new Groq({ apiKey: config.groqApiKey });
-    console.info(`✅ AIMedicalService initialized — provider: Groq (${GROQ_MODEL})`);
+    this.specialtyManager = new SpecialtyManager();
+  }
+
+  // ==================== PUBLIC: LOAD HISTORY FROM DB ====================
+
+  // ✅ FIX #14: Load lịch sử từ DB vào service khi bắt đầu session
+  public loadHistoryFromDB(
+    messages: Array<{
+      role: MessageRole;
+      content: string;
+      timestamp: Date;
+      category?: string;
+      language?: string;
+    }>
+  ): void {
+    this.conversationHistory = [];
+    const recent = messages.slice(-MAX_HISTORY_LENGTH);
+    for (const msg of recent) {
+      this.conversationHistory.push({
+        role: msg.role,
+        content: msg.content,
+        timestamp: msg.timestamp,
+        category: msg.category,
+        language: (msg.language as Language) || 'en',
+      });
+    }
+  }
+
+  // Expose để controller có thể thêm message sau khi lưu DB
+  public addMessageToHistory(msg: AIMessage): void {
+    this.addToHistory(msg);
   }
 
   // ==================== RATE LIMITING ====================
@@ -397,13 +550,21 @@ export class AIMedicalService {
     this.requestCount++;
   }
 
+  private stripMarkdown(text: string): string {
+    return text
+      .replace(/\*\*(.*?)\*\*/g, '$1')
+      .replace(/\*(.*?)\*/g, '$1')
+      .replace(/#{1,6}\s/g, '')
+      .replace(/`(.*?)`/g, '$1')
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+  }
+
   // ==================== CIRCUIT BREAKER ====================
 
   private isQuotaExceeded(): boolean {
     if (this.quotaExceededUntil === null) return false;
     if (Date.now() > this.quotaExceededUntil) {
       this.quotaExceededUntil = null;
-      console.info('ℹ️ Groq quota cooldown expired — API calls re-enabled');
       return false;
     }
     return true;
@@ -411,7 +572,7 @@ export class AIMedicalService {
 
   private markQuotaExceeded(): void {
     this.quotaExceededUntil = Date.now() + QUOTA_COOLDOWN_MS;
-    console.warn(`⚠️ Groq rate limit hit. Circuit breaker active.`);
+    console.warn('⚠️ Groq rate limit hit. Circuit breaker active.');
   }
 
   // ==================== LANGUAGE DETECTION ====================
@@ -425,134 +586,183 @@ export class AIMedicalService {
     }
 
     const lowerMsg = message.toLowerCase();
-    const viScore = VIETNAMESE_KEYWORDS.filter(kw => lowerMsg.includes(kw)).length;
-    const enScore = ENGLISH_KEYWORDS.filter(kw => lowerMsg.includes(kw)).length;
+    const viScore = VIETNAMESE_KEYWORDS.filter((kw) =>
+      lowerMsg.includes(kw)
+    ).length;
+    const enScore = ENGLISH_KEYWORDS.filter((kw) =>
+      lowerMsg.includes(kw)
+    ).length;
 
     return this.setCachedLanguage(message, viScore > enScore ? 'vi' : 'en');
   }
 
   private setCachedLanguage(message: string, lang: Language): Language {
-    if (this.languageCache.size >= LANGUAGE_CACHE_MAX_SIZE) this.languageCache.clear();
+    if (this.languageCache.size >= LANGUAGE_CACHE_MAX_SIZE)
+      this.languageCache.clear();
     this.languageCache.set(message, lang);
     return lang;
   }
 
   // ==================== CATEGORY DETECTION ====================
 
-  private detectCategory(message: string): MedicalCategory {
-    const cached = this.categoryCache.get(message);
-    if (cached) return cached;
+  // Bảng symptom → tên specialty (fallback khi DB không match đủ keywords)
+  private static readonly SYMPTOM_SPECIALTY_MAP: Array<{
+    keywords: string[];
+    specialtyNames: string[]; // tên specialty cần tìm trong DB (theo thứ tự ưu tiên)
+  }> = [
+    {
+      keywords: ['tê bì', 'tê tay', 'tê chân', 'tê bì chân tay', 'mất ngủ', 'đau đầu',
+                 'chóng mặt', 'hoa mắt', 'đau nửa đầu', 'run tay', 'co giật', 'ngất',
+                 'numbness', 'headache', 'dizziness', 'migraine', 'insomnia', 'tremor'],
+      specialtyNames: ['neurology', 'thần kinh', 'nội thần kinh'],
+    },
+    {
+      keywords: ['đau khớp', 'đau lưng', 'đau xương', 'đau cổ', 'đau vai',
+                 'joint pain', 'back pain', 'bone pain', 'arthritis', 'gout', 'gút',
+                 'viêm khớp', 'thoát vị', 'cột sống'],
+      specialtyNames: ['orthopedic', 'orthopedics', 'cơ xương khớp', 'xương khớp', 'chấn thương chỉnh hình'],
+    },
+    {
+      keywords: ['ho', 'khó thở', 'hen', 'hen suyễn', 'viêm phổi', 'viêm phế quản',
+                 'cough', 'asthma', 'pneumonia', 'bronchitis', 'shortness of breath'],
+      specialtyNames: ['pulmonology', 'respiratory', 'hô hấp', 'phổi'],
+    },
+    {
+      keywords: ['mẩn ngứa', 'nổi mề đay', 'mụn', 'da liễu', 'vảy nến', 'eczema',
+                 'skin rash', 'acne', 'psoriasis', 'dermatitis', 'ngứa da', 'nám da'],
+      specialtyNames: ['dermatology', 'da liễu'],
+    },
+    {
+      keywords: ['đau bụng', 'tiêu chảy', 'táo bón', 'buồn nôn', 'nôn', 'trào ngược',
+                 'viêm dạ dày', 'loét dạ dày', 'stomach pain', 'diarrhea', 'constipation',
+                 'nausea', 'vomiting', 'gastritis', 'reflux'],
+      specialtyNames: ['gastroenterology', 'tiêu hóa', 'nội tiêu hóa'],
+    },
+    {
+      keywords: ['đái tháo đường', 'tiểu đường', 'béo phì', 'tuyến giáp', 'hormone',
+                 'diabetes', 'obesity', 'thyroid', 'nội tiết', 'sụt cân', 'weight loss'],
+      specialtyNames: ['endocrinology', 'nội tiết', 'đái tháo đường'],
+    },
+    {
+      keywords: ['đau mắt', 'mờ mắt', 'đỏ mắt', 'khô mắt', 'cận thị', 'glaucoma',
+                 'eye pain', 'blurry vision', 'red eye', 'dry eye', 'myopia'],
+      specialtyNames: ['ophthalmology', 'mắt', 'nhãn khoa'],
+    },
+    {
+      keywords: ['đau tai', 'ù tai', 'viêm tai', 'nghe kém', 'viêm mũi', 'viêm xoang',
+                 'ear pain', 'tinnitus', 'sinusitis', 'rhinitis', 'tai mũi họng', 'amidan'],
+      specialtyNames: ['ent', 'otolaryngology', 'tai mũi họng'],
+    },
+    {
+      keywords: ['đau ngực', 'huyết áp', 'tim đập', 'nhịp tim', 'suy tim',
+                 'chest pain', 'blood pressure', 'heart', 'cardiac', 'tim mạch',
+                 'mạch', 'xơ vữa'],
+      specialtyNames: ['cardiology', 'tim mạch', 'nội tim mạch'],
+    },
+    {
+      keywords: ['ung thư', 'cancer', 'khối u', 'u bướu', 'tumor', 'lymphoma'],
+      specialtyNames: ['oncology', 'ung bướu'],
+    },
+  ];
 
-    const lowerMsg = message.toLowerCase();
-    for (const [cat, keywords] of Object.entries(CATEGORY_KEYWORDS) as [MedicalCategory, string[]][]) {
-      if (cat === 'general') continue;
-      if (keywords.some(kw => lowerMsg.includes(kw.toLowerCase()))) {
-        return this.setCachedCategory(message, cat);
-      }
+  private async detectCategory(
+    message: string
+  ): Promise<{ category: string; specialtyId?: string }> {
+    // Bước 1: Dùng SpecialtyManager (match theo keywords trong DB)
+    const dbResult = await this.specialtyManager.detectCategory(message);
+
+    // Nếu DB detect được specialty cụ thể (không phải general) → dùng ngay
+    if (dbResult.specialtyId && dbResult.category !== 'general') {
+      return dbResult;
     }
-    return this.setCachedCategory(message, 'general');
-  }
 
-  private setCachedCategory(message: string, cat: MedicalCategory): MedicalCategory {
-    if (this.categoryCache.size >= CATEGORY_CACHE_MAX_SIZE) this.categoryCache.clear();
-    this.categoryCache.set(message, cat);
-    return cat;
+    // Bước 2: Fallback — dùng bảng symptom map tĩnh để tìm specialty theo tên
+    const lowerMsg = message.toLowerCase();
+    for (const entry of AIMedicalService.SYMPTOM_SPECIALTY_MAP) {
+      const matched = entry.keywords.some((kw) => lowerMsg.includes(kw.toLowerCase()));
+      if (!matched) continue;
+
+      // Tìm specialty trong DB theo danh sách tên ưu tiên
+      for (const name of entry.specialtyNames) {
+        try {
+          const Specialty = (await import('../models/specialty')).default;
+          const spec = await Specialty.findOne({
+            name: { $regex: new RegExp(name, 'i') },
+            isActive: true,
+          }).select('_id name category').lean();
+
+          if (spec) {
+            return {
+              category: (spec as any).category || name,
+              specialtyId: (spec as any)._id.toString(),
+            };
+          }
+        } catch {
+          // Tiếp tục thử tên tiếp theo
+        }
+      }
+
+      // Nếu không tìm thấy trong DB, vẫn trả về category name từ map
+      return { category: entry.specialtyNames[0], specialtyId: undefined };
+    }
+
+    // Bước 3: Không match gì → general
+    return { category: 'general', specialtyId: undefined };
   }
 
   // ==================== EMERGENCY DETECTION ====================
 
-  private detectEmergency(message: string): { isEmergency: boolean; protocol?: EmergencyProtocol } {
+  private detectEmergency(
+    message: string
+  ): { isEmergency: boolean; protocol?: EmergencyProtocol } {
     const lowerMsg = message.toLowerCase();
-    for (const [protocol, keywords] of Object.entries(EMERGENCY_KEYWORDS) as [EmergencyProtocol, string[]][]) {
-      if (keywords.some(kw => lowerMsg.includes(kw.toLowerCase()))) {
+    for (const [protocol, keywords] of Object.entries(
+      EMERGENCY_KEYWORDS
+    ) as [EmergencyProtocol, string[]][]) {
+      if (keywords.some((kw) => lowerMsg.includes(kw.toLowerCase()))) {
         return { isEmergency: true, protocol };
       }
     }
     return { isEmergency: false };
   }
 
-  // ==================== SPECIALTY MANAGEMENT ====================
+  // ==================== DOCTOR AVAILABILITY (N+1 FIX) ====================
 
-  private async getSpecialtyIdFromCategory(category: MedicalCategory): Promise<string | null> {
-    try {
-      const now = Date.now();
-      if (now - this.lastSpecialtyFetch > SPECIALTY_CACHE_TTL) {
-        this.specialtyCache.clear();
-        this.lastSpecialtyFetch = now;
-      }
-
-      const cached = this.specialtyCache.get(category);
-      if (cached) return cached.id;
-
-      const possibleNames = CATEGORY_TO_SPECIALTY_NAME[category];
-      for (const name of possibleNames) {
-        const specialty = await Specialty.findOne({
-          name: { $regex: new RegExp(name, 'i') },
-          isActive: true,
-        }).select('_id name');
-
-        if (specialty) {
-          this.specialtyCache.set(category, {
-            id: specialty._id.toString(),
-            name: specialty.name,
-          });
-          return specialty._id.toString();
-        }
-      }
-
-      const defaultSpecialty = await Specialty.findOne({
-        name: { $regex: /General|Đa khoa/i },
-        isActive: true,
-      }).select('_id name');
-
-      if (defaultSpecialty) {
-        this.specialtyCache.set(category, {
-          id: defaultSpecialty._id.toString(),
-          name: defaultSpecialty.name,
-        });
-        return defaultSpecialty._id.toString();
-      }
-
-      return null;
-    } catch (error) {
-      console.error('Error getting specialty ID:', error);
-      return null;
-    }
-  }
-
-  private mapCategoryToSpecialty(category: MedicalCategory): string {
-    const mapping: Record<MedicalCategory, string> = {
-      cardiology:    'Cardiology',
-      dermatology:   'Dermatology',
-      neurology:     'Neurology',
-      pediatrics:    'Pediatrics',
-      orthopedics:   'Orthopedics',
-      ophthalmology: 'Ophthalmology',
-      medications:   'General Medicine',
-      general:       'General Medicine',
-      emergency:     'Emergency',
-    };
-    return mapping[category] ?? 'General Medicine';
-  }
-
-  // ==================== DOCTOR AVAILABILITY ====================
-
+  // ✅ FIX #9: Dùng batch queries thay vì query trong loop
   private async findAvailableDoctors(
     specialtyId: string,
     preferredDate?: Date,
-    limit: number = 3,
+    limit: number = 3
   ): Promise<AppointmentSuggestion['suggestedDoctors']> {
     try {
+      // ✅ FIX: Bỏ isAvailable filter cứng, thêm status check linh hoạt hơn
+      // Doctors có thể có isAvailable=true nhưng status khác nhau tùy DB seed
       const doctors = await Doctor.find({
         specialty_id: specialtyId,
-        isAvailable: true,
+        $or: [
+          { isAvailable: true },
+          { status: 'working' },
+          { status: { $exists: false } }, // Nếu field status chưa có
+        ],
       })
-        .populate('user_id', 'name email')
+        .populate('user_id', 'name email avatar')
         .limit(limit);
 
+      console.info(`🔍 findAvailableDoctors: specialtyId=${specialtyId}, found ${doctors.length} doctors`);
+
+      // ✅ FIX: Nếu không tìm thấy với specialty_id, log để debug
+      if (doctors.length === 0) {
+        const totalInSpecialty = await Doctor.countDocuments({ specialty_id: specialtyId });
+        console.warn(`⚠️ No available doctors for specialty ${specialtyId}. Total in specialty (any status): ${totalInSpecialty}`);
+        return [];
+      }
+
       const targetDate = preferredDate ? new Date(preferredDate) : new Date();
-      if (targetDate <= new Date()) {
-        targetDate.setDate(targetDate.getDate() + 1);
+      // Dùng ngày mai nếu targetDate là hôm nay hoặc quá khứ
+      const now = new Date();
+      if (targetDate.toDateString() === now.toDateString() || targetDate < now) {
+        targetDate.setDate(now.getDate() + 1);
+        targetDate.setHours(0, 0, 0, 0);
       }
 
       const startOfDay = new Date(targetDate);
@@ -560,39 +770,78 @@ export class AIMedicalService {
       const endOfDay = new Date(targetDate);
       endOfDay.setHours(23, 59, 59, 999);
 
-      const ALL_TIME_SLOTS = [
-        '09:00', '09:30', '10:00', '10:30', '11:00', '11:30',
-        '14:00', '14:30', '15:00', '15:30', '16:00', '16:30',
-      ];
+      // ✅ FIX: Lấy tên thứ trong tuần đúng theo ngày targetDate
+      const DAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+      const dayOfWeek = DAYS[targetDate.getDay()]; // 'thursday', 'friday', etc.
+
+      const doctorIds = doctors.map((d) => d._id);
+
+      // Batch query appointments
+      const allBooked = await Appointment.find({
+        doctor_id: { $in: doctorIds },
+        appointment_date: { $gte: startOfDay, $lte: endOfDay },
+        status: { $in: ['pending', 'confirmed'] },
+      }).select('doctor_id time_slot');
+
+      const bookedByDoctor = new Map<string, Set<string>>();
+      for (const appt of allBooked) {
+        const key = appt.doctor_id.toString();
+        if (!bookedByDoctor.has(key)) bookedByDoctor.set(key, new Set());
+        bookedByDoctor.get(key)!.add(appt.time_slot);
+      }
+
+      // Batch query ratings
+      const allRatings = await Review.aggregate([
+        { $match: { doctor_id: { $in: doctorIds } } },
+        { $group: { _id: '$doctor_id', avgRating: { $avg: '$rating' } } },
+      ]);
+
+      const ratingMap = new Map<string, number>();
+      for (const r of allRatings) {
+        ratingMap.set(r._id.toString(), r.avgRating);
+      }
 
       const result: AppointmentSuggestion['suggestedDoctors'] = [];
 
       for (const doctor of doctors) {
-        const booked = await Appointment.find({
-          doctor_id: doctor._id,
-          appointment_date: { $gte: startOfDay, $lte: endOfDay },
-          status: { $in: ['pending', 'confirmed'] },
-        }).select('time_slot');
+        const docId = doctor._id.toString();
+        const bookedSlots = bookedByDoctor.get(docId) || new Set();
 
-        const bookedSlots = new Set(booked.map(a => a.time_slot));
-        const availableSlots = ALL_TIME_SLOTS.filter(s => !bookedSlots.has(s));
-        if (availableSlots.length === 0) continue;
+        // ✅ FIX: Check available_hours theo đúng ngày trong tuần
+        // Nếu bác sĩ có available_hours, dùng nó; nếu không có thì dùng ALL_TIME_SLOTS
+        let slotsForDay = ALL_TIME_SLOTS;
+        const daySchedule = (doctor.available_hours as any)?.[dayOfWeek];
 
-        const [review] = await Review.aggregate([
-          { $match: { doctor_id: doctor._id } },
-          { $group: { _id: null, avgRating: { $avg: '$rating' } } },
-        ]);
+        if (daySchedule) {
+          if (daySchedule.isAvailable === false) {
+            // Bác sĩ không làm ngày này → skip
+            console.info(`  Doctor ${docId}: off on ${dayOfWeek}`);
+            continue;
+          }
+          // Generate slots trong khoảng start-end của bác sĩ
+          if (daySchedule.start && daySchedule.end) {
+            slotsForDay = ALL_TIME_SLOTS.filter((slot) => {
+              return slot >= daySchedule.start && slot <= daySchedule.end;
+            });
+          }
+        }
 
+        const availableSlots = slotsForDay.filter((s) => !bookedSlots.has(s));
+
+        console.info(`  Doctor ${docId} (${(doctor as any).user_id?.name}): ${availableSlots.length} slots on ${dayOfWeek}`);
+
+        // ✅ FIX: Không skip nếu không có slot — vẫn hiển thị bác sĩ nhưng báo hết chỗ
         result.push({
-          id:               doctor._id.toString(),
-          name:             (doctor as any).user_id?.name ?? 'Doctor',
-          availableSlots:   availableSlots.slice(0, 3),
-          consultationFee:  doctor.consultation_fee,
-          experience:       doctor.years_of_experience,
-          rating:           review?.avgRating ?? 0,
+          id: docId,
+          name: (doctor as any).user_id?.name ?? 'Bác sĩ',
+          availableSlots: availableSlots.slice(0, 3),
+          consultationFee: doctor.consultation_fee,
+          experience: doctor.years_of_experience,
+          rating: ratingMap.get(docId) ?? 0,
         });
       }
 
+      console.info(`✅ findAvailableDoctors result: ${result.length} doctors with slots`);
       return result.sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0));
     } catch (error) {
       console.error('Error finding available doctors:', error);
@@ -604,10 +853,11 @@ export class AIMedicalService {
 
   private async evaluateAppointmentNeed(
     userMessage: string,
-    category: MedicalCategory,
-    isEmergency: boolean,
+    category: string,
+    specialtyId?: string,
+    isEmergency = false,
+    userId?: string
   ): Promise<AppointmentSuggestion> {
-    // Emergency → đừng gợi ý đặt lịch, chỉ gọi cấp cứu
     if (isEmergency) {
       return {
         shouldBook: false,
@@ -617,15 +867,23 @@ export class AIMedicalService {
       };
     }
 
-    const language  = this.detectLanguage(userMessage);
-    const lowerMsg  = userMessage.toLowerCase();
+    const language = this.detectLanguage(userMessage);
+    const lowerMsg = userMessage.toLowerCase();
     const detectedSymptoms: string[] = [];
-    let   urgencyLevel: 'low' | 'medium' | 'high' = 'low';
+    let urgencyLevel: 'low' | 'medium' | 'high' = 'low';
 
-    // ── Kiểm tra high → medium → low (ưu tiên mức cao nhất) ─────────
-    const highList   = language === 'vi' ? APPOINTMENT_PATTERNS.high.vi   : APPOINTMENT_PATTERNS.high.en;
-    const mediumList = language === 'vi' ? APPOINTMENT_PATTERNS.medium.vi : APPOINTMENT_PATTERNS.medium.en;
-    const lowList    = language === 'vi' ? APPOINTMENT_PATTERNS.low.vi    : APPOINTMENT_PATTERNS.low.en;
+    const highList =
+      language === 'vi'
+        ? APPOINTMENT_PATTERNS.high.vi
+        : APPOINTMENT_PATTERNS.high.en;
+    const mediumList =
+      language === 'vi'
+        ? APPOINTMENT_PATTERNS.medium.vi
+        : APPOINTMENT_PATTERNS.medium.en;
+    const lowList =
+      language === 'vi'
+        ? APPOINTMENT_PATTERNS.low.vi
+        : APPOINTMENT_PATTERNS.low.en;
 
     for (const pattern of highList) {
       if (lowerMsg.includes(pattern.toLowerCase())) {
@@ -633,7 +891,6 @@ export class AIMedicalService {
         urgencyLevel = 'high';
       }
     }
-
     if (urgencyLevel !== 'high') {
       for (const pattern of mediumList) {
         if (lowerMsg.includes(pattern.toLowerCase())) {
@@ -642,26 +899,48 @@ export class AIMedicalService {
         }
       }
     }
-
     if (detectedSymptoms.length === 0) {
       for (const pattern of lowList) {
         if (lowerMsg.includes(pattern.toLowerCase())) {
           detectedSymptoms.push(pattern);
-          // urgencyLevel giữ 'low'
         }
       }
     }
 
-    // Không phát hiện triệu chứng → không gợi ý
     if (detectedSymptoms.length === 0) {
       return { shouldBook: false, urgencyLevel: 'low', symptoms: [] };
     }
 
-    // ── Timeframe & reason ───────────────────────────────────────────
+    // ✅ FIX #17: Kiểm tra xem bệnh nhân đã có appointment sắp tới chưa
+    if (userId) {
+      try {
+        const existingAppointment = await Appointment.findOne({
+          user_id: userId,
+          appointment_date: { $gte: new Date() },
+          status: { $in: ['pending', 'confirmed'] },
+        });
+
+        if (existingAppointment) {
+          return {
+            shouldBook: false,
+            urgencyLevel,
+            symptoms: [...new Set(detectedSymptoms)],
+            hasExistingAppointment: true,
+            reason:
+              language === 'vi'
+                ? 'Bạn đã có lịch hẹn sắp tới. Hãy tham khảo bác sĩ của bạn về các triệu chứng này.'
+                : 'You already have an upcoming appointment. Please discuss these symptoms with your doctor.',
+          };
+        }
+      } catch (err) {
+        console.error('Error checking existing appointments:', err);
+      }
+    }
+
     const timeframeMap = {
-      high:   { vi: 'Trong vòng 24 giờ',   en: 'Within 24 hours' },
+      high: { vi: 'Trong vòng 24 giờ', en: 'Within 24 hours' },
       medium: { vi: 'Trong vòng 2-3 ngày', en: 'Within 2-3 days' },
-      low:    { vi: 'Trong tuần này',       en: 'Within this week' },
+      low: { vi: 'Trong tuần này', en: 'Within this week' },
     } as const;
 
     const reasonMap = {
@@ -679,25 +958,27 @@ export class AIMedicalService {
       },
     } as const;
 
-    // ── Lấy specialty & doctors từ DB ───────────────────────────────
-    const specialtyId   = await this.getSpecialtyIdFromCategory(category);
-    const specialtyName = this.specialtyCache.get(category)?.name
-      ?? this.mapCategoryToSpecialty(category);
+    let specialtyName = category;
+    if (specialtyId) {
+      const spec = await this.specialtyManager.getSpecialtyById(specialtyId);
+      if (spec) specialtyName = spec.name;
+    }
 
-    // Chỉ fetch doctors nếu urgency >= medium để tránh query thừa
-    let suggestedDoctors: AppointmentSuggestion['suggestedDoctors'] = [];
+    // ✅ FIX LOADING SPINNER: Chỉ set suggestedDoctors khi có specialtyId
+    // Nếu undefined → UI hiển thị "Xem thêm bác sĩ" thay vì spinner mãi không tắt
+    let suggestedDoctors: AppointmentSuggestion['suggestedDoctors'] = undefined;
     if (urgencyLevel !== 'low' && specialtyId) {
       suggestedDoctors = await this.findAvailableDoctors(specialtyId);
     }
 
     return {
-      shouldBook:           true,
+      shouldBook: true,
       urgencyLevel,
-      suggestedSpecialty:   specialtyName,
-      suggestedSpecialtyId: specialtyId ?? undefined,
+      suggestedSpecialty: specialtyName,
+      suggestedSpecialtyId: specialtyId,
       recommendedTimeframe: timeframeMap[urgencyLevel][language],
-      reason:               reasonMap[urgencyLevel][language],
-      symptoms:             [...new Set(detectedSymptoms)],
+      reason: reasonMap[urgencyLevel][language],
+      symptoms: [...new Set(detectedSymptoms)],
       suggestedDoctors,
     };
   }
@@ -720,77 +1001,75 @@ SCOPE OF SUPPORT:
 
 SAFETY PRINCIPLES — MANDATORY:
 ✅ ALWAYS recommend consulting a doctor for accurate advice
-✅ ALWAYS add a disclaimer at the end of responses
 🚨 ALWAYS guide to call 115/911 immediately for dangerous symptoms
 ❌ NEVER diagnose diseases or prescribe medications
 ❌ NEVER claim to replace a doctor
 
+DISCLAIMER — MANDATORY:
+Always end every response with:
+EN: "⚕️ This information is for educational purposes only and does not replace professional medical advice."
+VI: "⚕️ Thông tin này chỉ mang tính giáo dục, không thay thế tư vấn y tế chuyên nghiệp."
+
 RESPONSE FORMAT:
 - Natural, warm, easy-to-understand language
 - Use emojis selectively to improve readability
-- Break into clear sections if response is long
-- End with a brief disclaimer AND the booking question (if provided in context)`;
+- Break into clear sections if response is long`;
   }
 
   // ==================== BOOKING CONTEXT BUILDER ====================
-  // Tạo đoạn text inject vào prompt để AI biết có bác sĩ available
 
-  private buildBookingContextBlock(
+  private async buildBookingContextBlock(
     appointment: AppointmentSuggestion,
-    language: Language,
-  ): string {
+    language: Language
+  ): Promise<string> {
     if (!appointment.shouldBook) return '';
 
     const hasDoctors =
       appointment.suggestedDoctors && appointment.suggestedDoctors.length > 0;
 
-    // Ngày khám = ngày mai
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
     const dateStr = tomorrow.toLocaleDateString(
       language === 'vi' ? 'vi-VN' : 'en-US',
-      { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' },
+      { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }
     );
 
     const urgencyLabel = {
-      high:   { vi: 'khẩn cấp',  en: 'urgent'  },
-      medium: { vi: 'sớm',       en: 'soon'    },
-      low:    { vi: 'định kỳ',   en: 'routine' },
+      high: { vi: 'khẩn cấp', en: 'urgent' },
+      medium: { vi: 'sớm', en: 'soon' },
+      low: { vi: 'định kỳ', en: 'routine' },
     }[appointment.urgencyLevel][language];
 
     if (hasDoctors) {
       const doctor = appointment.suggestedDoctors![0];
-      const slot   = doctor.availableSlots[0];
-
+      const slot = doctor.availableSlots[0];
       const feeText = doctor.consultationFee
-        ? (language === 'vi'
-            ? `${doctor.consultationFee.toLocaleString('vi-VN')} VNĐ`
-            : `$${doctor.consultationFee}`)
-        : (language === 'vi' ? 'Liên hệ phòng khám' : 'Contact clinic');
-
+        ? language === 'vi'
+          ? `${doctor.consultationFee.toLocaleString('vi-VN')} VNĐ`
+          : `$${doctor.consultationFee}`
+        : language === 'vi'
+        ? 'Liên hệ phòng khám'
+        : 'Contact clinic';
       const expText = doctor.experience
-        ? (language === 'vi'
-            ? `${doctor.experience}+ năm kinh nghiệm`
-            : `${doctor.experience}+ years exp.`)
+        ? language === 'vi'
+          ? `${doctor.experience}+ năm kinh nghiệm`
+          : `${doctor.experience}+ years exp.`
         : '';
-
-      const ratingText = doctor.rating && doctor.rating > 0
-        ? `⭐ ${doctor.rating.toFixed(1)}`
-        : '';
+      const ratingText =
+        doctor.rating && doctor.rating > 0
+          ? `⭐ ${doctor.rating.toFixed(1)}`
+          : '';
 
       if (language === 'vi') {
         return `
 === HƯỚNG DẪN QUAN TRỌNG CHO AI ===
 Sau khi cung cấp thông tin y tế, bạn BẮT BUỘC phải thêm đúng đoạn sau vào CUỐI câu trả lời.
-KHÔNG được thay đổi tên bác sĩ, giờ khám, ngày khám, phí khám.
-Giữ nguyên định dạng như bên dưới:
 
 ---
 🗓️ **Gợi ý đặt lịch khám**
 
 Dựa trên triệu chứng bạn mô tả, tôi nhận thấy bạn cần được khám **${urgencyLabel}** với bác sĩ chuyên khoa **${appointment.suggestedSpecialty}**.
 
-Hiện tại có bác sĩ phù hợp:
 👨‍⚕️ **Bác sĩ ${doctor.name}** ${expText ? `— ${expText}` : ''} ${ratingText}
 🕐 Giờ khám còn trống: **${slot}**
 📅 Ngày khám: **${dateStr}**
@@ -802,15 +1081,12 @@ Hiện tại có bác sĩ phù hợp:
         return `
 === IMPORTANT INSTRUCTION FOR AI ===
 After providing medical information, you MUST append exactly the following block at the END of your response.
-Do NOT change the doctor name, time slot, date, or fee.
-Keep the exact format below:
 
 ---
 🗓️ **Appointment Recommendation**
 
 Based on the symptoms you've described, I recommend you see a **${appointment.suggestedSpecialty}** specialist **${urgencyLabel}ly**.
 
-I found an available doctor for you:
 👨‍⚕️ **Dr. ${doctor.name}** ${expText ? `— ${expText}` : ''} ${ratingText}
 🕐 Available time slot: **${slot}**
 📅 Date: **${dateStr}**
@@ -821,115 +1097,60 @@ I found an available doctor for you:
       }
     }
 
-    // Có triệu chứng nhưng không tìm được bác sĩ nào
-    if (language === 'vi') {
-      return `
-=== HƯỚNG DẪN CHO AI ===
-Cuối câu trả lời, hãy thêm đúng câu sau:
-
----
-🗓️ Dựa trên triệu chứng của bạn, tôi khuyên bạn nên đặt lịch khám với bác sĩ chuyên khoa **${appointment.suggestedSpecialty}** **${urgencyLabel}** (${appointment.recommendedTimeframe}).
-
-**Bạn có muốn tôi giúp bạn đặt lịch khám không?** 📋
----`;
-    } else {
-      return `
-=== INSTRUCTION FOR AI ===
-At the end of your response, append exactly:
-
----
-🗓️ Based on your symptoms, I recommend scheduling an appointment with a **${appointment.suggestedSpecialty}** specialist **${urgencyLabel}** (${appointment.recommendedTimeframe}).
-
-**Would you like me to help you book an appointment?** 📋
----`;
-    }
+    // No doctors available
+    return language === 'vi'
+      ? `\n=== HƯỚNG DẪN CHO AI ===\nCuối câu trả lời, hãy thêm:\n---\n🗓️ Dựa trên triệu chứng của bạn, tôi khuyên bạn nên đặt lịch khám với bác sĩ chuyên khoa **${appointment.suggestedSpecialty}** **${urgencyLabel}** (${appointment.recommendedTimeframe}).\n**Bạn có muốn tôi giúp bạn đặt lịch khám không?** 📋\n---`
+      : `\n=== INSTRUCTION FOR AI ===\nAt the end of your response, append:\n---\n🗓️ Based on your symptoms, I recommend scheduling an appointment with a **${appointment.suggestedSpecialty}** specialist **${urgencyLabel}** (${appointment.recommendedTimeframe}).\n**Would you like me to help you book an appointment?** 📋\n---`;
   }
 
   // ==================== PROMPT BUILDER ====================
 
-  private buildCategoryContext(category: MedicalCategory, language: Language): string {
-    const contexts: Partial<Record<MedicalCategory, Record<Language, string>>> = {
-      cardiology: {
-        vi: 'Chuyên khoa: TIM MẠCH. Tập trung vào bệnh tim, huyết áp, mạch máu và lối sống tốt cho tim.',
-        en: 'Specialty: CARDIOLOGY. Focus on heart disease, blood pressure, vascular health, and heart-healthy lifestyle.',
-      },
-      dermatology: {
-        vi: 'Chuyên khoa: DA LIỄU. Tập trung vào bệnh da, chăm sóc da và phương pháp điều trị.',
-        en: 'Specialty: DERMATOLOGY. Focus on skin conditions, skincare routines, and treatments.',
-      },
-      neurology: {
-        vi: 'Chuyên khoa: THẦN KINH. Tập trung vào não bộ, hệ thần kinh và các triệu chứng thần kinh.',
-        en: 'Specialty: NEUROLOGY. Focus on brain, nervous system, and neurological symptoms.',
-      },
-      pediatrics: {
-        vi: 'Chuyên khoa: NHI KHOA. Tập trung vào sức khỏe trẻ em, phát triển và tiêm chủng.',
-        en: 'Specialty: PEDIATRICS. Focus on child health, development, and immunizations.',
-      },
-      orthopedics: {
-        vi: 'Chuyên khoa: CHỈNH HÌNH. Tập trung vào xương, khớp, cơ bắp và chấn thương vận động.',
-        en: 'Specialty: ORTHOPEDICS. Focus on bones, joints, muscles, and sports injuries.',
-      },
-      ophthalmology: {
-        vi: 'Chuyên khoa: NHÃN KHOA. Tập trung vào sức khỏe mắt, thị lực và các bệnh về mắt.',
-        en: 'Specialty: OPHTHALMOLOGY. Focus on eye health, vision, and eye diseases.',
-      },
-      medications: {
-        vi: 'Chủ đề: THUỐC & DƯỢC PHẨM. Thông tin về thuốc, liều dùng, tác dụng phụ và tương tác thuốc.',
-        en: 'Topic: MEDICATIONS & PHARMACEUTICALS. Information on drugs, dosages, side effects, and interactions.',
-      },
-    };
-
-    return (
-      contexts[category]?.[language] ??
-      (language === 'vi'
-        ? 'Chuyên khoa: TỔNG QUÁT. Cung cấp tư vấn y tế toàn diện và hướng dẫn sức khỏe cơ bản.'
-        : 'Specialty: GENERAL MEDICINE. Provide comprehensive medical information and basic health guidance.')
-    );
-  }
-
-  private buildUserPrompt(
+  private async buildUserPrompt(
     userMessage: string,
-    category: MedicalCategory,
+    category: string,
+    specialtyId: string | undefined,
     language: Language,
-    appointmentSuggestion?: AppointmentSuggestion, // ← KEY: inject booking context
-  ): string {
+    appointmentSuggestion?: AppointmentSuggestion
+  ): Promise<string> {
     const langInstruction =
       language === 'vi'
         ? '🇻🇳 QUAN TRỌNG: Người dùng đang dùng TIẾNG VIỆT. Bạn PHẢI trả lời 100% bằng TIẾNG VIỆT.'
         : '🇬🇧 IMPORTANT: User is writing in ENGLISH. You MUST respond 100% in ENGLISH.';
 
     const historyText = this.serializeHistory();
-    const parts: string[] = [
-      this.buildCategoryContext(category, language),
-      langInstruction,
-    ];
+    const specialtyContext = await this.specialtyManager.getSpecialtyContext(
+      specialtyId,
+      language
+    );
+
+    const parts: string[] = [specialtyContext, langInstruction];
 
     if (historyText) {
       parts.push(
         language === 'vi'
           ? `LỊCH SỬ HỘI THOẠI GẦN ĐÂY:\n${historyText}`
-          : `RECENT CONVERSATION HISTORY:\n${historyText}`,
+          : `RECENT CONVERSATION HISTORY:\n${historyText}`
       );
     }
 
     parts.push(
       language === 'vi'
         ? `CÂU HỎI CỦA BỆNH NHÂN: ${userMessage}`
-        : `PATIENT'S QUESTION: ${userMessage}`,
+        : `PATIENT'S QUESTION: ${userMessage}`
     );
 
-    // ── Inject booking block vào prompt trước khi gọi Groq ─────────
     if (appointmentSuggestion?.shouldBook) {
-      const bookingBlock = this.buildBookingContextBlock(appointmentSuggestion, language);
-      if (bookingBlock) {
-        parts.push(bookingBlock);
-      }
+      const bookingBlock = await this.buildBookingContextBlock(
+        appointmentSuggestion,
+        language
+      );
+      if (bookingBlock) parts.push(bookingBlock);
     }
 
     parts.push(
       language === 'vi'
-        ? 'Hãy trả lời bằng TIẾNG VIỆT, ngôn ngữ tự nhiên, có cấu trúc rõ ràng, và tuân thủ đúng hướng dẫn ở trên.'
-        : 'Respond in ENGLISH, use natural language, clear structure, and follow the instructions above exactly.',
+        ? 'Hãy trả lời bằng TIẾNG VIỆT, ngôn ngữ tự nhiên, có cấu trúc rõ ràng.'
+        : 'Respond in ENGLISH, use natural language, clear structure.'
     );
 
     return parts.join('\n\n');
@@ -937,26 +1158,33 @@ At the end of your response, append exactly:
 
   // ==================== GROQ API CALL ====================
 
-  private async callGroqAPI(userPrompt: string, systemPrompt: string): Promise<string> {
+  private async callGroqAPI(
+    userPrompt: string,
+    systemPrompt: string
+  ): Promise<string> {
     this.recordRequest();
     try {
       const completion = await this.groq.chat.completions.create({
         model: GROQ_MODEL,
         messages: [
           { role: 'system', content: systemPrompt },
-          { role: 'user',   content: userPrompt   },
+          { role: 'user', content: userPrompt },
         ],
         temperature: 0.7,
-        max_tokens:  MAX_OUTPUT_TOKENS,
-        top_p:       0.95,
-        stream:      false,
+        max_tokens: MAX_OUTPUT_TOKENS,
+        top_p: 0.95,
+        stream: false,
       });
 
       const text = completion.choices[0]?.message?.content ?? '';
       if (!text.trim()) throw new Error('Empty response from Groq API');
       return text;
     } catch (error: unknown) {
-      const err = error as { status?: number; message?: string; error?: { type?: string } };
+      const err = error as {
+        status?: number;
+        message?: string;
+        error?: { type?: string };
+      };
       const isQuota =
         err?.status === 429 ||
         err?.error?.type === 'tokens' ||
@@ -976,13 +1204,10 @@ At the end of your response, append exactly:
 
   private async tryGenerate(
     userPrompt: string,
-    category: MedicalCategory,
-    language: Language,
+    category: string,
+    language: Language
   ): Promise<{ text: string; usedFallback: boolean }> {
-    if (this.isQuotaExceeded()) {
-      return { text: this.getFallbackText(category, language), usedFallback: true };
-    }
-    if (this.isRateLimited()) {
+    if (this.isQuotaExceeded() || this.isRateLimited()) {
       return { text: this.getFallbackText(category, language), usedFallback: true };
     }
 
@@ -998,78 +1223,96 @@ At the end of your response, append exactly:
     }
   }
 
-  private getFallbackText(category: MedicalCategory, language: Language): string {
-    const key: FallbackKey =
-      category === 'emergency'   ? 'emergency'   :
-      category === 'cardiology'  ? 'cardiology'  :
-      category === 'medications' ? 'medications' :
-      'general';
+  private getFallbackText(category: string, language: Language): string {
+    let key: FallbackKey = 'general';
+    const lowerCat = category.toLowerCase();
+    if (lowerCat.includes('emergency') || lowerCat.includes('cấp cứu')) key = 'emergency';
+    else if (lowerCat.includes('cardio') || lowerCat.includes('tim')) key = 'cardiology';
+    else if (lowerCat.includes('medication') || lowerCat.includes('thuốc')) key = 'medications';
     return FALLBACK_RESPONSES[language][key];
   }
 
   // ==================== MAIN: PROCESS MESSAGE ====================
-  // Đây là điểm mấu chốt: evaluateAppointmentNeed() chạy TRƯỚC callGroqAPI()
 
-  public async processMessage(userMessage: string): Promise<AIResponse> {
+  public async processMessage(
+    userMessage: string,
+    userId?: string
+  ): Promise<AIResponse> {
     try {
       if (!userMessage?.trim()) throw new EmptyMessageError();
 
       const language = this.detectLanguage(userMessage);
-      const category = this.detectCategory(userMessage);
 
-      // ── 1. Kiểm tra khẩn cấp trước tiên ─────────────────────────
+      // 1. Check emergency
       const emergencyCheck = this.detectEmergency(userMessage);
       if (emergencyCheck.isEmergency && emergencyCheck.protocol) {
         return this.buildEmergencyResponse(emergencyCheck.protocol, language);
       }
 
-      // ── 2. Đánh giá nhu cầu đặt lịch & lấy bác sĩ từ DB ─────────
-      //    Bước này PHẢI chạy TRƯỚC khi gọi Groq
+      // 2. Detect category + specialty from DB
+      const { category, specialtyId } = await this.detectCategory(userMessage);
+
+      // 3. Evaluate appointment need (✅ truyền userId để check existing)
       const appointmentRecommendation = await this.evaluateAppointmentNeed(
         userMessage,
         category,
+        specialtyId,
         false,
+        userId
       );
 
-      console.info(
-        `📋 Appointment evaluation: shouldBook=${appointmentRecommendation.shouldBook}, ` +
-        `urgency=${appointmentRecommendation.urgencyLevel}, ` +
-        `doctors=${appointmentRecommendation.suggestedDoctors?.length ?? 0}`,
-      );
-
-      // ── 3. Lưu lịch sử ───────────────────────────────────────────
-      this.addToHistory({ role: 'user', content: userMessage, timestamp: new Date(), category, language });
-
-      // ── 4. Build prompt với thông tin bác sĩ đã inject ───────────
-      const userPrompt = this.buildUserPrompt(
-        userMessage,
+      // 4. Save to history
+      this.addToHistory({
+        role: 'user',
+        content: userMessage,
+        timestamp: new Date(),
         category,
         language,
-        appointmentRecommendation, // ← truyền vào đây để Groq biết có bác sĩ nào
+      });
+
+      // 5. Build prompt
+      const userPrompt = await this.buildUserPrompt(
+        userMessage,
+        category,
+        specialtyId,
+        language,
+        appointmentRecommendation
       );
 
-      // ── 5. Gọi Groq — response sẽ tự chứa câu hỏi booking ────────
+      // 6. Call Groq
       const { text: responseText, usedFallback } = await this.tryGenerate(
         userPrompt,
         category,
-        language,
+        language
       );
 
-      this.addToHistory({ role: 'assistant', content: responseText, timestamp: new Date(), category, language });
+      this.addToHistory({
+        role: 'assistant',
+        content: responseText,
+        timestamp: new Date(),
+        category,
+        language,
+      });
 
       const analysis = this.analyzeResponse(responseText, language);
 
+      // 7. Get related specialties
+      let relatedSpecialties: string[] = [];
+      if (specialtyId) {
+        relatedSpecialties = await this.specialtyManager.getRelatedSpecialties(specialtyId);
+      }
+
       return {
-        response:                responseText,
-        confidence:              usedFallback ? 0.5 : analysis.confidence,
-        suggestedActions:        analysis.suggestedActions,
-        emergencyAlert:          false,
+        response: responseText,
+        confidence: usedFallback ? 0.5 : analysis.confidence,
+        suggestedActions: analysis.suggestedActions,
+        emergencyAlert: false,
         category,
-        relatedSpecialties:      this.getRelatedSpecialties(category),
+        relatedSpecialties,
         language,
         usedFallback,
-        provider:                'groq',
-        appointmentRecommendation, // trả về để frontend dùng cho AppointmentSuggestionCard
+        provider: 'groq',
+        appointmentRecommendation,
       };
     } catch (error) {
       if (!(error instanceof EmptyMessageError)) {
@@ -1081,41 +1324,47 @@ At the end of your response, append exactly:
 
   // ==================== RESPONSE BUILDERS ====================
 
-  private buildEmergencyResponse(protocol: EmergencyProtocol, language: Language): AIResponse {
+  private buildEmergencyResponse(
+    protocol: EmergencyProtocol,
+    language: Language
+  ): AIResponse {
     const responseText =
       EMERGENCY_PROTOCOLS[language][protocol] ??
       EMERGENCY_PROTOCOLS[language].cardiac_emergency;
 
     return {
-      response:           responseText,
-      confidence:         0.98,
-      suggestedActions:   language === 'vi'
-        ? ['Gọi cấp cứu 115', 'Đến bệnh viện gần nhất', 'Liên hệ người thân']
-        : ['Call emergency 911/115', 'Go to nearest hospital', 'Contact family member'],
-      emergencyAlert:     true,
-      category:           'emergency',
-      relatedSpecialties: ['Emergency Medicine'],
+      response: responseText,
+      confidence: 0.98,
+      suggestedActions:
+        language === 'vi'
+          ? ['Gọi cấp cứu 115', 'Đến bệnh viện gần nhất', 'Liên hệ người thân']
+          : ['Call emergency 911/115', 'Go to nearest hospital', 'Contact family member'],
+      emergencyAlert: true,
+      category: 'emergency',
+      relatedSpecialties: [],
       language,
-      provider:           'local',
+      provider: 'local',
     };
   }
 
   private buildErrorResponse(language: Language): AIResponse {
-    const response = language === 'vi'
-      ? 'Xin lỗi, tôi đang gặp sự cố kỹ thuật. Vui lòng:\n1. Liên hệ trực tiếp với nhà cung cấp dịch vụ y tế\n2. Gọi 115 nếu cần cấp cứu'
-      : 'I apologize for the technical difficulty. Please:\n1. Contact your healthcare provider directly\n2. Call 911/115 if this is an emergency';
+    const response =
+      language === 'vi'
+        ? 'Xin lỗi, tôi đang gặp sự cố kỹ thuật. Vui lòng:\n1. Liên hệ trực tiếp với nhà cung cấp dịch vụ y tế\n2. Gọi 115 nếu cần cấp cứu\n\n⚕️ Thông tin này chỉ mang tính giáo dục, không thay thế tư vấn y tế chuyên nghiệp.'
+        : 'I apologize for the technical difficulty. Please:\n1. Contact your healthcare provider directly\n2. Call 911/115 if this is an emergency\n\n⚕️ This information is for educational purposes only and does not replace professional medical advice.';
 
     return {
       response,
-      confidence:         0.3,
-      suggestedActions:   language === 'vi'
-        ? ['Liên hệ nhà cung cấp y tế', 'Gọi cấp cứu nếu cần']
-        : ['Contact healthcare provider', 'Call emergency services if needed'],
-      emergencyAlert:     false,
-      category:           'technical',
+      confidence: 0.3,
+      suggestedActions:
+        language === 'vi'
+          ? ['Liên hệ nhà cung cấp y tế', 'Gọi cấp cứu nếu cần']
+          : ['Contact healthcare provider', 'Call emergency services if needed'],
+      emergencyAlert: false,
+      category: 'technical',
       language,
-      usedFallback:       true,
-      provider:           'none',
+      usedFallback: true,
+      provider: 'none',
     };
   }
 
@@ -1123,37 +1372,40 @@ At the end of your response, append exactly:
 
   private analyzeResponse(
     responseText: string,
-    language: Language,
+    language: Language
   ): { confidence: number; suggestedActions: string[] } {
     const lower = responseText.toLowerCase();
     let confidence = 0.78;
 
-    const highConfidenceTerms = language === 'vi'
-      ? ['nghiên cứu cho thấy', 'dựa trên bằng chứng', 'hướng dẫn y khoa', 'theo khuyến cáo']
-      : ['research shows', 'evidence-based', 'medical guidelines', 'clinical studies'];
+    const highConfidenceTerms =
+      language === 'vi'
+        ? ['nghiên cứu cho thấy', 'dựa trên bằng chứng', 'hướng dẫn y khoa', 'theo khuyến cáo']
+        : ['research shows', 'evidence-based', 'medical guidelines', 'clinical studies'];
 
-    const cautionTerms = language === 'vi'
-      ? ['có thể', 'đôi khi', 'trong một số trường hợp']
-      : ['may be', 'could possibly', 'sometimes', 'in some cases'];
+    const cautionTerms =
+      language === 'vi'
+        ? ['có thể', 'đôi khi', 'trong một số trường hợp']
+        : ['may be', 'could possibly', 'sometimes', 'in some cases'];
 
-    if (highConfidenceTerms.some(t => lower.includes(t))) confidence = 0.88;
-    if (cautionTerms.some(t => lower.includes(t))) confidence = Math.min(confidence, 0.65);
+    if (highConfidenceTerms.some((t) => lower.includes(t))) confidence = 0.88;
+    if (cautionTerms.some((t) => lower.includes(t))) confidence = Math.min(confidence, 0.65);
 
-    const actionMap = language === 'vi'
-      ? {
-          doctor:     { trigger: 'bác sĩ',     label: 'Đặt lịch khám với bác sĩ' },
-          pharmacist: { trigger: 'dược sĩ',    label: 'Tham khảo dược sĩ về thuốc' },
-          test:       { trigger: 'xét nghiệm', label: 'Thực hiện xét nghiệm theo chỉ định' },
-          emergency:  { trigger: 'cấp cứu',    label: 'Tìm kiếm chăm sóc y tế ngay lập tức' },
-          specialist: { trigger: 'chuyên khoa',label: 'Tham khảo bác sĩ chuyên khoa' },
-        }
-      : {
-          doctor:     { trigger: 'doctor',     label: 'Schedule an appointment with your doctor' },
-          pharmacist: { trigger: 'pharmacist', label: 'Consult a pharmacist about medications' },
-          test:       { trigger: 'test',       label: 'Get recommended tests done' },
-          emergency:  { trigger: 'emergency',  label: 'Seek immediate medical attention' },
-          specialist: { trigger: 'specialist', label: 'See a specialist for further evaluation' },
-        };
+    const actionMap =
+      language === 'vi'
+        ? {
+            doctor: { trigger: 'bác sĩ', label: 'Đặt lịch khám với bác sĩ' },
+            pharmacist: { trigger: 'dược sĩ', label: 'Tham khảo dược sĩ về thuốc' },
+            test: { trigger: 'xét nghiệm', label: 'Thực hiện xét nghiệm theo chỉ định' },
+            emergency: { trigger: 'cấp cứu', label: 'Tìm kiếm chăm sóc y tế ngay lập tức' },
+            specialist: { trigger: 'chuyên khoa', label: 'Tham khảo bác sĩ chuyên khoa' },
+          }
+        : {
+            doctor: { trigger: 'doctor', label: 'Schedule an appointment with your doctor' },
+            pharmacist: { trigger: 'pharmacist', label: 'Consult a pharmacist about medications' },
+            test: { trigger: 'test', label: 'Get recommended tests done' },
+            emergency: { trigger: 'emergency', label: 'Seek immediate medical attention' },
+            specialist: { trigger: 'specialist', label: 'See a specialist for further evaluation' },
+          };
 
     const suggestedActions: string[] = [];
     for (const { trigger, label } of Object.values(actionMap)) {
@@ -1176,10 +1428,15 @@ At the end of your response, append exactly:
 
   private serializeHistory(): string {
     return this.conversationHistory
-      .map(msg => {
-        const role = msg.role === 'user'
-          ? (msg.language === 'vi' ? 'Bệnh nhân' : 'Patient')
-          : (msg.language === 'vi' ? 'Trợ lý AI' : 'AI Assistant');
+      .map((msg) => {
+        const role =
+          msg.role === 'user'
+            ? msg.language === 'vi'
+              ? 'Bệnh nhân'
+              : 'Patient'
+            : msg.language === 'vi'
+            ? 'Trợ lý AI'
+            : 'AI Assistant';
         return `${role}: ${msg.content}`;
       })
       .join('\n');
@@ -1188,49 +1445,19 @@ At the end of your response, append exactly:
   // ==================== ADDITIONAL SERVICES ====================
 
   public async getMedicationInfo(medicationName: string): Promise<MedicationInfo> {
-    const prompt = `Cung cấp thông tin chi tiết về thuốc: "${medicationName}"
-
-Bao gồm:
-1. Tên thương mại và tên generic
-2. Công dụng và chỉ định điều trị
-3. Liều dùng thông thường cho người lớn
-4. Tác dụng phụ thường gặp và hiếm gặp
-5. Chống chỉ định
-6. Tương tác thuốc quan trọng
-7. Lưu ý đặc biệt (thai kỳ, người cao tuổi, v.v.)
-
-Trả lời bằng TIẾNG VIỆT, rõ ràng và có cấu trúc. Kết thúc bằng khuyến nghị tham khảo bác sĩ.`;
-
+    const prompt = `Cung cấp thông tin chi tiết về thuốc: "${medicationName}"\n\nBao gồm: tên thương mại, công dụng, liều dùng, tác dụng phụ, chống chỉ định, tương tác thuốc.\n\nTrả lời bằng TIẾNG VIỆT.\n\n⚕️ Kết thúc bằng: "Thông tin này chỉ mang tính giáo dục, không thay thế tư vấn y tế chuyên nghiệp."`;
     const { text } = await this.tryGenerate(prompt, 'medications', 'vi');
     return { name: medicationName, information: text, confidence: 0.85, lastUpdated: new Date().toISOString() };
   }
 
   public async explainMedicalTerm(term: string): Promise<TermExplanation> {
-    const prompt = `Giải thích thuật ngữ y khoa: "${term}"
-
-Bao gồm:
-1. Định nghĩa đơn giản, dễ hiểu
-2. Giải thích chi tiết về mặt y khoa
-3. Ví dụ thực tế trong lâm sàng
-4. Liên quan đến bệnh lý hoặc tình trạng nào
-
-Trả lời bằng TIẾNG VIỆT, ngôn ngữ gần gũi và dễ hiểu.`;
-
+    const prompt = `Giải thích thuật ngữ y khoa: "${term}"\n\nBao gồm: định nghĩa, giải thích y khoa, ví dụ lâm sàng.\n\nTrả lời bằng TIẾNG VIỆT, ngôn ngữ gần gũi và dễ hiểu.`;
     const { text } = await this.tryGenerate(prompt, 'general', 'vi');
     return { term, explanation: text, confidence: 0.9 };
   }
 
   public async getLifestyleAdvice(topic: string): Promise<LifestyleAdvice> {
-    const prompt = `Cung cấp lời khuyên về lối sống cho chủ đề: "${topic}"
-
-Bao gồm:
-1. Khuyến nghị chế độ ăn uống phù hợp
-2. Hoạt động thể chất và tập luyện thích hợp
-3. Thói quen sinh hoạt hàng ngày tốt cho sức khỏe
-4. Những điều cần tránh
-
-Trả lời bằng TIẾNG VIỆT, thực tế và dựa trên bằng chứng khoa học.`;
-
+    const prompt = `Cung cấp lời khuyên về lối sống cho chủ đề: "${topic}"\n\nBao gồm: chế độ ăn, tập luyện, thói quen sinh hoạt.\n\nTrả lời bằng TIẾNG VIỆT, thực tế và dựa trên bằng chứng.`;
     const { text } = await this.tryGenerate(prompt, 'general', 'vi');
     return { topic, advice: text, confidence: 0.82, category: 'lifestyle' };
   }
@@ -1240,9 +1467,6 @@ Trả lời bằng TIẾNG VIỆT, thực tế và dựa trên bằng chứng kh
   public clearHistory(): void {
     this.conversationHistory = [];
     this.languageCache.clear();
-    this.categoryCache.clear();
-    this.specialtyCache.clear();
-    console.info('🗑️ Conversation history and caches cleared');
   }
 
   public getHistory(): AIMessage[] {
@@ -1254,53 +1478,66 @@ Trả lời bằng TIẾNG VIỆT, thực tế và dựa trên bằng chứng kh
   }
 
   public getRateLimitStatus() {
-    const now = Date.now();
     return {
-      remaining:           Math.max(0, MAX_REQUESTS_PER_MINUTE - this.requestCount),
-      resetIn:             Math.max(0, this.requestResetTime - now),
-      quotaCircuitActive:  this.isQuotaExceeded(),
-      provider:            'groq',
-      model:               GROQ_MODEL,
+      remaining: Math.max(0, MAX_REQUESTS_PER_MINUTE - this.requestCount),
+      resetIn: Math.max(0, this.requestResetTime - Date.now()),
+      quotaCircuitActive: this.isQuotaExceeded(),
+      provider: 'groq',
+      model: GROQ_MODEL,
     };
   }
 
   public async getAllSpecialties() {
-    try {
-      const specialties = await Specialty.find({ isActive: true })
-        .select('_id name icon color')
-        .sort({ name: 1 });
-      return specialties.map(s => ({
-        id:    s._id.toString(),
-        name:  s.name,
-        icon:  s.icon,
-        color: s.color,
-      }));
-    } catch (error) {
-      console.error('Error fetching specialties:', error);
-      return [];
-    }
+    const specialties = await this.specialtyManager.getAllSpecialties();
+    return specialties.map((s) => ({
+      id: s.id,
+      name: s.name,
+      icon: s.icon,
+      color: s.color,
+      category: s.category,
+    }));
   }
 
-  public getAvailableSpecialties(): string[] {
-    return [
-      'Cardiology', 'Dermatology', 'Neurology', 'Pediatrics',
-      'Orthopedics', 'Ophthalmology', 'Dentistry', 'Psychiatry',
-      'Surgery', 'Gynecology', 'Endocrinology', 'Gastroenterology',
-    ];
+  public async getAllCategories(): Promise<string[]> {
+    return this.specialtyManager.getAllCategories();
   }
 
-  private getRelatedSpecialties(category: MedicalCategory): string[] {
-    const map: Record<MedicalCategory, string[]> = {
-      cardiology:    ['Cardiology', 'Internal Medicine'],
-      dermatology:   ['Dermatology'],
-      neurology:     ['Neurology'],
-      pediatrics:    ['Pediatrics', 'Family Medicine'],
-      orthopedics:   ['Orthopedics', 'Physical Therapy'],
-      ophthalmology: ['Ophthalmology'],
-      medications:   ['All Specialties', 'Pharmacy'],
-      emergency:     ['Emergency Medicine'],
-      general:       ['General Practice', 'Family Medicine'],
-    };
-    return map[category] ?? ['General Practice'];
+  public async getSpecialtyById(id: string) {
+    return this.specialtyManager.getSpecialtyById(id);
+  }
+
+  public async refreshSpecialties(): Promise<void> {
+    await this.specialtyManager.loadSpecialties(true);
   }
 }
+
+// ==================== FIX #3: SESSION MANAGER ====================
+// Quản lý 1 AIMedicalService instance riêng cho mỗi chat session
+
+const serviceInstances = new Map<string, AIMedicalService>();
+const SERVICE_IDLE_TIMEOUT = 30 * 60 * 1000; // 30 phút không dùng thì cleanup
+const serviceLastUsed = new Map<string, number>();
+
+export function getServiceForSession(sessionId: string): AIMedicalService {
+  if (!serviceInstances.has(sessionId)) {
+    serviceInstances.set(sessionId, new AIMedicalService());
+  }
+  serviceLastUsed.set(sessionId, Date.now());
+  return serviceInstances.get(sessionId)!;
+}
+
+export function cleanupServiceForSession(sessionId: string): void {
+  serviceInstances.delete(sessionId);
+  serviceLastUsed.delete(sessionId);
+}
+
+// Cleanup idle services mỗi 15 phút
+setInterval(() => {
+  const now = Date.now();
+  for (const [sessionId, lastUsed] of serviceLastUsed) {
+    if (now - lastUsed > SERVICE_IDLE_TIMEOUT) {
+      serviceInstances.delete(sessionId);
+      serviceLastUsed.delete(sessionId);
+    }
+  }
+}, 15 * 60 * 1000);

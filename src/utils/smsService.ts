@@ -105,20 +105,28 @@ class SMSService {
     return this.sendNotificationSMS(phoneNumber, message);
   }
 
-  // Send appointment reminder via SMS
-  async sendAppointmentReminder(
-    phoneNumber: string,
-    doctorName: string,
-    appointmentTime: string,
-    location?: string
-  ): Promise<boolean> {
-    const message = `Reminder: You have an appointment with Dr. ${doctorName} at ${appointmentTime}. ${
-      location ? `Location: ${location}` : ''
-    }`;
+async sendAppointmentReminder(
+  phoneNumber: string,
+  doctorName: string,
+  appointmentTime: string,
+  location?: string
+): Promise<boolean> {
 
-    return this.sendNotificationSMS(phoneNumber, message);
+  if (!doctorName || !appointmentTime) {
+    console.error("❌ Missing appointment data", {
+      doctorName,
+      appointmentTime
+    });
+    return false;
   }
 
+  const message = 
+    `Reminder: You have an appointment with Dr. ${doctorName} ` +
+    `at ${appointmentTime}. ` +
+    (location ? `Location: ${location}` : '');
+
+  return this.sendNotificationSMS(phoneNumber, message);
+}
   // Check if SMS service is available
   isAvailable(): boolean {
     return this.isEnabled;

@@ -1,10 +1,11 @@
+// models/chatSession.ts
 import mongoose, { Schema, Document } from 'mongoose';
 
 export interface IChatMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
-  category?: string;
+  category?: string;  // Thay đổi từ enum sang string
   confidence?: number;
   suggestedActions?: string[];
   emergencyAlert?: boolean;
@@ -24,7 +25,7 @@ export interface IChatSession extends Document {
   session_id: string;
   title: string;
   messages: IChatMessage[];
-  category: string;
+  category: string;  // Thay đổi từ enum sang string
   is_active: boolean;
   last_activity: Date;
   created_at: Date;
@@ -53,22 +54,8 @@ const ChatMessageSchema = new Schema<IChatMessage>({
     default: Date.now 
   },
   category: {
-    type: String,
-    enum: [
-      'general',
-      'cardiology',
-      'dermatology',
-      'neurology',
-      'pediatrics',
-      'orthopedics',
-      'ophthalmology',
-      'medications',
-      'emergency',
-      'nutrition',
-      'exercise',
-      'mental_health',
-      'technical'
-    ],
+    type: String,  // Bỏ enum, cho phép lưu bất kỳ string nào
+    trim: true,
     default: 'general'
   },
   confidence: {
@@ -92,12 +79,12 @@ const ChatMessageSchema = new Schema<IChatMessage>({
   appointmentRecommendation: {
     shouldBook: { 
       type: Boolean, 
-      required: false  // Changed from true to false
+      required: false
     },
     urgencyLevel: { 
       type: String, 
-      enum: ['low', 'medium', 'high'],
-      required: false  // Changed from true to false
+      enum: ['low', 'medium', 'high'],  // Giữ enum cho urgencyLevel vì nó cố định
+      required: false
     },
     suggestedSpecialty: String,
     recommendedTimeframe: String,
@@ -133,28 +120,15 @@ const ChatSessionSchema = new Schema<IChatSession>({
     default: [],
     validate: {
       validator: function(messages: IChatMessage[]) {
-        return messages.length <= 100; // Limit 100 messages per session
+        return messages.length <= 100;
       },
       message: 'Chat session cannot exceed 100 messages'
     }
   },
   category: {
-    type: String,
-    enum: [
-      'general',
-      'cardiology',
-      'dermatology',
-      'neurology',
-      'pediatrics',
-      'orthopedics',
-      'ophthalmology',
-      'medications',
-      'emergency',
-      'nutrition',
-      'exercise',
-      'mental_health',
-      'technical'
-    ],
+    type: String,  // Bỏ enum, cho phép lưu bất kỳ string nào
+    trim: true,
+    index: true,   // Thêm index để tìm kiếm theo category nhanh hơn
     default: 'general'
   },
   is_active: {
@@ -179,33 +153,31 @@ const ChatSessionSchema = new Schema<IChatSession>({
   timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' }
 });
 
-// Indexes for better query performance
+// Indexes
 ChatSessionSchema.index({ user_id: 1, last_activity: -1 });
 ChatSessionSchema.index({ user_id: 1, is_active: 1 });
 ChatSessionSchema.index({ session_id: 1 });
-ChatSessionSchema.index({ last_activity: 1 }); // For cleanup queries
+ChatSessionSchema.index({ last_activity: 1 });
+ChatSessionSchema.index({ category: 1 }); // Index cho category
 
-// Virtual for checking if session is expired (24 hours)
+// Virtuals
 ChatSessionSchema.virtual('isExpired').get(function() {
   const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
   return this.last_activity < twentyFourHoursAgo;
 });
 
-// Virtual for message count
 ChatSessionSchema.virtual('messageCount').get(function() {
   return this.messages.length;
 });
 
-// Virtual for session duration in minutes
 ChatSessionSchema.virtual('duration').get(function() {
   return Math.round((this.updated_at.getTime() - this.created_at.getTime()) / (1000 * 60));
 });
 
-// Pre-save middleware to update last_activity
+// Pre-save middleware
 ChatSessionSchema.pre('save', function(next) {
   this.updated_at = new Date();
   
-  // Auto-generate title from first user message if not set
   if (this.isModified('messages') && this.messages.length > 0 && this.title === 'Medical Consultation') {
     const firstUserMessage = this.messages.find(msg => msg.role === 'user');
     if (firstUserMessage) {
@@ -219,11 +191,10 @@ ChatSessionSchema.pre('save', function(next) {
   next();
 });
 
-// Static method to find or create active session
+// Static methods
 ChatSessionSchema.statics.findOrCreateActiveSession = async function(userId: mongoose.Types.ObjectId) {
   const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
   
-  // Find active session in last 24 hours
   let activeSession = await this.findOne({
     user_id: userId,
     is_active: true,
@@ -231,7 +202,6 @@ ChatSessionSchema.statics.findOrCreateActiveSession = async function(userId: mon
   }).sort({ last_activity: -1 });
 
   if (!activeSession) {
-    // If no active session found in 24 hours, create new session
     const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     
     activeSession = await this.create({
@@ -247,7 +217,6 @@ ChatSessionSchema.statics.findOrCreateActiveSession = async function(userId: mon
   return activeSession;
 };
 
-// Static method to get user's chat history
 ChatSessionSchema.statics.getUserChatHistory = async function(userId: mongoose.Types.ObjectId, limit: number = 10) {
   return await this.find({
     user_id: userId
@@ -257,7 +226,22 @@ ChatSessionSchema.statics.getUserChatHistory = async function(userId: mongoose.T
   .limit(limit);
 };
 
-// Static method to cleanup expired sessions
+// Thêm method để thống kê theo category
+ChatSessionSchema.statics.getCategoryStats = async function(userId: mongoose.Types.ObjectId) {
+  return await this.aggregate([
+    { $match: { user_id: userId } },
+    { $unwind: '$messages' },
+    { $match: { 'messages.role': 'assistant' } },
+    { $group: {
+        _id: '$messages.category',
+        count: { $sum: 1 },
+        lastUsed: { $max: '$messages.timestamp' }
+      }
+    },
+    { $sort: { count: -1 } }
+  ]);
+};
+
 ChatSessionSchema.statics.cleanupExpiredSessions = async function() {
   const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
   
@@ -274,7 +258,7 @@ ChatSessionSchema.statics.cleanupExpiredSessions = async function() {
   return result.modifiedCount;
 };
 
-// Instance method to add message to session
+// Instance methods
 ChatSessionSchema.methods.addMessage = function(message: Omit<IChatMessage, 'timestamp'>) {
   const newMessage: IChatMessage = {
     ...message,
@@ -284,7 +268,6 @@ ChatSessionSchema.methods.addMessage = function(message: Omit<IChatMessage, 'tim
   this.messages.push(newMessage);
   this.last_activity = new Date();
   
-  // Update category based on the latest assistant message
   if (message.role === 'assistant' && message.category) {
     this.category = message.category;
   }
@@ -292,14 +275,12 @@ ChatSessionSchema.methods.addMessage = function(message: Omit<IChatMessage, 'tim
   return this.save();
 };
 
-// Instance method to close session
 ChatSessionSchema.methods.closeSession = function() {
   this.is_active = false;
   this.last_activity = new Date();
   return this.save();
 };
 
-// Instance method to get session summary
 ChatSessionSchema.methods.getSummary = function() {
   return {
     session_id: this.session_id,
