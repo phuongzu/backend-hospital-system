@@ -7,7 +7,6 @@ export interface ISpecialty extends Document {
   color?: string;
   isActive: boolean;
   doctorCount: number;
-  // ✅ FIX #4: Thêm các field thực vào Schema (trước đây là virtual → undefined)
   category: string;
   keywords: string[];
   createdAt: Date;
