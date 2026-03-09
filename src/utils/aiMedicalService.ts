@@ -26,11 +26,7 @@ export interface PatientProfile {
   chronicConditions: string[];
   currentMedications: string[];
   recentDiagnoses: string[];
-  emergencyContact?: {
-    name: string;
-    phone: string;
-    relation: string;
-  };
+  emergencyContact?: { name: string; phone: string; relation: string };
 }
 
 // ==================== AI MESSAGES ====================
@@ -57,48 +53,48 @@ export interface AIResponse {
   followUpQuestions?: string[];
   patientContextUsed?: boolean;
   requiresMoreInfo?: boolean;
-  // NEW: clinical assessment fields
   clinicalAssessment?: ClinicalAssessment;
   triageScore?: number;
   urgencyLevel?: UrgencyLevel;
+  shouldAskBookingConfirmation?: boolean; // Thêm flag để frontend biết cần hiển thị confirmation
 }
 
-// ==================== NEW: CLINICAL ASSESSMENT ====================
+// ==================== CLINICAL ASSESSMENT ====================
 
 export interface ClinicalAssessment {
   collectedSymptoms: CollectedSymptom[];
   urgencyLevel: UrgencyLevel;
-  triageScore: number;           // 0–100, higher = more urgent
+  triageScore: number;
   redFlagsDetected: string[];
-  probableDifferentials: string[]; // likely conditions (not a diagnosis)
+  probableDifferentials: string[];
   recommendedAction: RecommendedAction;
   assessmentComplete: boolean;
-  riskFactors: string[];         // from patient profile
-  painScore?: number;            // 0–10 if reported
-  vitalsConcern?: string[];      // HR, BP, breathing concerns mentioned
+  riskFactors: string[];
+  painScore?: number;
+  vitalsConcern?: string[];
+  symptomProgression?: 'worsening' | 'improving' | 'stable' | 'unknown'; // Thêm tracking tiến triển
 }
 
 export interface CollectedSymptom {
   name: string;
-  severity?: number;             // 1–10
+  severity?: number;
   duration?: string;
   location?: string;
-  character?: string;            // sharp, dull, burning, etc.
+  character?: string;
   aggravatingFactors?: string[];
   relievingFactors?: string[];
   associatedSymptoms?: string[];
 }
 
 export type RecommendedAction =
-  | 'call_emergency'             // critical/high → 115/911
-  | 'urgent_appointment'         // high → within 24h
-  | 'soon_appointment'           // medium → within 2-3 days
-  | 'routine_appointment'        // low → within a week
-  | 'self_care'                  // very low → home management
-  | 'more_info_needed';          // still gathering
+  | 'call_emergency'
+  | 'urgent_appointment'
+  | 'soon_appointment'
+  | 'routine_appointment'
+  | 'self_care'
+  | 'more_info_needed';
 
-// ==================== SYMPTOM COLLECTION STATE MACHINE ====================
-// Tracks multi-turn conversation to collect structured symptom info
+// ==================== ASSESSMENT STATE MACHINE ====================
 
 export type AssessmentPhase =
   | 'idle'
@@ -120,6 +116,7 @@ export interface AssessmentSession {
   language: Language;
   turnCount: number;
   startedAt: Date;
+  previousSymptoms?: string[]; // Lưu triệu chứng trước đó để so sánh
 }
 
 // ==================== APPOINTMENT ====================
@@ -135,8 +132,16 @@ export interface AppointmentSuggestion {
   hasExistingAppointment?: boolean;
   suggestedDoctors?: SuggestedDoctor[];
   contraindications?: string[];
-  bookingMessage?: string;       // NEW: UI display message
-  emergencyInstructions?: string; // NEW: for high urgency
+  bookingMessage?: string;
+  emergencyInstructions?: string;
+  awaitingBookingConfirmation?: boolean;
+  bookingQuestion?: string;
+  existingAppointmentDetails?: {
+    date: string;
+    time: string;
+    doctorName?: string;
+    specialty?: string;
+  };
 }
 
 export interface SuggestedDoctor {
@@ -171,31 +176,12 @@ export interface LifestyleAdvice {
   category: string;
 }
 
-// ==================== SYMPTOM TRACKING ====================
-
-export interface SymptomEntry {
-  symptom: string;
-  severity: 1 | 2 | 3 | 4 | 5;
-  timestamp: Date;
-  sessionId: string;
-  notes?: string;
-}
-
-export interface SymptomTrend {
-  symptom: string;
-  occurrences: number;
-  firstSeen: Date;
-  lastSeen: Date;
-  averageSeverity: number;
-  trend: 'improving' | 'worsening' | 'stable';
-}
-
 // ==================== AUDIT LOG ====================
 
 export interface AuditLogEntry {
   userId?: string;
   sessionId?: string;
-  action: 'chat_message' | 'appointment_booked' | 'emergency_triggered' | 'handoff_requested';
+  action: 'chat_message' | 'appointment_booked' | 'emergency_triggered' | 'handoff_requested' | 'booking_confirmation_asked' | 'booking_confirmed' | 'booking_declined';
   userMessage?: string;
   aiResponse?: string;
   category?: string;
@@ -207,29 +193,16 @@ export interface AuditLogEntry {
   metadata?: Record<string, unknown>;
 }
 
-// ==================== HANDOFF ====================
-
-export interface HandoffRequest {
-  sessionId: string;
-  userId: string;
-  reason: 'user_requested' | 'ai_insufficient' | 'emergency' | 'complex_case';
-  summary: string;
-  symptoms: string[];
-  urgencyLevel: UrgencyLevel;
-  preferredSpecialty?: string;
-  timestamp: Date;
-}
-
 // ==================== CONSTANTS ====================
 
-const MAX_HISTORY_LENGTH = 16;
+const MAX_HISTORY_LENGTH = 20; // Tăng lên để có更多 context
 const MAX_REQUESTS_PER_MINUTE = 25;
 const LANGUAGE_CACHE_MAX_SIZE = 100;
 const QUOTA_COOLDOWN_MS = 3 * 60 * 1000;
 const SPECIALTY_CACHE_TTL = 5 * 60 * 1000;
-const MAX_OUTPUT_TOKENS = 1200;
+const MAX_OUTPUT_TOKENS = 1500; // Tăng lên
 const GROQ_MODEL = 'llama-3.3-70b-versatile';
-const MAX_ASSESSMENT_TURNS = 5; // max turns before forcing assessment
+const MAX_ASSESSMENT_TURNS = 5; // Tăng lên 1 turn
 
 const ALL_TIME_SLOTS = [
   '09:00', '09:30', '10:00', '10:30', '11:00', '11:30',
@@ -255,21 +228,45 @@ const ENGLISH_KEYWORDS = [
   'health', 'feel', 'taking', 'blood', 'heart', 'skin',
 ];
 
-// ==================== TRIAGE SCORING ENGINE ====================
-// Each entry: { pattern, score, redFlag, specialty }
-// score 0-100: higher = more urgent
-// redFlag: true = always escalate to high/critical
+// ==================== BOOKING INTENT KEYWORDS ====================
+
+const BOOKING_CONFIRM_VI = [
+  'có', 'ok', 'oke', 'okay', 'được', 'đồng ý', 'vâng', 'ừ', 'ừm', 'ừh',
+  'muốn', 'đặt lịch', 'đặt thôi', 'đặt đi', 'đặt ngay', 'muốn đặt',
+  'muốn khám', 'cho tôi đặt', 'hãy đặt', 'ok đặt', 'đặt cho tôi',
+  'giúp tôi đặt', 'bạn đặt giúp', 'đặt lịch hộ tôi', 'tôi muốn đặt',
+  'đặt cho mình', 'mình muốn', 'tôi đồng ý', 'tôi ok', 'được rồi',
+  'thôi được', 'chắc vậy', 'khám thôi', 'thử khám', 'đặt luôn',
+  'yes', 'yeah', 'yep', 'yup', 'ok', 'okay', 'sure', 'please',
+  'book', 'book it', 'book now', 'schedule', 'schedule it', 'confirm',
+  'go ahead', 'go for it', 'i want', 'i\'d like', 'let\'s book',
+];
+
+const BOOKING_DECLINE_VI = [
+  'không', 'thôi', 'không cần', 'chưa', 'để sau', 'không muốn',
+  'hôm khác', 'từ từ', 'không cần thiết', 'tự khỏi', 'chờ thêm',
+  'no', 'nope', 'not now', 'later', 'maybe later', 'not yet',
+  'no thanks', 'i\'ll pass', 'skip', 'don\'t need', 'no need',
+];
+
+const BOOKING_INQUIRY_VI = [
+  'lịch hẹn', 'xem lịch', 'kiểm tra lịch', 'lịch khám', 'lịch đã đặt',
+  'appointment', 'my appointment', 'check appointment', 'view appointment',
+  'khi nào tôi có lịch', 'lịch của tôi',
+];
+
+// ==================== TRIAGE RULES ====================
 
 interface TriageRule {
   patterns: { vi: string[]; en: string[] };
-  score: number;        // urgency score contribution
-  redFlag: boolean;     // immediate escalation
-  specialty?: string;   // suggested specialty
+  score: number;
+  redFlag: boolean;
+  specialty?: string;
   category?: string;
 }
 
 const TRIAGE_RULES: TriageRule[] = [
-  // ─── CRITICAL (score ≥ 90) ───
+  // CRITICAL (score ≥ 90)
   {
     patterns: {
       vi: ['ngừng tim', 'tim ngừng đập', 'bất tỉnh đột ngột', 'không có mạch', 'ngừng thở'],
@@ -305,11 +302,11 @@ const TRIAGE_RULES: TriageRule[] = [
     },
     score: 95, redFlag: true, specialty: 'cardiology',
   },
-  // ─── HIGH (score 70–89) ───
+  // HIGH (score 70–89)
   {
     patterns: {
-      vi: ['đau ngực', 'tức ngực', 'tim đập loạn', 'hồi hộp kèm đau', 'nhịp tim không đều'],
-      en: ['chest pain', 'chest tightness', 'irregular heartbeat with pain', 'palpitations with chest pain'],
+      vi: ['đau ngực', 'tức ngực', 'tim đập loạn', 'nhịp tim không đều'],
+      en: ['chest pain', 'chest tightness', 'irregular heartbeat', 'palpitations with chest pain'],
     },
     score: 80, redFlag: false, specialty: 'cardiology',
   },
@@ -322,44 +319,38 @@ const TRIAGE_RULES: TriageRule[] = [
   },
   {
     patterns: {
-      vi: ['đau đầu dữ dội đột ngột', 'đau đầu tệ nhất đời', 'thunderclap headache'],
+      vi: ['đau đầu dữ dội đột ngột', 'đau đầu tệ nhất đời'],
       en: ['sudden severe headache', 'worst headache of life', 'thunderclap headache'],
     },
     score: 85, redFlag: true, specialty: 'neurology',
   },
   {
     patterns: {
-      vi: ['khó thở tăng dần', 'thở khò khè nặng', 'hen cấp', 'không thở được bình thường'],
+      vi: ['khó thở tăng dần', 'thở khò khè nặng', 'hen cấp'],
       en: ['worsening shortness of breath', 'severe wheezing', 'acute asthma', 'difficulty breathing'],
     },
     score: 78, redFlag: false, specialty: 'pulmonology',
   },
+  // Thêm patterns cho bệnh nhiệt đới
   {
     patterns: {
-      vi: ['sụt cân không rõ nguyên nhân', 'gầy nhanh', 'sụt 5kg không rõ lý do'],
-      en: ['unexplained weight loss', 'rapid weight loss', 'losing weight without reason'],
+      vi: ['sốt xuất huyết', 'đau cơ', 'phát ban', 'chấm xuất huyết', 'nôn ra máu'],
+      en: ['dengue', 'muscle pain', 'rash', 'petechiae', 'vomiting blood'],
     },
-    score: 72, redFlag: false, specialty: 'oncology',
+    score: 70, redFlag: false, specialty: 'infectious_disease',
   },
   {
     patterns: {
-      vi: ['nôn ra máu', 'đi ngoài phân đen', 'phân có máu', 'tiểu ra máu'],
-      en: ['vomiting blood', 'black tarry stool', 'blood in stool', 'blood in urine'],
+      vi: ['tay chân miệng', 'loét miệng', 'phỏng nước', 'sốt', 'trẻ em'],
+      en: ['hand foot mouth', 'mouth ulcers', 'blisters', 'fever', 'children'],
     },
-    score: 82, redFlag: true, specialty: 'gastroenterology',
+    score: 60, redFlag: false, specialty: 'pediatrics',
   },
+  // MEDIUM (score 40–69)
   {
     patterns: {
-      vi: ['mặt xệ', 'nói ngọng đột ngột', 'tay yếu đột ngột', 'tê liệt đột ngột'],
-      en: ['facial droop', 'sudden slurred speech', 'sudden arm weakness', 'sudden numbness'],
-    },
-    score: 90, redFlag: true, specialty: 'neurology',
-  },
-  // ─── MEDIUM (score 40–69) ───
-  {
-    patterns: {
-      vi: ['đau kéo dài nhiều ngày', 'đau không giảm', 'đau mấy ngày rồi', 'đau 3 ngày', 'đau 5 ngày'],
-      en: ['pain for several days', 'persistent pain', 'pain not improving', 'pain for 3 days', 'pain for a week'],
+      vi: ['đau kéo dài nhiều ngày', 'đau không giảm', 'đau 3 ngày', 'đau 5 ngày'],
+      en: ['pain for several days', 'persistent pain', 'pain for 3 days', 'pain for a week'],
     },
     score: 60, redFlag: false,
   },
@@ -372,47 +363,47 @@ const TRIAGE_RULES: TriageRule[] = [
   },
   {
     patterns: {
-      vi: ['huyết áp cao', 'huyết áp 160', 'huyết áp 180', 'tăng huyết áp'],
-      en: ['high blood pressure', 'hypertension', 'blood pressure 160', 'blood pressure 180'],
+      vi: ['huyết áp cao', 'huyết áp 160', 'tăng huyết áp'],
+      en: ['high blood pressure', 'hypertension', 'blood pressure 160'],
     },
     score: 58, redFlag: false, specialty: 'cardiology',
   },
   {
     patterns: {
-      vi: ['đường huyết cao', 'đường huyết thấp', 'tiểu đường mất kiểm soát', 'hạ đường huyết'],
-      en: ['high blood sugar', 'low blood sugar', 'uncontrolled diabetes', 'hypoglycemia'],
+      vi: ['đường huyết cao', 'tiểu đường mất kiểm soát', 'hạ đường huyết'],
+      en: ['high blood sugar', 'uncontrolled diabetes', 'hypoglycemia'],
     },
     score: 62, redFlag: false, specialty: 'endocrinology',
   },
   {
     patterns: {
-      vi: ['mệt mỏi kéo dài', 'kiệt sức không rõ nguyên nhân', 'mệt mỏi hàng tuần'],
+      vi: ['mệt mỏi kéo dài', 'kiệt sức không rõ nguyên nhân'],
       en: ['prolonged fatigue', 'chronic exhaustion', 'weeks of fatigue'],
     },
     score: 45, redFlag: false, specialty: 'internal_medicine',
   },
   {
     patterns: {
-      vi: ['ho ra máu', 'ho kéo dài hơn 2 tuần', 'ho ra đờm màu lạ'],
-      en: ['coughing blood', 'cough lasting over 2 weeks', 'coughing colored sputum'],
+      vi: ['ho ra máu', 'ho kéo dài hơn 2 tuần'],
+      en: ['coughing blood', 'cough lasting over 2 weeks'],
     },
     score: 65, redFlag: false, specialty: 'pulmonology',
   },
   {
     patterns: {
-      vi: ['đau khớp nhiều khớp', 'sưng khớp', 'cứng khớp buổi sáng kéo dài'],
-      en: ['multiple joint pain', 'swollen joints', 'prolonged morning stiffness'],
+      vi: ['sụt cân không rõ nguyên nhân', 'gầy nhanh'],
+      en: ['unexplained weight loss', 'rapid weight loss'],
     },
-    score: 48, redFlag: false, specialty: 'orthopedics',
+    score: 58, redFlag: false, specialty: 'oncology',
   },
+  // LOW (score 10–39) - Thêm patterns cho bệnh thông thường
   {
     patterns: {
-      vi: ['lo âu nặng', 'trầm cảm', 'không muốn sống', 'có ý định tự hại'],
-      en: ['severe anxiety', 'depression', 'suicidal thoughts', 'self-harm thoughts'],
+      vi: ['cảm cúm', 'ho', 'sổ mũi', 'hắt hơi', 'đau họng', 'mệt mỏi'],
+      en: ['flu', 'cough', 'runny nose', 'sneezing', 'sore throat', 'fatigue'],
     },
-    score: 75, redFlag: true, specialty: 'psychiatry',
+    score: 25, redFlag: false, specialty: 'internal_medicine',
   },
-  // ─── LOW (score 10–39) ───
   {
     patterns: {
       vi: ['đau đầu nhẹ', 'nhức đầu nhẹ', 'đau đầu thoáng qua'],
@@ -427,17 +418,9 @@ const TRIAGE_RULES: TriageRule[] = [
     },
     score: 10, redFlag: false,
   },
-  {
-    patterns: {
-      vi: ['cảm cúm nhẹ', 'sổ mũi', 'hắt hơi', 'ho nhẹ', 'đau họng nhẹ'],
-      en: ['mild cold', 'runny nose', 'sneezing', 'mild cough', 'sore throat'],
-    },
-    score: 15, redFlag: false, specialty: 'ent',
-  },
 ];
 
-// ─── RED FLAG COMBINATIONS ───
-// When these symptom combos occur together → always escalate
+// ==================== RED FLAG COMBOS ====================
 
 interface RedFlagCombo {
   symptoms: { vi: string[]; en: string[] }[];
@@ -468,33 +451,15 @@ const RED_FLAG_COMBOS: RedFlagCombo[] = [
   {
     symptoms: [
       { vi: ['đau bụng dữ dội'], en: ['severe abdominal pain'] },
-      { vi: ['bụng cứng', 'căng cứng'], en: ['rigid abdomen', 'board-like abdomen'] },
+      { vi: ['bụng cứng'], en: ['rigid abdomen'] },
       { vi: ['sốt'], en: ['fever'] },
     ],
     reason: { vi: 'Nguy cơ viêm phúc mạc', en: 'Possible peritonitis' },
     escalateTo: 'critical', specialty: 'surgery',
   },
-  {
-    symptoms: [
-      { vi: ['đau lưng dữ dội'], en: ['severe back pain'] },
-      { vi: ['tiểu ra máu', 'nước tiểu màu đỏ'], en: ['blood in urine', 'red urine'] },
-    ],
-    reason: { vi: 'Nguy cơ sỏi thận / tắc niệu quản', en: 'Possible kidney stone / ureteral obstruction' },
-    escalateTo: 'high', specialty: 'urology',
-  },
-  {
-    symptoms: [
-      { vi: ['đau đầu'], en: ['headache'] },
-      { vi: ['mờ mắt', 'nhìn mờ'], en: ['blurred vision', 'vision changes'] },
-      { vi: ['buồn nôn'], en: ['nausea'] },
-    ],
-    reason: { vi: 'Nguy cơ tăng áp lực nội sọ hoặc đột quỵ', en: 'Possible increased intracranial pressure or stroke' },
-    escalateTo: 'critical', specialty: 'neurology',
-  },
 ];
 
-// ─── COMORBIDITY RISK MULTIPLIERS ───
-// Patient conditions that increase urgency score
+// ==================== COMORBIDITY MULTIPLIERS ====================
 
 const COMORBIDITY_MULTIPLIERS: Array<{
   conditions: string[];
@@ -507,29 +472,24 @@ const COMORBIDITY_MULTIPLIERS: Array<{
     note: { vi: 'Tiểu đường làm tăng nguy cơ biến chứng', en: 'Diabetes increases complication risk' },
   },
   {
-    conditions: ['tim mạch', 'bệnh tim', 'heart disease', 'coronary artery disease'],
+    conditions: ['tim mạch', 'bệnh tim', 'heart disease'],
     multiplier: 1.3,
     note: { vi: 'Bệnh tim làm tăng nguy cơ đáng kể', en: 'Heart disease significantly increases risk' },
   },
   {
-    conditions: ['cao huyết áp', 'tăng huyết áp', 'hypertension', 'blood pressure'],
+    conditions: ['cao huyết áp', 'tăng huyết áp', 'hypertension'],
     multiplier: 1.15,
     note: { vi: 'Huyết áp cao là yếu tố nguy cơ tim mạch', en: 'Hypertension is a cardiovascular risk factor' },
   },
   {
-    conditions: ['ung thư', 'cancer', 'hóa trị', 'xạ trị', 'chemotherapy'],
+    conditions: ['ung thư', 'cancer', 'hóa trị'],
     multiplier: 1.4,
     note: { vi: 'Bệnh nhân ung thư cần theo dõi sát', en: 'Cancer patients require close monitoring' },
   },
   {
-    conditions: ['suy thận', 'kidney failure', 'dialysis', 'lọc thận'],
+    conditions: ['suy thận', 'kidney failure'],
     multiplier: 1.35,
     note: { vi: 'Suy thận làm giảm khả năng thải độc', en: 'Kidney failure impairs toxin clearance' },
-  },
-  {
-    conditions: ['suy gan', 'liver failure', 'xơ gan', 'cirrhosis'],
-    multiplier: 1.3,
-    note: { vi: 'Bệnh gan ảnh hưởng chuyển hóa thuốc', en: 'Liver disease affects drug metabolism' },
   },
   {
     conditions: ['hiv', 'aids', 'suy giảm miễn dịch', 'immunocompromised'],
@@ -543,36 +503,74 @@ const COMORBIDITY_MULTIPLIERS: Array<{
   },
 ];
 
-// ─── AGE RISK ───
 const getAgeRiskMultiplier = (age?: number): number => {
   if (!age) return 1.0;
   if (age < 2) return 1.5;
   if (age < 12) return 1.2;
-  if (age > 65) return 1.25;
   if (age > 80) return 1.4;
+  if (age > 65) return 1.25;
   return 1.0;
 };
 
-// ─── PAIN SCORE EXTRACTION ───
 const PAIN_SCORE_REGEX =
-  /(?:đau|pain|mức độ|intensity|score)\s*(?:khoảng|khoảng chừng|about|around)?\s*(\d{1,2})\s*(?:\/10|trên 10|out of 10)?/i;
+  /(?:đau|pain|mức độ|intensity|score)\s*(?:khoảng|about|around)?\s*(\d{1,2})\s*(?:\/10|trên 10|out of 10)?/i;
 
-// ─── DURATION PATTERNS ───
 const DURATION_PATTERNS = {
   vi: /(\d+)\s*(phút|giờ|ngày|tuần|tháng|năm)/i,
   en: /(\d+)\s*(minute|hour|day|week|month|year)/i,
 };
 
-// ─── STRUCTURED ASSESSMENT QUESTIONS ───
+const PROGRESSION_PATTERNS = {
+  worsening: {
+    vi: ['nặng hơn', 'tăng lên', 'dữ dội hơn', 'không đỡ', 'càng ngày càng'],
+    en: ['worse', 'increasing', 'more severe', 'not better', 'getting worse'],
+  },
+  improving: {
+    vi: ['đỡ hơn', 'nhẹ hơn', 'giảm', 'bớt', 'khá hơn'],
+    en: ['better', 'improving', 'less', 'decreasing', 'relieved'],
+  },
+  stable: {
+    vi: ['không đổi', 'vẫn vậy', 'như cũ', 'ổn định'],
+    en: ['same', 'unchanged', 'stable', 'no change'],
+  },
+};
+
+// ==================== URGENCY ROUTING ====================
+
+const URGENCY_ROUTING: Record<
+  UrgencyLevel,
+  { vi: string; en: string; timeframe: { vi: string; en: string } }
+> = {
+  critical: {
+    vi: '🚨 Tình trạng có thể nguy hiểm đến tính mạng. GỌI 115 NGAY!',
+    en: '🚨 Condition may be life-threatening. CALL 911/115 NOW!',
+    timeframe: { vi: 'Ngay lập tức', en: 'Immediately' },
+  },
+  high: {
+    vi: '⚠️ Cần khám bác sĩ trong vòng **24 giờ**. Đừng trì hoãn.',
+    en: '⚠️ See a doctor within **24 hours**. Do not delay.',
+    timeframe: { vi: 'Trong 24 giờ', en: 'Within 24 hours' },
+  },
+  medium: {
+    vi: '📋 Nên đặt lịch khám **trong 2–3 ngày** tới để được đánh giá chính xác.',
+    en: '📋 Schedule an appointment **within 2–3 days** for proper evaluation.',
+    timeframe: { vi: 'Trong 2-3 ngày', en: 'Within 2-3 days' },
+  },
+  low: {
+    vi: '📅 Nên đặt lịch khám định kỳ **trong tuần này** để chắc chắn hơn.',
+    en: '📅 Schedule a routine checkup **this week** for peace of mind.',
+    timeframe: { vi: 'Trong tuần này', en: 'Within this week' },
+  },
+};
+
+// ==================== ASSESSMENT QUESTIONS ====================
 
 interface AssessmentQuestion {
   phase: AssessmentPhase;
   question: { vi: string; en: string };
-  followIf?: string; // phase to follow after answer
 }
 
 const ASSESSMENT_QUESTIONS: Record<string, AssessmentQuestion[]> = {
-  // After main symptom identified, ask these in order
   general: [
     {
       phase: 'collecting_duration',
@@ -584,22 +582,22 @@ const ASSESSMENT_QUESTIONS: Record<string, AssessmentQuestion[]> = {
     {
       phase: 'collecting_severity',
       question: {
-        vi: 'Trên thang điểm 1–10, mức độ đau/khó chịu của bạn là bao nhiêu? (1 = rất nhẹ, 10 = không chịu được)',
-        en: 'On a scale of 1–10, how severe is your pain/discomfort? (1 = very mild, 10 = unbearable)',
+        vi: 'Trên thang điểm 1–10, mức độ khó chịu là bao nhiêu? (1 = rất nhẹ, 10 = không chịu được)',
+        en: 'On a scale of 1–10, how severe is your discomfort? (1 = very mild, 10 = unbearable)',
       },
     },
     {
       phase: 'collecting_associated',
       question: {
-        vi: 'Có triệu chứng nào khác đi kèm không? (ví dụ: sốt, buồn nôn, chóng mặt, khó thở)',
-        en: 'Are there any other symptoms? (e.g., fever, nausea, dizziness, shortness of breath)',
+        vi: 'Có triệu chứng nào khác đi kèm không? (sốt, buồn nôn, chóng mặt, khó thở...)',
+        en: 'Any other symptoms? (fever, nausea, dizziness, shortness of breath...)',
       },
     },
     {
       phase: 'collecting_history',
       question: {
-        vi: 'Bạn có bệnh nền nào không? (ví dụ: tiểu đường, huyết áp, tim mạch)',
-        en: 'Do you have any underlying conditions? (e.g., diabetes, hypertension, heart disease)',
+        vi: 'Trước đây bạn có từng gặp triệu chứng tương tự không?',
+        en: 'Have you experienced similar symptoms before?',
       },
     },
   ],
@@ -612,17 +610,10 @@ const ASSESSMENT_QUESTIONS: Record<string, AssessmentQuestion[]> = {
       },
     },
     {
-      phase: 'collecting_duration',
-      question: {
-        vi: 'Cơn đau đầu kéo dài bao lâu và bắt đầu đột ngột hay từ từ?',
-        en: 'How long has it lasted, and did it come on suddenly or gradually?',
-      },
-    },
-    {
       phase: 'collecting_severity',
       question: {
-        vi: 'Mức độ đau từ 1–10? Có kèm buồn nôn, nhạy cảm ánh sáng, mờ mắt không?',
-        en: 'Pain score 1–10? Any nausea, light sensitivity, or vision changes?',
+        vi: 'Mức độ đau 1–10? Khởi phát đột ngột hay từ từ? Có nhạy cảm ánh sáng/tiếng ồn không?',
+        en: 'Pain score 1–10? Did it come on suddenly or gradually? Any light/noise sensitivity?',
       },
     },
   ],
@@ -630,22 +621,15 @@ const ASSESSMENT_QUESTIONS: Record<string, AssessmentQuestion[]> = {
     {
       phase: 'collecting_location',
       question: {
-        vi: 'Đau ở vùng nào của bụng? (trên rốn, dưới rốn, hố chậu phải, hố chậu trái?)',
-        en: 'Where exactly is the abdominal pain? (upper, lower, right lower quadrant, left lower quadrant?)',
-      },
-    },
-    {
-      phase: 'collecting_duration',
-      question: {
-        vi: 'Đau kéo dài bao lâu? Đau liên tục hay từng cơn? Có liên quan đến ăn uống không?',
-        en: 'How long has it lasted? Constant or colicky? Related to eating?',
+        vi: 'Đau ở vùng nào của bụng? (trên rốn, dưới rốn, hố chậu phải/trái?)',
+        en: 'Where exactly? (upper, lower, right or left lower quadrant?)',
       },
     },
     {
       phase: 'collecting_associated',
       question: {
-        vi: 'Có kèm sốt, nôn, tiêu chảy, táo bón, hoặc phân/nước tiểu có màu bất thường không?',
-        en: 'Any fever, vomiting, diarrhea, constipation, or changes in stool/urine color?',
+        vi: 'Có kèm sốt, nôn, tiêu chảy, táo bón, hoặc phân/nước tiểu bất thường không?',
+        en: 'Any fever, vomiting, diarrhea, constipation, or abnormal stool/urine?',
       },
     },
   ],
@@ -653,53 +637,61 @@ const ASSESSMENT_QUESTIONS: Record<string, AssessmentQuestion[]> = {
     {
       phase: 'collecting_location',
       question: {
-        vi: 'Đau ở vị trí nào trong ngực? Có lan ra tay trái, hàm, lưng không?',
+        vi: 'Đau ở vị trí nào trong ngực? Có lan ra tay trái, hàm, hoặc lưng không?',
         en: 'Where in the chest? Does it radiate to the left arm, jaw, or back?',
-      },
-    },
-    {
-      phase: 'collecting_duration',
-      question: {
-        vi: 'Cơn đau ngực bắt đầu khi nào? Đau liên tục hay từng lúc?',
-        en: 'When did chest pain start? Constant or intermittent?',
       },
     },
     {
       phase: 'collecting_associated',
       question: {
-        vi: 'Có kèm khó thở, đổ mồ hôi, buồn nôn, hồi hộp, hoặc chóng mặt không?',
-        en: 'Any shortness of breath, sweating, nausea, palpitations, or dizziness?',
+        vi: 'Có kèm khó thở, đổ mồ hôi, buồn nôn, hoặc hồi hộp không?',
+        en: 'Any shortness of breath, sweating, nausea, or palpitations?',
+      },
+    },
+  ],
+  fever: [
+    {
+      phase: 'collecting_duration',
+      question: {
+        vi: 'Sốt được bao lâu rồi? Nhiệt độ cao nhất là bao nhiêu?',
+        en: 'How long have you had the fever? What was the highest temperature?',
+      },
+    },
+    {
+      phase: 'collecting_associated',
+      question: {
+        vi: 'Có kèm theo ớn lạnh, đau người, phát ban, hoặc các triệu chứng khác không?',
+        en: 'Any chills, body aches, rash, or other symptoms?',
       },
     },
   ],
 };
 
-// ==================== EMERGENCY TYPES ====================
+// ==================== EMERGENCY KEYWORDS ====================
 
-type EmergencyProtocol = 'cardiac_emergency' | 'stroke_emergency' | 'respiratory_emergency' | 'psychiatric_emergency';
+type EmergencyProtocol =
+  | 'cardiac_emergency'
+  | 'stroke_emergency'
+  | 'respiratory_emergency'
+  | 'psychiatric_emergency';
 
 const EMERGENCY_KEYWORDS: Record<EmergencyProtocol, string[]> = {
   cardiac_emergency: [
-    'chest pain', 'đau ngực', 'heart pain', 'đau tim', 'palpitations',
-    'đánh trống ngực', 'tightness in chest', 'tức ngực',
-    'heart attack', 'nhồi máu cơ tim', 'đau ngực dữ dội', 'cardiac arrest',
-    'ngừng tim',
+    'chest pain', 'đau ngực', 'heart pain', 'đau tim',
+    'heart attack', 'nhồi máu cơ tim', 'đau ngực dữ dội', 'cardiac arrest', 'ngừng tim',
   ],
   stroke_emergency: [
     'facial drooping', 'mặt xệ', 'méo miệng', 'arm weakness', 'tay yếu',
     'liệt tay', 'speech difficulty', 'nói khó', 'nói ngọng',
     'sudden numbness', 'tê liệt đột ngột', 'đột quỵ', 'stroke',
-    'mất ý thức đột ngột', 'sudden loss of consciousness',
   ],
   respiratory_emergency: [
     'breathing difficulty', 'khó thở nặng', 'choking', 'ngạt thở',
-    'nghẹt thở', 'blue lips', 'môi tím', 'severe asthma', 'hen nặng',
     'không thở được', 'cannot breathe', 'tím tái',
   ],
   psychiatric_emergency: [
     'muốn tự tử', 'không muốn sống', 'tự làm đau', 'suicidal',
-    'want to die', 'kill myself', 'end my life', 'self harm',
-    'ý định tự hại',
+    'want to die', 'kill myself', 'end my life', 'self harm', 'ý định tự hại',
   ],
 };
 
@@ -715,25 +707,24 @@ const EMERGENCY_PROTOCOLS: Record<Language, Record<EmergencyProtocol, string>> =
 4. 📞 Thông báo cho người thân ngay lập tức
 5. 🚫 **Tuyệt đối không tự lái xe**
 
-⚠️ Nếu có Aspirin và không bị dị ứng, nhai 1 viên 325mg trong khi chờ cấp cứu.
+⚠️ Nếu có Aspirin và không dị ứng, nhai 1 viên 325mg trong khi chờ.
 
 ⚕️ Đây là tình huống y tế khẩn cấp. Hành động ngay!`,
     stroke_emergency: `🚨 **CẤP CỨU ĐỘT QUỴ — THỜI GIAN LÀ BỘ NÃO!**
 
 Nhớ quy tắc **FAST**:
-- 🗣️ **F** — FACE (Mặt): Miệng có bị lệch không?
-- 💪 **A** — ARMS (Tay): Giơ cả hai tay lên — có tay nào yếu/rơi xuống không?
-- 🗨️ **S** — SPEECH (Nói): Nói có ngọng/khó nghe không?
+- 🗣️ **F** — FACE: Miệng có bị lệch không?
+- 💪 **A** — ARMS: Giơ cả hai tay — có tay nào yếu/rơi xuống không?
+- 🗨️ **S** — SPEECH: Nói có ngọng không?
 - ⏰ **T** — TIME: **GỌI 115 NGAY!**
 
-⚠️ **CỬA SỔ VÀNG là 4.5 giờ** — điều trị càng sớm càng ít di chứng!
-🚫 Không cho ăn uống, không để nằm đầu thấp`,
+⚠️ **Cửa sổ vàng là 4.5 giờ** — điều trị càng sớm càng tốt!`,
     respiratory_emergency: `🚨 **CẤP CỨU HÔ HẤP — NGUY CẤP!**
 
 1. 🚑 **GỌI 115 NGAY**
 2. 💨 Giữ đường thở thông thoáng — ngẩng đầu nhẹ
-3. 🪑 Để bệnh nhân ngồi tư thế thoải mái (không nằm)
-4. 🌬️ Nếu có thuốc xịt hen → xịt ngay theo chỉ định
+3. 🪑 Để ngồi tư thế thoải mái (không nằm)
+4. 🌬️ Nếu có thuốc xịt hen → xịt ngay
 5. 🚪 Mở cửa sổ, tạo không khí thông thoáng
 
 ⚠️ KHÔNG để một mình — ở cạnh đến khi cấp cứu đến!`,
@@ -746,15 +737,15 @@ Tôi rất lo lắng cho bạn. Bạn không phải một mình.
 - Cấp cứu: **115**
 - Hoặc đến khoa Tâm Thần bệnh viện gần nhất
 
-💙 Xin hãy nói chuyện với ai đó ngay bây giờ — bạn xứng đáng được giúp đỡ.`,
+💙 Xin hãy nói chuyện với ai đó ngay bây giờ.`,
   },
   en: {
     cardiac_emergency: `🚨 **CARDIAC EMERGENCY — IMMEDIATE ACTION REQUIRED!**
 
 1. 🚑 **CALL 911/115 NOW** — Do not wait
 2. 🏥 Go to nearest hospital with **Cardiac Unit**
-3. 💊 **Lie down**, avoid any physical exertion
-4. 📞 Notify family/someone nearby immediately
+3. 💊 **Lie down**, avoid physical exertion
+4. 📞 Notify family immediately
 5. 🚫 **DO NOT drive yourself**
 
 ⚠️ If you have Aspirin and are not allergic, chew 1 tablet (325mg) while waiting.
@@ -763,61 +754,34 @@ Tôi rất lo lắng cho bạn. Bạn không phải một mình.
     stroke_emergency: `🚨 **STROKE EMERGENCY — TIME IS BRAIN!**
 
 Remember **FAST**:
-- 🗣️ **F** — FACE: Is the face drooping on one side?
-- 💪 **A** — ARMS: Can both arms be raised equally?
-- 🗨️ **S** — SPEECH: Is speech slurred or strange?
+- 🗣️ **F** — FACE drooping?
+- 💪 **A** — ARMS: can you raise both equally?
+- 🗨️ **S** — SPEECH slurred?
 - ⏰ **T** — TIME: **CALL 911/115 NOW!**
 
-⚠️ **Golden window is 4.5 hours** — earlier treatment = better outcome!
-🚫 No food or drink, do not lower the head`,
+⚠️ **Golden window is 4.5 hours** — earlier treatment = better outcome!`,
     respiratory_emergency: `🚨 **RESPIRATORY EMERGENCY — CRITICAL!**
 
 1. 🚑 **CALL 911/115 NOW**
 2. 💨 Keep airway clear — tilt head slightly back
-3. 🪑 Sit patient upright (do not lie flat)
-4. 🌬️ Use inhaler if prescribed and available
+3. 🪑 Sit upright (do not lie flat)
+4. 🌬️ Use inhaler if available
 5. 🚪 Open windows for fresh air
 
 ⚠️ Stay with the person until help arrives!`,
     psychiatric_emergency: `🚨 **MENTAL HEALTH CRISIS SUPPORT**
 
-I'm very concerned about you. You are not alone.
+I am very concerned about you. You are not alone.
 
 📞 **Call now:**
-- Crisis hotline: **988** (Suicide & Crisis Lifeline)
+- Crisis Lifeline: **988**
 - Emergency: **911/115**
-- Or go to the nearest psychiatric emergency
 
 💙 Please talk to someone right now — you deserve support.`,
   },
 };
 
-// ─── URGENCY ROUTING MESSAGES ───
-
-const URGENCY_ROUTING: Record<UrgencyLevel, { vi: string; en: string; timeframe: { vi: string; en: string } }> = {
-  critical: {
-    vi: '🚨 Tình trạng có thể nguy hiểm đến tính mạng. GỌI 115 NGAY!',
-    en: '🚨 Condition may be life-threatening. CALL 911/115 NOW!',
-    timeframe: { vi: 'Ngay lập tức', en: 'Immediately' },
-  },
-  high: {
-    vi: '⚠️ Cần khám bác sĩ trong vòng **24 giờ**. Đừng trì hoãn.',
-    en: '⚠️ See a doctor within **24 hours**. Do not delay.',
-    timeframe: { vi: 'Trong 24 giờ', en: 'Within 24 hours' },
-  },
-  medium: {
-    vi: '📋 Nên đặt lịch khám **trong 2–3 ngày** tới.',
-    en: '📋 Schedule an appointment **within 2–3 days**.',
-    timeframe: { vi: 'Trong 2-3 ngày', en: 'Within 2-3 days' },
-  },
-  low: {
-    vi: '📅 Có thể đặt lịch khám định kỳ **trong tuần này**.',
-    en: '📅 Schedule a routine checkup **this week**.',
-    timeframe: { vi: 'Trong tuần này', en: 'Within this week' },
-  },
-};
-
-// ─── FALLBACK RESPONSES ───
+// ==================== FALLBACK RESPONSES ====================
 
 type FallbackKey = 'general' | 'cardiology' | 'emergency' | 'medications';
 
@@ -829,8 +793,8 @@ const FALLBACK_RESPONSES: Record<Language, Record<FallbackKey, string>> = {
     medications: `⚠️ Tham khảo dược sĩ hoặc bác sĩ về thuốc.\n\n⚕️ Thông tin này chỉ mang tính giáo dục.`,
   },
   en: {
-    general: `I apologize, the AI service is temporarily unavailable.\n\n⚠️ Please consult a qualified doctor.\nFor severe symptoms, call 911/115 immediately.\n\n⚕️ Educational purposes only.`,
-    cardiology: `Regarding cardiac concern:\n⚠️ Schedule a cardiology appointment.\n🚨 Call 911/115 for severe chest pain or shortness of breath.\n\n⚕️ Educational purposes only.`,
+    general: `AI service is temporarily unavailable.\n\n⚠️ Please consult a qualified doctor.\nFor severe symptoms, call 911/115 immediately.\n\n⚕️ Educational purposes only.`,
+    cardiology: `Regarding cardiac concern:\n⚠️ Schedule a cardiology appointment.\n🚨 Call 911/115 for severe chest pain.\n\n⚕️ Educational purposes only.`,
     emergency: `🚨 CALL 911/115 IMMEDIATELY!\n🏥 GO TO NEAREST HOSPITAL`,
     medications: `⚠️ Consult a pharmacist or doctor about medications.\n\n⚕️ Educational purposes only.`,
   },
@@ -839,10 +803,16 @@ const FALLBACK_RESPONSES: Record<Language, Record<FallbackKey, string>> = {
 // ==================== CUSTOM ERRORS ====================
 
 class QuotaExceededError extends Error {
-  constructor() { super('QUOTA_EXCEEDED'); this.name = 'QuotaExceededError'; }
+  constructor() {
+    super('QUOTA_EXCEEDED');
+    this.name = 'QuotaExceededError';
+  }
 }
 class EmptyMessageError extends Error {
-  constructor() { super('Empty message'); this.name = 'EmptyMessageError'; }
+  constructor() {
+    super('Empty message');
+    this.name = 'EmptyMessageError';
+  }
 }
 
 // ==================== SPECIALTY MANAGER ====================
@@ -868,7 +838,11 @@ class SpecialtyManager {
     if (!force && now - this.lastFetchTime < SPECIALTY_CACHE_TTL) return;
     if (this.fetchPromise) return this.fetchPromise;
     this.fetchPromise = this.fetchFromDB();
-    try { await this.fetchPromise; } finally { this.fetchPromise = null; }
+    try {
+      await this.fetchPromise;
+    } finally {
+      this.fetchPromise = null;
+    }
   }
 
   private async fetchFromDB(): Promise<void> {
@@ -938,7 +912,8 @@ class SpecialtyManager {
           if (normalizedMsg.includes(kw.normalize('NFC').toLowerCase())) score++;
         }
       }
-      if (score > best.score) best = { category: spec.category, specialtyId: id, score };
+      if (score > best.score)
+        best = { category: spec.category, specialtyId: id, score };
     }
 
     return { category: best.category, specialtyId: best.specialtyId };
@@ -953,8 +928,10 @@ class SpecialtyManager {
     await this.loadSpecialties();
     const normalizedName = name.normalize('NFC').toLowerCase();
     for (const spec of this.specialties.values()) {
-      if (spec.name.normalize('NFC').toLowerCase().includes(normalizedName) ||
-          normalizedName.includes(spec.name.normalize('NFC').toLowerCase())) {
+      if (
+        spec.name.normalize('NFC').toLowerCase().includes(normalizedName) ||
+        normalizedName.includes(spec.name.normalize('NFC').toLowerCase())
+      ) {
         return spec;
       }
     }
@@ -983,7 +960,8 @@ class SpecialtyManager {
         : 'Specialty: GENERAL MEDICINE. Provide comprehensive medical information.';
     }
     const spec = await this.getSpecialtyById(specialtyId);
-    if (!spec) return language === 'vi' ? 'Chuyên khoa: Y HỌC TỔNG QUÁT' : 'Specialty: GENERAL MEDICINE';
+    if (!spec)
+      return language === 'vi' ? 'Chuyên khoa: Y HỌC TỔNG QUÁT' : 'Specialty: GENERAL MEDICINE';
     return language === 'vi'
       ? `Chuyên khoa: ${spec.name.toUpperCase()}. Tư vấn về ${spec.name.toLowerCase()}.`
       : `Specialty: ${spec.name.toUpperCase()}. Providing information about ${spec.name.toLowerCase()}.`;
@@ -993,14 +971,10 @@ class SpecialtyManager {
 // ==================== CLINICAL TRIAGE ENGINE ====================
 
 class ClinicalTriageEngine {
-  /**
-   * Score the conversation text using the triage rules.
-   * Returns: score 0–100, matched rules, red flags, recommended specialty
-   */
   static score(
     text: string,
     language: Language,
-    patientProfile?: PatientProfile | null,
+    patientProfile?: PatientProfile | null
   ): {
     score: number;
     redFlags: string[];
@@ -1008,6 +982,7 @@ class ClinicalTriageEngine {
     suggestedSpecialty?: string;
     riskFactors: string[];
     redFlagCombo?: RedFlagCombo;
+    symptomProgression?: 'worsening' | 'improving' | 'stable' | 'unknown';
   } {
     const normalized = text.normalize('NFC').toLowerCase();
     const redFlags: string[] = [];
@@ -1016,13 +991,22 @@ class ClinicalTriageEngine {
     let topSpecialty: string | undefined;
     let topScore = 0;
 
-    // 1. Apply triage rules
-    for (const rule of TRIAGE_RULES) {
-      const patterns = language === 'vi' ? rule.patterns.vi : rule.patterns.en;
-      // Also check the opposite language for bilingual users
-      const altPatterns = language === 'vi' ? rule.patterns.en : rule.patterns.vi;
-      const allPatterns = [...patterns, ...altPatterns];
+    // Phát hiện tiến triển triệu chứng
+    let symptomProgression: 'worsening' | 'improving' | 'stable' | 'unknown' = 'unknown';
+    if (PROGRESSION_PATTERNS.worsening.vi.some(p => normalized.includes(p)) ||
+        PROGRESSION_PATTERNS.worsening.en.some(p => normalized.includes(p))) {
+      symptomProgression = 'worsening';
+      baseScore += 5; // Tăng điểm nếu triệu chứng nặng hơn
+    } else if (PROGRESSION_PATTERNS.improving.vi.some(p => normalized.includes(p)) ||
+               PROGRESSION_PATTERNS.improving.en.some(p => normalized.includes(p))) {
+      symptomProgression = 'improving';
+    } else if (PROGRESSION_PATTERNS.stable.vi.some(p => normalized.includes(p)) ||
+               PROGRESSION_PATTERNS.stable.en.some(p => normalized.includes(p))) {
+      symptomProgression = 'stable';
+    }
 
+    for (const rule of TRIAGE_RULES) {
+      const allPatterns = [...rule.patterns.vi, ...rule.patterns.en];
       const matched = allPatterns.some(p =>
         normalized.includes(p.normalize('NFC').toLowerCase())
       );
@@ -1041,29 +1025,21 @@ class ClinicalTriageEngine {
       }
     }
 
-    // 2. Check red flag combinations
     let redFlagCombo: RedFlagCombo | undefined;
     for (const combo of RED_FLAG_COMBOS) {
-      // combo requires ALL symptom groups to match
-      const allMatch = combo.symptoms.every(symptomGroup => {
-        const viWords = symptomGroup.vi;
-        const enWords = symptomGroup.en;
-        return [...viWords, ...enWords].some(w =>
-          normalized.includes(w.normalize('NFC').toLowerCase())
-        );
-      });
+      const allMatch = combo.symptoms.every(sg =>
+        [...sg.vi, ...sg.en].some(w => normalized.includes(w.normalize('NFC').toLowerCase()))
+      );
       if (allMatch) {
         redFlagCombo = combo;
         const reason = language === 'vi' ? combo.reason.vi : combo.reason.en;
         if (!redFlags.includes(reason)) redFlags.push(reason);
-        // Combo always escalates score significantly
         baseScore = Math.max(baseScore, combo.escalateTo === 'critical' ? 95 : 82);
         if (combo.specialty) topSpecialty = combo.specialty;
         break;
       }
     }
 
-    // 3. Extract pain score from text
     const painMatch = PAIN_SCORE_REGEX.exec(text);
     if (painMatch) {
       const painScore = parseInt(painMatch[1], 10);
@@ -1071,7 +1047,6 @@ class ClinicalTriageEngine {
       else if (painScore >= 6) baseScore = Math.max(baseScore, 55);
     }
 
-    // 4. Apply comorbidity multipliers from patient profile
     const riskFactors: string[] = [];
     if (patientProfile) {
       const allConditions = [
@@ -1088,13 +1063,13 @@ class ClinicalTriageEngine {
         }
       }
 
-      // Age risk
       const ageMult = getAgeRiskMultiplier(patientProfile.age);
       if (ageMult > 1.0) {
         baseScore = Math.min(100, Math.round(baseScore * ageMult));
-        const ageNote = language === 'vi'
-          ? `Tuổi ${patientProfile.age} là yếu tố nguy cơ`
-          : `Age ${patientProfile.age} is a risk factor`;
+        const ageNote =
+          language === 'vi'
+            ? `Tuổi ${patientProfile.age} là yếu tố nguy cơ`
+            : `Age ${patientProfile.age} is a risk factor`;
         riskFactors.push(ageNote);
       }
     }
@@ -1106,6 +1081,7 @@ class ClinicalTriageEngine {
       suggestedSpecialty: topSpecialty,
       riskFactors,
       redFlagCombo,
+      symptomProgression,
     };
   }
 
@@ -1116,12 +1092,10 @@ class ClinicalTriageEngine {
     return 'low';
   }
 
-  /**
-   * Extract probable differentials from matched rules (not a diagnosis!)
-   */
   static extractDifferentials(matchedRules: TriageRule[], language: Language): string[] {
-    const specialties = [...new Set(matchedRules.map(r => r.specialty).filter(Boolean) as string[])];
-    // Map specialty names to layman differential hints
+    const specialties = [
+      ...new Set(matchedRules.map(r => r.specialty).filter(Boolean) as string[]),
+    ];
     const map: Record<string, { vi: string; en: string }> = {
       cardiology: { vi: 'Vấn đề tim mạch', en: 'Cardiac condition' },
       neurology: { vi: 'Vấn đề thần kinh', en: 'Neurological condition' },
@@ -1132,15 +1106,16 @@ class ClinicalTriageEngine {
       psychiatry: { vi: 'Vấn đề sức khỏe tâm thần', en: 'Mental health condition' },
       oncology: { vi: 'Cần loại trừ bệnh lý ác tính', en: 'Malignancy to be ruled out' },
       urology: { vi: 'Vấn đề tiết niệu', en: 'Urological condition' },
-      surgery: { vi: 'Có thể cần can thiệp phẫu thuật', en: 'Possible surgical intervention needed' },
+      surgery: { vi: 'Có thể cần can thiệp phẫu thuật', en: 'Possible surgical intervention' },
       internal_medicine: { vi: 'Bệnh lý nội khoa', en: 'Internal medicine condition' },
+      infectious_disease: { vi: 'Bệnh truyền nhiễm', en: 'Infectious disease' },
+      pediatrics: { vi: 'Vấn đề nhi khoa', en: 'Pediatric condition' },
     };
-    return specialties.map(s => (map[s] ? (language === 'vi' ? map[s].vi : map[s].en) : s));
+    return specialties.map(s =>
+      map[s] ? (language === 'vi' ? map[s].vi : map[s].en) : s
+    );
   }
 
-  /**
-   * Extract pain score from free text
-   */
   static extractPainScore(text: string): number | undefined {
     const m = PAIN_SCORE_REGEX.exec(text);
     if (!m) return undefined;
@@ -1148,9 +1123,6 @@ class ClinicalTriageEngine {
     return v >= 1 && v <= 10 ? v : undefined;
   }
 
-  /**
-   * Extract duration string from message
-   */
   static extractDuration(text: string, language: Language): string | undefined {
     const rx = language === 'vi' ? DURATION_PATTERNS.vi : DURATION_PATTERNS.en;
     const m = rx.exec(text);
@@ -1170,10 +1142,16 @@ export class AIMedicalService {
   private quotaExceededUntil: number | null = null;
   private patientProfile: PatientProfile | null = null;
 
-  // Assessment state machine
+  // Assessment state
   private assessmentSession: AssessmentSession | null = null;
-  // Accumulated full-conversation text for triage (grows with each turn)
   private accumulatedSymptomText = '';
+
+  // Booking state
+  private bookingSuggested = false;
+  private bookingConfirmed = false;
+  private bookingDeclined = false;
+  private lastAssessedUrgency: UrgencyLevel = 'low';
+  private bookingInquiryDetected = false; // Thêm flag cho inquiry
 
   constructor() {
     if (!config.groqApiKey) throw new Error('Groq API key is required.');
@@ -1183,9 +1161,15 @@ export class AIMedicalService {
 
   // ==================== PUBLIC: HISTORY ====================
 
-  public loadHistoryFromDB(messages: Array<{
-    role: MessageRole; content: string; timestamp: Date; category?: string; language?: string;
-  }>): void {
+  public loadHistoryFromDB(
+    messages: Array<{
+      role: MessageRole;
+      content: string;
+      timestamp: Date;
+      category?: string;
+      language?: string;
+    }>
+  ): void {
     this.conversationHistory = [];
     const recent = messages.slice(-MAX_HISTORY_LENGTH);
     for (const msg of recent) {
@@ -1203,8 +1187,6 @@ export class AIMedicalService {
     this.addToHistory(msg);
   }
 
-  // ==================== LOAD PATIENT PROFILE ====================
-
   public async loadPatientProfile(userId: string): Promise<void> {
     this.patientProfile = await PatientProfileService.getProfile(userId);
   }
@@ -1213,17 +1195,23 @@ export class AIMedicalService {
 
   private isRateLimited(): boolean {
     const now = Date.now();
-    if (now > this.requestResetTime) { this.requestCount = 0; this.requestResetTime = now + 60_000; }
+    if (now > this.requestResetTime) {
+      this.requestCount = 0;
+      this.requestResetTime = now + 60_000;
+    }
     return this.requestCount >= MAX_REQUESTS_PER_MINUTE;
   }
 
-  private recordRequest(): void { this.requestCount++; }
-
-  // ==================== CIRCUIT BREAKER ====================
+  private recordRequest(): void {
+    this.requestCount++;
+  }
 
   private isQuotaExceeded(): boolean {
     if (!this.quotaExceededUntil) return false;
-    if (Date.now() > this.quotaExceededUntil) { this.quotaExceededUntil = null; return false; }
+    if (Date.now() > this.quotaExceededUntil) {
+      this.quotaExceededUntil = null;
+      return false;
+    }
     return true;
   }
 
@@ -1250,30 +1238,141 @@ export class AIMedicalService {
     return lang;
   }
 
+  // ==================== BOOKING INTENT DETECTION ====================
+
+  private detectBookingIntent(message: string): 'confirm' | 'decline' | 'inquiry' | 'neutral' {
+    const lower = message.normalize('NFC').toLowerCase().trim();
+
+    // Kiểm tra inquiry trước
+    const isInquiry = BOOKING_INQUIRY_VI.some(kw => lower.includes(kw));
+    if (isInquiry) return 'inquiry';
+
+    // Check decline
+    const isDecline = BOOKING_DECLINE_VI.some(kw => lower === kw || lower.includes(kw));
+    if (isDecline) return 'decline';
+
+    // Check confirm
+    const isConfirm = BOOKING_CONFIRM_VI.some(kw =>
+      lower === kw ||
+      lower.startsWith(kw + ' ') ||
+      lower.endsWith(' ' + kw) ||
+      lower.includes(' ' + kw + ' ')
+    );
+    if (isConfirm) return 'confirm';
+
+    return 'neutral';
+  }
+
+  // ==================== HANDLE BOOKING INQUIRY ====================
+
+  private async handleBookingInquiry(userId?: string, language: Language = 'vi'): Promise<AIResponse | null> {
+    if (!userId) return null;
+
+    try {
+      // Kiểm tra lịch hẹn sắp tới
+      const upcomingAppointments = await Appointment.find({
+        user_id: userId,
+        appointment_date: { $gte: new Date() },
+        status: { $in: ['pending', 'confirmed'] },
+      })
+        .populate('doctor_id', 'name')
+        .populate('specialty_id', 'name')
+        .sort({ appointment_date: 1 })
+        .limit(5);
+
+      if (upcomingAppointments.length === 0) {
+        return {
+          response: language === 'vi'
+            ? 'Bạn hiện không có lịch hẹn nào sắp tới. Bạn có muốn tôi giúp bạn đặt lịch khám không?'
+            : 'You don\'t have any upcoming appointments. Would you like me to help you book one?',
+          confidence: 0.95,
+          category: 'booking_inquiry',
+          language,
+          shouldAskBookingConfirmation: true,
+          appointmentRecommendation: {
+            shouldBook: false,
+            urgencyLevel: 'low',
+            symptoms: [],
+            awaitingBookingConfirmation: true,
+            bookingQuestion: language === 'vi'
+              ? 'Bạn có muốn đặt lịch khám không?'
+              : 'Would you like to book an appointment?',
+          },
+        };
+      }
+
+      // Format danh sách lịch hẹn
+      const appointmentList = upcomingAppointments.map((apt, index) => {
+        const doctorName = (apt as any).doctor_id?.name || 'Bác sĩ';
+        const specialtyName = (apt as any).specialty_id?.name || 'Chuyên khoa';
+        const date = new Date(apt.appointment_date).toLocaleDateString(language === 'vi' ? 'vi-VN' : 'en-US');
+        
+        return `${index + 1}. 📅 ${date} lúc ${apt.time_slot} - ${specialtyName} (Bs. ${doctorName})`;
+      }).join('\n');
+
+      return {
+        response: language === 'vi'
+          ? `Bạn có ${upcomingAppointments.length} lịch hẹn sắp tới:\n\n${appointmentList}\n\nBạn cần hỗ trợ gì thêm không?`
+          : `You have ${upcomingAppointments.length} upcoming appointments:\n\n${appointmentList}\n\nDo you need any other assistance?`,
+        confidence: 0.95,
+        category: 'booking_inquiry',
+        language,
+        appointmentRecommendation: {
+          shouldBook: false,
+          urgencyLevel: 'low',
+          symptoms: [],
+          hasExistingAppointment: true,
+        },
+      };
+    } catch (error) {
+      console.error('Error handling booking inquiry:', error);
+      return null;
+    }
+  }
+
   // ==================== ASSESSMENT STATE MACHINE ====================
 
-  /**
-   * Detect what type of symptom the user is reporting, to start structured collection
-   */
   private detectSymptomType(message: string): string | null {
     const lower = message.normalize('NFC').toLowerCase();
     const typeMap: Array<{ type: string; vi: string[]; en: string[] }> = [
-      { type: 'chest', vi: ['đau ngực', 'tức ngực', 'nặng ngực', 'tim đau'], en: ['chest pain', 'chest tightness', 'heart pain'] },
-      { type: 'headache', vi: ['đau đầu', 'nhức đầu', 'đau nửa đầu'], en: ['headache', 'head pain', 'migraine'] },
-      { type: 'abdominal', vi: ['đau bụng', 'bụng đau', 'đau dạ dày'], en: ['stomach ache', 'abdominal pain', 'belly pain', 'stomach pain'] },
-      { type: 'general', vi: ['mệt mỏi', 'mệt', 'sốt', 'chóng mặt', 'buồn nôn'], en: ['tired', 'fatigue', 'fever', 'dizzy', 'nausea'] },
+      {
+        type: 'chest',
+        vi: ['đau ngực', 'tức ngực', 'nặng ngực', 'tim đau'],
+        en: ['chest pain', 'chest tightness', 'heart pain'],
+      },
+      {
+        type: 'headache',
+        vi: ['đau đầu', 'nhức đầu', 'đau nửa đầu'],
+        en: ['headache', 'head pain', 'migraine'],
+      },
+      {
+        type: 'abdominal',
+        vi: ['đau bụng', 'bụng đau', 'đau dạ dày'],
+        en: ['stomach ache', 'abdominal pain', 'belly pain', 'stomach pain'],
+      },
+      {
+        type: 'fever',
+        vi: ['sốt', 'nóng', 'cảm'],
+        en: ['fever', 'temperature', 'hot'],
+      },
+      {
+        type: 'general',
+        vi: ['mệt mỏi', 'mệt', 'chóng mặt', 'buồn nôn'],
+        en: ['tired', 'fatigue', 'dizzy', 'nausea'],
+      },
     ];
     for (const entry of typeMap) {
-      if ([...entry.vi, ...entry.en].some(k => lower.includes(k.normalize('NFC').toLowerCase()))) {
+      if (
+        [...entry.vi, ...entry.en].some(k =>
+          lower.includes(k.normalize('NFC').toLowerCase())
+        )
+      ) {
         return entry.type;
       }
     }
     return null;
   }
 
-  /**
-   * Start or continue a structured symptom assessment session
-   */
   private startAssessmentSession(symptomType: string, language: Language): void {
     this.assessmentSession = {
       phase: 'collecting_main_symptom',
@@ -1284,50 +1383,71 @@ export class AIMedicalService {
       language,
       turnCount: 0,
       startedAt: new Date(),
+      previousSymptoms: this.collectPreviousSymptoms(),
     };
   }
 
-  /**
-   * Advance the session: parse the user's answer and move to next question
-   */
+  private collectPreviousSymptoms(): string[] {
+    return this.conversationHistory
+      .filter(m => m.role === 'user')
+      .slice(-4)
+      .map(m => m.content);
+  }
+
   private advanceAssessment(userMessage: string): void {
     if (!this.assessmentSession) return;
     const sess = this.assessmentSession;
     sess.turnCount++;
     this.accumulatedSymptomText += ' ' + userMessage;
 
-    // Try to extract structured data from the answer
+    // Cập nhật previous symptoms
+    sess.previousSymptoms = this.collectPreviousSymptoms();
+
     const duration = ClinicalTriageEngine.extractDuration(userMessage, sess.language);
     if (duration) sess.currentSymptom.duration = duration;
 
     const painScore = ClinicalTriageEngine.extractPainScore(userMessage);
     if (painScore) sess.currentSymptom.severity = painScore;
 
-    // Advance phase
+    // Phát hiện vị trí
+    const locationPatterns = {
+      vi: ['đầu', 'ngực', 'bụng', 'lưng', 'tay', 'chân', 'cổ', 'vai'],
+      en: ['head', 'chest', 'stomach', 'back', 'arm', 'leg', 'neck', 'shoulder'],
+    };
+    const allLocations = [...locationPatterns.vi, ...locationPatterns.en];
+    const detectedLocation = allLocations.find(loc => 
+      userMessage.toLowerCase().includes(loc)
+    );
+    if (detectedLocation) {
+      sess.currentSymptom.location = detectedLocation;
+    }
+
     const phaseOrder: AssessmentPhase[] = [
-      'collecting_main_symptom', 'collecting_duration', 'collecting_severity',
-      'collecting_location', 'collecting_associated', 'collecting_history', 'assessing',
+      'collecting_main_symptom',
+      'collecting_duration',
+      'collecting_severity',
+      'collecting_location',
+      'collecting_associated',
+      'collecting_history',
+      'assessing',
     ];
     const currentIdx = phaseOrder.indexOf(sess.phase);
     if (currentIdx >= 0 && currentIdx < phaseOrder.length - 1) {
       sess.phase = phaseOrder[currentIdx + 1];
     }
 
-    // Force completion after max turns to avoid infinite loop
     if (sess.turnCount >= MAX_ASSESSMENT_TURNS) {
       sess.phase = 'assessing';
     }
   }
 
-  /**
-   * Get the next question to ask in the assessment flow
-   */
   private getNextAssessmentQuestion(language: Language): string | null {
     if (!this.assessmentSession) return null;
     const sess = this.assessmentSession;
     if (sess.phase === 'assessing' || sess.phase === 'complete') return null;
 
-    const questions = ASSESSMENT_QUESTIONS[sess.symptomType] || ASSESSMENT_QUESTIONS.general;
+    const questions =
+      ASSESSMENT_QUESTIONS[sess.symptomType] || ASSESSMENT_QUESTIONS.general;
     const targetQuestion = questions.find(q => q.phase === sess.phase);
     if (!targetQuestion) return null;
 
@@ -1348,21 +1468,34 @@ export class AIMedicalService {
   // ==================== CLINICAL ASSESSMENT BUILDER ====================
 
   private buildClinicalAssessment(language: Language): ClinicalAssessment {
-    const fullText = this.accumulatedSymptomText ||
-      this.conversationHistory.filter(m => m.role === 'user').map(m => m.content).join(' ');
+    const fullText =
+      this.accumulatedSymptomText ||
+      this.conversationHistory
+        .filter(m => m.role === 'user')
+        .map(m => m.content)
+        .join(' ');
 
     const triage = ClinicalTriageEngine.score(fullText, language, this.patientProfile);
     const urgencyLevel = ClinicalTriageEngine.scoreToUrgency(triage.score);
     const differentials = ClinicalTriageEngine.extractDifferentials(triage.matchedRules, language);
     const painScore = ClinicalTriageEngine.extractPainScore(fullText);
 
-    // Collect symptoms from assessment session
+    // Phân tích tiến triển từ history
+    let symptomProgression: 'worsening' | 'improving' | 'stable' | 'unknown' = triage.symptomProgression || 'unknown';
+    
+    if (symptomProgression === 'unknown' && this.assessmentSession?.previousSymptoms) {
+      const lastSymptoms = this.assessmentSession.previousSymptoms.join(' ').toLowerCase();
+      if (PROGRESSION_PATTERNS.worsening.vi.some(p => lastSymptoms.includes(p)) ||
+          PROGRESSION_PATTERNS.worsening.en.some(p => lastSymptoms.includes(p))) {
+        symptomProgression = 'worsening';
+      }
+    }
+
     const collectedSymptoms: CollectedSymptom[] =
       this.assessmentSession?.collectedSymptoms.length
         ? this.assessmentSession.collectedSymptoms
         : [{ name: this.assessmentSession?.symptomType ?? 'unknown' }];
 
-    // Determine recommended action
     let recommendedAction: RecommendedAction;
     if (urgencyLevel === 'critical') recommendedAction = 'call_emergency';
     else if (urgencyLevel === 'high') recommendedAction = 'urgent_appointment';
@@ -1370,13 +1503,35 @@ export class AIMedicalService {
     else if (triage.score < 15) recommendedAction = 'self_care';
     else recommendedAction = 'routine_appointment';
 
-    // Vital signs concerns from text
+    // Nếu triệu chứng nặng hơn, tăng mức độ khẩn cấp
+    if (symptomProgression === 'worsening' && urgencyLevel !== 'critical') {
+      if (urgencyLevel === 'low') {
+        urgencyLevel = 'medium';
+        recommendedAction = 'soon_appointment';
+      } else if (urgencyLevel === 'medium') {
+        urgencyLevel = 'high';
+        recommendedAction = 'urgent_appointment';
+      }
+    }
+
     const vitalsConcern: string[] = [];
     const vitalsPatterns: Array<{ pattern: RegExp; label: { vi: string; en: string } }> = [
-      { pattern: /huyết áp|blood pressure|BP \d/i, label: { vi: 'Huyết áp bất thường', en: 'Abnormal blood pressure' } },
-      { pattern: /tim đập nhanh|nhịp tim nhanh|rapid heart|tachycardia/i, label: { vi: 'Nhịp tim nhanh', en: 'Rapid heart rate' } },
-      { pattern: /sốt cao|high fever|fever [34][0-9]/i, label: { vi: 'Sốt cao', en: 'High fever' } },
-      { pattern: /khó thở|shortness of breath|breathing difficulty/i, label: { vi: 'Khó thở', en: 'Breathing difficulty' } },
+      {
+        pattern: /huyết áp|blood pressure|BP \d/i,
+        label: { vi: 'Huyết áp bất thường', en: 'Abnormal blood pressure' },
+      },
+      {
+        pattern: /tim đập nhanh|nhịp tim nhanh|rapid heart|tachycardia/i,
+        label: { vi: 'Nhịp tim nhanh', en: 'Rapid heart rate' },
+      },
+      {
+        pattern: /sốt cao|high fever|fever [34][0-9]/i,
+        label: { vi: 'Sốt cao', en: 'High fever' },
+      },
+      {
+        pattern: /khó thở|shortness of breath|breathing difficulty/i,
+        label: { vi: 'Khó thở', en: 'Breathing difficulty' },
+      },
     ];
     for (const vp of vitalsPatterns) {
       if (vp.pattern.test(fullText)) {
@@ -1395,20 +1550,29 @@ export class AIMedicalService {
       riskFactors: triage.riskFactors,
       painScore,
       vitalsConcern: vitalsConcern.length ? vitalsConcern : undefined,
+      symptomProgression,
     };
   }
 
   // ==================== EMERGENCY DETECTION ====================
 
-  private detectEmergency(message: string): { isEmergency: boolean; protocol?: EmergencyProtocol } {
+  private detectEmergency(
+    message: string
+  ): { isEmergency: boolean; protocol?: EmergencyProtocol } {
     const lower = message.normalize('NFC').toLowerCase();
-    for (const [protocol, keywords] of Object.entries(EMERGENCY_KEYWORDS) as [EmergencyProtocol, string[]][]) {
+    for (const [protocol, keywords] of Object.entries(EMERGENCY_KEYWORDS) as [
+      EmergencyProtocol,
+      string[]
+    ][]) {
       if (keywords.some(kw => lower.includes(kw.normalize('NFC').toLowerCase()))) {
         return { isEmergency: true, protocol };
       }
     }
-    // Also check triage score for critical
-    const triage = ClinicalTriageEngine.score(message, this.detectLanguage(message), this.patientProfile);
+    const triage = ClinicalTriageEngine.score(
+      message,
+      this.detectLanguage(message),
+      this.patientProfile
+    );
     if (triage.score >= 90 || triage.redFlagCombo?.escalateTo === 'critical') {
       return { isEmergency: true, protocol: 'cardiac_emergency' };
     }
@@ -1422,85 +1586,152 @@ export class AIMedicalService {
     specialtyNames: string[];
   }> = [
     {
-      keywords: ['tê bì', 'tê tay', 'tê chân', 'mất ngủ', 'đau đầu', 'chóng mặt', 'hoa mắt', 'đau nửa đầu', 'run tay', 'co giật', 'ngất', 'numbness', 'headache', 'dizziness', 'migraine', 'insomnia', 'tremor', 'seizure'],
+      keywords: [
+        'tê bì', 'tê tay', 'tê chân', 'mất ngủ', 'đau đầu', 'chóng mặt',
+        'hoa mắt', 'đau nửa đầu', 'run tay', 'co giật', 'ngất',
+        'numbness', 'headache', 'dizziness', 'migraine', 'insomnia', 'tremor', 'seizure',
+      ],
       specialtyNames: ['neurology', 'thần kinh', 'nội thần kinh'],
     },
     {
-      keywords: ['đau khớp', 'đau lưng', 'đau xương', 'đau cổ', 'đau vai', 'joint pain', 'back pain', 'arthritis', 'gout', 'gút', 'viêm khớp', 'thoát vị', 'cột sống', 'bone pain'],
+      keywords: [
+        'đau khớp', 'đau lưng', 'đau xương', 'đau cổ', 'đau vai',
+        'joint pain', 'back pain', 'arthritis', 'gout', 'gút', 'viêm khớp',
+        'thoát vị', 'cột sống', 'bone pain',
+      ],
       specialtyNames: ['orthopedic', 'orthopedics', 'cơ xương khớp', 'xương khớp'],
     },
     {
-      keywords: ['ho', 'khó thở', 'hen', 'viêm phổi', 'viêm phế quản', 'cough', 'asthma', 'pneumonia', 'bronchitis', 'shortness of breath', 'wheezing', 'khò khè'],
+      keywords: [
+        'ho', 'khó thở', 'hen', 'viêm phổi', 'viêm phế quản',
+        'cough', 'asthma', 'pneumonia', 'bronchitis', 'shortness of breath', 'wheezing', 'khò khè',
+      ],
       specialtyNames: ['pulmonology', 'respiratory', 'hô hấp', 'phổi'],
     },
     {
-      keywords: ['mẩn ngứa', 'nổi mề đay', 'mụn', 'vảy nến', 'eczema', 'skin rash', 'acne', 'psoriasis', 'dermatitis', 'ngứa da', 'nám da', 'rosacea'],
+      keywords: [
+        'mẩn ngứa', 'nổi mề đay', 'mụn', 'vảy nến', 'eczema',
+        'skin rash', 'acne', 'psoriasis', 'dermatitis', 'ngứa da', 'nám da',
+      ],
       specialtyNames: ['dermatology', 'da liễu'],
     },
     {
-      keywords: ['đau bụng', 'tiêu chảy', 'táo bón', 'buồn nôn', 'nôn', 'trào ngược', 'viêm dạ dày', 'stomach pain', 'diarrhea', 'constipation', 'nausea', 'gastritis', 'reflux', 'bloating', 'đầy hơi'],
+      keywords: [
+        'đau bụng', 'tiêu chảy', 'táo bón', 'buồn nôn', 'nôn', 'trào ngược',
+        'viêm dạ dày', 'stomach pain', 'diarrhea', 'constipation', 'nausea',
+        'gastritis', 'reflux', 'bloating', 'đầy hơi',
+      ],
       specialtyNames: ['gastroenterology', 'tiêu hóa'],
     },
     {
-      keywords: ['đái tháo đường', 'tiểu đường', 'béo phì', 'tuyến giáp', 'hormone', 'diabetes', 'obesity', 'thyroid', 'nội tiết', 'insulin'],
+      keywords: [
+        'đái tháo đường', 'tiểu đường', 'béo phì', 'tuyến giáp', 'hormone',
+        'diabetes', 'obesity', 'thyroid', 'nội tiết', 'insulin',
+      ],
       specialtyNames: ['endocrinology', 'nội tiết'],
     },
     {
-      keywords: ['đau mắt', 'mờ mắt', 'đỏ mắt', 'khô mắt', 'cận thị', 'glaucoma', 'eye pain', 'blurry vision', 'red eye', 'dry eye', 'nhìn mờ'],
+      keywords: [
+        'đau mắt', 'mờ mắt', 'đỏ mắt', 'khô mắt', 'cận thị', 'glaucoma',
+        'eye pain', 'blurry vision', 'red eye', 'dry eye', 'nhìn mờ',
+      ],
       specialtyNames: ['ophthalmology', 'mắt', 'nhãn khoa'],
     },
     {
-      keywords: ['đau tai', 'ù tai', 'viêm tai', 'nghe kém', 'viêm mũi', 'viêm xoang', 'ear pain', 'tinnitus', 'sinusitis', 'tai mũi họng', 'sore throat', 'đau họng'],
+      keywords: [
+        'đau tai', 'ù tai', 'viêm tai', 'nghe kém', 'viêm mũi', 'viêm xoang',
+        'ear pain', 'tinnitus', 'sinusitis', 'tai mũi họng', 'sore throat', 'đau họng',
+      ],
       specialtyNames: ['ent', 'otolaryngology', 'tai mũi họng'],
     },
     {
-      keywords: ['đau ngực', 'huyết áp', 'tim đập', 'nhịp tim', 'suy tim', 'chest pain', 'blood pressure', 'heart', 'cardiac', 'tim mạch', 'arrhythmia', 'loạn nhịp'],
+      keywords: [
+        'đau ngực', 'huyết áp', 'tim đập', 'nhịp tim', 'suy tim',
+        'chest pain', 'blood pressure', 'heart', 'cardiac', 'tim mạch',
+        'arrhythmia', 'loạn nhịp',
+      ],
       specialtyNames: ['cardiology', 'tim mạch'],
     },
     {
-      keywords: ['ung thư', 'cancer', 'khối u', 'u bướu', 'tumor', 'lymphoma', 'chemotherapy', 'hóa trị'],
+      keywords: [
+        'ung thư', 'cancer', 'khối u', 'u bướu', 'tumor', 'lymphoma',
+        'chemotherapy', 'hóa trị',
+      ],
       specialtyNames: ['oncology', 'ung bướu'],
     },
     {
-      keywords: ['lo âu', 'trầm cảm', 'stress', 'rối loạn tâm lý', 'anxiety', 'depression', 'mental health', 'tâm thần', 'tâm lý', 'panic', 'hoảng loạn'],
+      keywords: [
+        'lo âu', 'trầm cảm', 'stress', 'rối loạn tâm lý',
+        'anxiety', 'depression', 'mental health', 'tâm thần', 'tâm lý', 'panic', 'hoảng loạn',
+      ],
       specialtyNames: ['psychiatry', 'psychology', 'tâm thần', 'tâm lý'],
     },
     {
-      keywords: ['tiểu rắt', 'tiểu buốt', 'tiểu ra máu', 'sỏi thận', 'kidney stone', 'urinary', 'bladder', 'bàng quang', 'prostate', 'tuyến tiền liệt'],
+      keywords: [
+        'tiểu rắt', 'tiểu buốt', 'tiểu ra máu', 'sỏi thận',
+        'kidney stone', 'urinary', 'bladder', 'bàng quang', 'prostate', 'tuyến tiền liệt',
+      ],
       specialtyNames: ['urology', 'tiết niệu'],
     },
     {
-      keywords: ['kinh nguyệt', 'đau bụng kinh', 'có thai', 'mang thai', 'phụ khoa', 'menstrual', 'pregnancy', 'gynecology', 'ovarian', 'buồng trứng'],
+      keywords: [
+        'kinh nguyệt', 'đau bụng kinh', 'có thai', 'mang thai', 'phụ khoa',
+        'menstrual', 'pregnancy', 'gynecology', 'ovarian', 'buồng trứng',
+      ],
       specialtyNames: ['gynecology', 'phụ khoa', 'sản phụ khoa'],
+    },
+    {
+      keywords: [
+        'sốt xuất huyết', 'đau cơ', 'phát ban', 'sốt',
+        'dengue', 'muscle pain', 'rash',
+      ],
+      specialtyNames: ['infectious_disease', 'bệnh nhiệt đới', 'truyền nhiễm'],
     },
   ];
 
-  private async detectCategory(message: string): Promise<{ category: string; specialtyId?: string }> {
+  private async detectCategory(
+    message: string
+  ): Promise<{ category: string; specialtyId?: string }> {
     const dbResult = await this.specialtyManager.detectCategory(message);
     if (dbResult.specialtyId && dbResult.category !== 'general') return dbResult;
 
     const normalizedMsg = message.normalize('NFC').toLowerCase();
 
     for (const entry of AIMedicalService.SYMPTOM_SPECIALTY_MAP) {
-      if (!entry.keywords.some(kw => normalizedMsg.includes(kw.normalize('NFC').toLowerCase()))) continue;
+      if (
+        !entry.keywords.some(kw =>
+          normalizedMsg.includes(kw.normalize('NFC').toLowerCase())
+        )
+      )
+        continue;
 
       for (const name of entry.specialtyNames) {
         try {
           const spec = await Specialty.findOne({
             name: { $regex: new RegExp(name.normalize('NFC'), 'iu') },
             isActive: true,
-          }).select('_id name category').lean();
+          })
+            .select('_id name category')
+            .lean();
 
           if (spec) {
-            return { category: (spec as any).category || name, specialtyId: (spec as any)._id.toString() };
+            return {
+              category: (spec as any).category || name,
+              specialtyId: (spec as any)._id.toString(),
+            };
           }
-        } catch { continue; }
+        } catch {
+          continue;
+        }
       }
       return { category: entry.specialtyNames[0], specialtyId: undefined };
     }
 
-    // Fallback: use triage to suggest specialty
-    const triage = ClinicalTriageEngine.score(message, this.detectLanguage(message), this.patientProfile);
+    const triage = ClinicalTriageEngine.score(
+      message,
+      this.detectLanguage(message),
+      this.patientProfile
+    );
     if (triage.suggestedSpecialty) {
       const spec = await this.specialtyManager.findByName(triage.suggestedSpecialty);
       if (spec) return { category: spec.category, specialtyId: spec.id };
@@ -1538,8 +1769,10 @@ export class AIMedicalService {
         targetDate.setHours(0, 0, 0, 0);
       }
 
-      const startOfDay = new Date(targetDate); startOfDay.setHours(0, 0, 0, 0);
-      const endOfDay = new Date(targetDate); endOfDay.setHours(23, 59, 59, 999);
+      const startOfDay = new Date(targetDate);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(targetDate);
+      endOfDay.setHours(23, 59, 59, 999);
       const DAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
       const dayOfWeek = DAYS[targetDate.getDay()];
       const doctorIds = doctors.map(d => d._id);
@@ -1574,7 +1807,9 @@ export class AIMedicalService {
         if (daySchedule) {
           if (daySchedule.isAvailable === false) continue;
           if (daySchedule.start && daySchedule.end) {
-            slotsForDay = ALL_TIME_SLOTS.filter(s => s >= daySchedule.start && s <= daySchedule.end);
+            slotsForDay = ALL_TIME_SLOTS.filter(
+              s => s >= daySchedule.start && s <= daySchedule.end
+            );
           }
         }
 
@@ -1604,26 +1839,28 @@ export class AIMedicalService {
     category: string,
     specialtyId: string | undefined,
     language: Language,
-    userId?: string
+    userId?: string,
+    bookingConfirmed = false
   ): Promise<AppointmentSuggestion> {
-    const urgencyLevel = assessment.urgencyLevel;
+    const { urgencyLevel } = assessment;
+    const symptoms = assessment.collectedSymptoms.map(s => s.name);
 
-    // Critical/emergency: never book, call 115
+    // CRITICAL: emergency only, never book online
     if (urgencyLevel === 'critical') {
       return {
         shouldBook: false,
         urgencyLevel: 'critical',
-        symptoms: assessment.collectedSymptoms.map(s => s.name),
-        reason: language === 'vi'
-          ? '🚨 Tình trạng nguy cấp — GỌI 115 NGAY, không đặt lịch trực tuyến!'
-          : '🚨 Critical condition — CALL 911/115 NOW, do not book online!',
-        emergencyInstructions: language === 'vi'
-          ? 'Gọi 115 ngay hoặc đến phòng cấp cứu bệnh viện gần nhất.'
-          : 'Call 911/115 immediately or go to the nearest emergency room.',
+        symptoms,
+        reason:
+          language === 'vi'
+            ? '🚨 Tình trạng nguy cấp — GỌI 115 NGAY, không đặt lịch trực tuyến!'
+            : '🚨 Critical condition — CALL 911/115 NOW, do not book online!',
+        emergencyInstructions:
+          language === 'vi'
+            ? 'Gọi 115 ngay hoặc đến phòng cấp cứu bệnh viện gần nhất.'
+            : 'Call 911/115 immediately or go to the nearest emergency room.',
       };
     }
-
-    const symptoms = assessment.collectedSymptoms.map(s => s.name);
 
     // Check existing appointment
     if (userId) {
@@ -1634,26 +1871,36 @@ export class AIMedicalService {
           status: { $in: ['pending', 'confirmed'] },
         });
         if (existing) {
+          const appointmentDate = new Date(existing.appointment_date).toLocaleDateString('vi-VN');
           return {
             shouldBook: false,
             urgencyLevel,
             symptoms,
             hasExistingAppointment: true,
             reason: language === 'vi'
-              ? 'Bạn đã có lịch hẹn sắp tới. Hãy tham khảo bác sĩ về các triệu chứng này.'
-              : 'You already have an upcoming appointment. Discuss these symptoms with your doctor.',
+      ? `Bạn đã có lịch hẹn với bác sĩ vào ngày ${appointmentDate}. Hãy tham khảo bác sĩ về các triệu chứng này trong lần khám tới.`
+      : `You have an appointment scheduled for ${appointmentDate}. Please discuss these symptoms with your doctor during your visit.`,
+      existingAppointmentDetails: {
+      date: appointmentDate,
+      time: existing.time_slot,
+      doctorName: existing.doctor_id?.name,
+      specialty: existing.specialty_id?.name,
+      },
           };
         }
-      } catch (err) { console.error('Error checking existing appointments:', err); }
+      } catch (err) {
+        console.error('Error checking existing appointments:', err);
+      }
     }
 
-    const routing = URGENCY_ROUTING[urgencyLevel];
-
+    // Resolve specialty name
     let specialtyName = category;
     if (specialtyId) {
       const spec = await this.specialtyManager.getSpecialtyById(specialtyId);
       if (spec) specialtyName = spec.name;
     }
+
+    const routing = URGENCY_ROUTING[urgencyLevel];
 
     // Contraindications from patient allergies
     let contraindications: string[] = [];
@@ -1663,32 +1910,83 @@ export class AIMedicalService {
       );
     }
 
-    let suggestedDoctors: AppointmentSuggestion['suggestedDoctors'] = undefined;
-    if (specialtyId && urgencyLevel !== 'low') {
-      suggestedDoctors = await this.findAvailableDoctors(specialtyId);
+    // HIGH urgency → show booking card immediately
+    if (urgencyLevel === 'high') {
+      const suggestedDoctors = specialtyId
+        ? await this.findAvailableDoctors(specialtyId)
+        : undefined;
+
+      return {
+        shouldBook: true,
+        urgencyLevel: 'high',
+        suggestedSpecialty: specialtyName,
+        suggestedSpecialtyId: specialtyId,
+        recommendedTimeframe:
+          language === 'vi' ? routing.timeframe.vi : routing.timeframe.en,
+        reason:
+          language === 'vi'
+            ? '⚠️ Triệu chứng nghiêm trọng — cần khám bác sĩ trong vòng 24 giờ!'
+            : '⚠️ Serious symptoms — see a doctor within 24 hours!',
+        symptoms,
+        contraindications: contraindications.length ? contraindications : undefined,
+        suggestedDoctors,
+        bookingMessage: language === 'vi' ? routing.vi : routing.en,
+      };
     }
 
-    const bookingMessage = language === 'vi'
-      ? routing.vi
-      : routing.en;
+    // MEDIUM / LOW: two-step flow
+    const bookingQuestion = language === 'vi'
+      ? urgencyLevel === 'medium'
+        ? '💡 Dựa vào triệu chứng của bạn, tôi khuyên bạn nên khám bác sĩ trong 2-3 ngày tới. Bạn có muốn tôi đặt lịch hẹn tự động không? (Trả lời "có" hoặc "đồng ý")'
+        : '💡 Để chắc chắn hơn, bạn có muốn tôi đặt lịch khám định kỳ không? (Trả lời "có" hoặc "đồng ý")'
+      : urgencyLevel === 'medium'
+        ? '💡 Based on your symptoms, I recommend seeing a doctor within 2-3 days. Would you like me to automatically book an appointment for you? (Just say "yes" or "ok")'
+        : '💡 Would you like me to schedule a routine checkup just to be safe? (Just say "yes" or "ok")';
+
+    if (!bookingConfirmed) {
+      return {
+        shouldBook: false,
+        urgencyLevel,
+        suggestedSpecialty: specialtyName,
+        suggestedSpecialtyId: specialtyId,
+        recommendedTimeframe:
+          language === 'vi' ? routing.timeframe.vi : routing.timeframe.en,
+        reason:
+          language === 'vi'
+            ? urgencyLevel === 'medium'
+              ? 'Triệu chứng cần được đánh giá y tế trong 2–3 ngày.'
+              : 'Nên khám định kỳ để chắc chắn sức khỏe ổn.'
+            : urgencyLevel === 'medium'
+            ? 'Symptoms need medical evaluation within 2–3 days.'
+            : 'A routine checkup is recommended for peace of mind.',
+        symptoms,
+        contraindications: contraindications.length ? contraindications : undefined,
+        bookingMessage: language === 'vi' ? routing.vi : routing.en,
+        awaitingBookingConfirmation: true,
+        bookingQuestion,
+      };
+    }
+
+    // Confirmed → populate doctors
+    const suggestedDoctors = specialtyId
+      ? await this.findAvailableDoctors(specialtyId)
+      : undefined;
 
     return {
       shouldBook: true,
       urgencyLevel,
       suggestedSpecialty: specialtyName,
       suggestedSpecialtyId: specialtyId,
-      recommendedTimeframe: language === 'vi' ? routing.timeframe.vi : routing.timeframe.en,
-      reason: language === 'vi'
-        ? urgencyLevel === 'high'
-          ? 'Triệu chứng nghiêm trọng, cần khám bác sĩ sớm.'
-          : 'Nên được đánh giá y tế để chẩn đoán chính xác.'
-        : urgencyLevel === 'high'
-          ? 'Serious symptoms require prompt medical evaluation.'
-          : 'Medical evaluation recommended for accurate diagnosis.',
+      recommendedTimeframe:
+        language === 'vi' ? routing.timeframe.vi : routing.timeframe.en,
+      reason:
+        language === 'vi'
+          ? 'Bạn có 1 lịch hẹn đang chờ xác nhận.'
+          : 'You have a pending appointment confirmation.',
       symptoms,
       contraindications: contraindications.length ? contraindications : undefined,
       suggestedDoctors,
-      bookingMessage,
+      bookingMessage: language === 'vi' ? routing.vi : routing.en,
     };
   }
 
@@ -1708,51 +2006,77 @@ LANGUAGE RULES — HIGHEST PRIORITY, NON-NEGOTIABLE:
 • English disclaimer: "⚕️ This information is for educational purposes only and does not replace professional medical advice."
 
 ══════════════════════════════════════════
-CLINICAL ASSESSMENT ROLE:
+CLINICAL ASSESSMENT & URGENCY ROUTING:
 ══════════════════════════════════════════
-Your primary role is to ASSESS symptom severity and ROUTE appropriately:
+The system calculates a triage score (0–100) based on reported symptoms.
+You will receive the score and urgency level. Use this to frame your response:
 
-🔴 CRITICAL (score ≥ 90): Direct to emergency — "GỌI 115 NGAY" / "CALL 911/115 NOW"
-🟠 HIGH (score 70–89): Urgent appointment within 24h — express urgency clearly
-🟡 MEDIUM (score 40–69): Soon appointment 2–3 days — recommend booking
-🟢 LOW (score < 40): Routine appointment or self-care — reassure and guide
+🔴 CRITICAL (score ≥ 90):
+  → Emergency ONLY. "GỌI 115 NGAY" / "CALL 911/115 NOW"
+  → NEVER mention booking an appointment online.
+  → NEVER ask "do you want to book?" — just send to emergency.
 
-When presenting an assessment:
-1. Acknowledge the reported symptoms empathetically
-2. State the urgency level clearly
-3. Explain WHY this urgency level was assigned
-4. Give the appropriate next action (call 115, book appointment, or self-care)
-5. Provide immediate comfort measures if appropriate
+🟠 HIGH (score 70–89):
+  → Express urgency clearly: "Cần khám trong vòng 24 giờ!"
+  → The system will AUTOMATICALLY show available doctors.
+  → Tell user: "Tôi đã tìm thấy bác sĩ cho bạn. Vui lòng chọn lịch bên dưới."
+  → Do NOT say "do you want to book?" — just confirm doctors are shown.
+
+🟡 MEDIUM (score 40–69):
+  → Provide medical information and guidance.
+  → At the END of your response (after information), add the booking question.
+  → Wait for user's reply. Do NOT show doctors yet.
+
+🟢 LOW (score < 40):
+  → Provide information + self-care tips.
+  → At the END of your response, add the booking question.
+  → Wait for user's reply. Do NOT show doctors yet.
+
+══════════════════════════════════════════
+BOOKING CONFIRMATION FLOW:
+══════════════════════════════════════════
+When the system tells you the user has CONFIRMED booking:
+  → [VI]: "Tuyệt vời! Tôi đã tìm thấy các bác sĩ phù hợp. Vui lòng xem và chọn lịch hẹn bên dưới. 📅"
+  → [EN]: "Great! I've found suitable doctors for you. Please review and select your preferred time below. 📅"
+  → Keep this response SHORT — the booking card UI handles the rest.
+
+When the system tells you the user has DECLINED booking:
+  → [VI]: "Không sao cả. Bạn có thể yêu cầu đặt lịch bất cứ lúc nào bằng cách nhắn 'đặt lịch' nhé! 😊"
+  → [EN]: "No problem. You can ask me to book anytime by saying 'book appointment'! 😊"
+
+When the system detects BOOKING INQUIRY (user asks about their appointments):
+  → Provide information about their upcoming appointments if available.
+  → If no appointments, offer to help book one.
 
 ══════════════════════════════════════════
 SYMPTOM COLLECTION:
 ══════════════════════════════════════════
-- If symptoms are vague, ask 1-2 targeted clarifying questions
-- Collect: location, duration, severity (1-10), associated symptoms, medical history
-- After collecting enough info (3-4 turns), provide a complete assessment
+- If symptoms are vague, ask 1 targeted question at a time
+- Collect: location, duration, severity (1–10), associated symptoms, progression
+- After 4-5 turns, provide assessment even if incomplete
+- NEVER ask more than one question per response
+- Track if symptoms are worsening, improving, or stable
 
 ══════════════════════════════════════════
 PATIENT PROFILE:
 ══════════════════════════════════════════
 - Personalize all responses using the patient's profile
-- ALWAYS warn if any recommendation conflicts with known allergies
-- Consider comorbidities — they increase urgency
-- NEVER recommend anything the patient is allergic to
+- ALWAYS warn if recommendation conflicts with known allergies
+- Consider comorbidities in your urgency assessment
 
 ══════════════════════════════════════════
 SAFETY — MANDATORY:
 ══════════════════════════════════════════
-✅ Always recommend consulting a doctor for accurate diagnosis
+✅ Always recommend consulting a real doctor for diagnosis
 🚨 Always guide to call 115 (Vietnam) or 911 for dangerous symptoms
-❌ Never diagnose diseases or prescribe medications
+❌ Never diagnose diseases or prescribe specific medications
 ❌ Never claim to replace a doctor
-⚠️ For mental health crises: provide crisis line 1800 599 920 (VN) / 988 (US)
+⚠️ Mental health crisis: provide 1800 599 920 (VN) / 988 (US)
 
 FORMAT:
-- Natural, warm tone
-- Use emojis selectively
-- Structured format for assessments
-- Max 800 words per response
+- Warm, empathetic tone
+- Use emojis selectively (not excessively)
+- Max 600 words per response
 - End EVERY response with the disclaimer in the user's language`;
   }
 
@@ -1765,13 +2089,18 @@ FORMAT:
     language: Language,
     assessment?: ClinicalAssessment,
     appointmentSuggestion?: AppointmentSuggestion,
-    symptomHistory?: string
+    symptomHistory?: string,
+    bookingIntent?: 'confirm' | 'decline' | 'inquiry' | 'neutral'
   ): Promise<string> {
-    const langInstruction = language === 'vi'
-      ? '🇻🇳 QUAN TRỌNG: Trả lời 100% bằng TIẾNG VIỆT.'
-      : '🇬🇧 IMPORTANT: Respond 100% in ENGLISH.';
+    const langInstruction =
+      language === 'vi'
+        ? '🇻🇳 QUAN TRỌNG: Trả lời 100% bằng TIẾNG VIỆT.'
+        : '🇬🇧 IMPORTANT: Respond 100% in ENGLISH.';
 
-    const specialtyContext = await this.specialtyManager.getSpecialtyContext(specialtyId, language);
+    const specialtyContext = await this.specialtyManager.getSpecialtyContext(
+      specialtyId,
+      language
+    );
     const historyText = this.serializeHistory();
     const parts: string[] = [specialtyContext, langInstruction];
 
@@ -1781,101 +2110,102 @@ FORMAT:
 
     if (symptomHistory) parts.push(symptomHistory);
 
-    // Inject clinical assessment context for AI to use
+    // Inject booking intent context
+    if (bookingIntent === 'confirm') {
+      parts.push(
+        language === 'vi'
+          ? '⚡ NGƯỜI DÙNG ĐÃ XÁC NHẬN MUỐN ĐẶT LỊCH. Hãy phản hồi ngắn gọn rằng đã tìm được bác sĩ và hướng dẫn chọn lịch bên dưới.'
+          : '⚡ USER CONFIRMED BOOKING. Respond briefly that you found available doctors and guide them to select below.'
+      );
+    } else if (bookingIntent === 'decline') {
+      parts.push(
+        language === 'vi'
+          ? '⚡ NGƯỜI DÙNG TỪ CHỐI ĐẶT LỊCH LÚC NÀY. Hãy phản hồi thân thiện và nhắc họ có thể đặt sau.'
+          : '⚡ USER DECLINED BOOKING FOR NOW. Respond warmly and remind them they can book anytime later.'
+      );
+    } else if (bookingIntent === 'inquiry') {
+      parts.push(
+        language === 'vi'
+          ? '⚡ NGƯỜI DÙNG ĐANG HỎI VỀ LỊCH HẸN. Hãy cung cấp thông tin lịch hẹn sắp tới nếu có.'
+          : '⚡ USER IS ASKING ABOUT APPOINTMENTS. Provide information about upcoming appointments if available.'
+      );
+    }
+
+    // Inject clinical assessment
     if (assessment) {
-      const triageBlock = language === 'vi'
-        ? `ĐÁNH GIÁ LÂM SÀNG HỆ THỐNG:
+      const progressionNote = assessment.symptomProgression && assessment.symptomProgression !== 'unknown'
+        ? language === 'vi'
+          ? `\n- Tiến triển: ${assessment.symptomProgression === 'worsening' ? 'Đang nặng hơn ⚠️' : assessment.symptomProgression === 'improving' ? 'Đang đỡ hơn' : 'Ổn định'}`
+          : `\n- Progression: ${assessment.symptomProgression === 'worsening' ? 'Worsening ⚠️' : assessment.symptomProgression === 'improving' ? 'Improving' : 'Stable'}`
+        : '';
+
+      const triageBlock =
+        language === 'vi'
+          ? `ĐÁNH GIÁ LÂM SÀNG HỆ THỐNG:
 - Điểm triage: ${assessment.triageScore}/100
 - Mức độ khẩn cấp: ${assessment.urgencyLevel.toUpperCase()}
 - Hành động khuyến nghị: ${assessment.recommendedAction}
-- Triệu chứng thu thập: ${assessment.collectedSymptoms.map(s => s.name).join(', ')}
+- Triệu chứng: ${assessment.collectedSymptoms.map(s => s.name).join(', ')}${progressionNote}
 ${assessment.painScore ? `- Điểm đau: ${assessment.painScore}/10` : ''}
 ${assessment.redFlagsDetected.length ? `- Dấu hiệu cảnh báo: ${assessment.redFlagsDetected.join('; ')}` : ''}
 ${assessment.riskFactors.length ? `- Yếu tố nguy cơ: ${assessment.riskFactors.join('; ')}` : ''}
-${assessment.probableDifferentials.length ? `- Vấn đề có thể liên quan: ${assessment.probableDifferentials.join(', ')}` : ''}
+${assessment.probableDifferentials.length ? `- Có thể liên quan: ${assessment.probableDifferentials.join(', ')}` : ''}
 
-Hãy trình bày đánh giá này cho bệnh nhân một cách rõ ràng, đồng cảm và hành động phù hợp với mức khẩn cấp trên.`
-        : `SYSTEM CLINICAL ASSESSMENT:
+Hãy trình bày đánh giá này cho bệnh nhân một cách rõ ràng, đồng cảm và đưa ra hành động phù hợp.`
+          : `SYSTEM CLINICAL ASSESSMENT:
 - Triage score: ${assessment.triageScore}/100
 - Urgency level: ${assessment.urgencyLevel.toUpperCase()}
 - Recommended action: ${assessment.recommendedAction}
-- Collected symptoms: ${assessment.collectedSymptoms.map(s => s.name).join(', ')}
+- Symptoms: ${assessment.collectedSymptoms.map(s => s.name).join(', ')}${progressionNote}
 ${assessment.painScore ? `- Pain score: ${assessment.painScore}/10` : ''}
 ${assessment.redFlagsDetected.length ? `- Red flags: ${assessment.redFlagsDetected.join('; ')}` : ''}
 ${assessment.riskFactors.length ? `- Risk factors: ${assessment.riskFactors.join('; ')}` : ''}
 ${assessment.probableDifferentials.length ? `- Likely conditions: ${assessment.probableDifferentials.join(', ')}` : ''}
 
-Present this assessment to the patient clearly, empathetically, with action appropriate to the urgency level above.`;
+Present this to the patient clearly and empathetically with the appropriate action.`;
       parts.push(triageBlock);
     }
 
     if (historyText) {
-      parts.push(language === 'vi'
-        ? `LỊCH SỬ HỘI THOẠI:\n${historyText}`
-        : `CONVERSATION HISTORY:\n${historyText}`);
+      parts.push(
+        language === 'vi'
+          ? `LỊCH SỬ HỘI THOẠI:\n${historyText}`
+          : `CONVERSATION HISTORY:\n${historyText}`
+      );
     }
 
-    parts.push(language === 'vi'
-      ? `CÂU HỎI / THÔNG TIN BỆNH NHÂN: ${userMessage}`
-      : `PATIENT MESSAGE: ${userMessage}`);
+    parts.push(
+      language === 'vi'
+        ? `CÂU HỎI / THÔNG TIN BỆNH NHÂN: ${userMessage}`
+        : `PATIENT MESSAGE: ${userMessage}`
+    );
 
-    if (appointmentSuggestion?.shouldBook) {
-      parts.push(await this.buildBookingContextBlock(appointmentSuggestion, language));
+    // Show booking context only when doctors are populated
+    if (appointmentSuggestion?.shouldBook && appointmentSuggestion.suggestedDoctors?.length) {
+      const doc = appointmentSuggestion.suggestedDoctors[0];
+      const slot = doc.availableSlots[0];
+      parts.push(
+        language === 'vi'
+          ? `THÔNG TIN ĐẶT LỊCH: Đã tìm thấy bác sĩ cho chuyên khoa ${appointmentSuggestion.suggestedSpecialty}. Bác sĩ ${doc.name} có lịch trống lúc ${slot}. Hệ thống sẽ hiển thị card đặt lịch để bệnh nhân chọn.`
+          : `BOOKING INFO: Found doctors for ${appointmentSuggestion.suggestedSpecialty}. Dr. ${doc.name} has slots available at ${slot}. The booking card will appear for the patient to select.`
+      );
     }
 
     if (appointmentSuggestion?.contraindications?.length) {
-      const warn = language === 'vi'
-        ? `⚠️ LƯU Ý DỊ ỨNG: ${appointmentSuggestion.contraindications.join('; ')}`
-        : `⚠️ ALLERGY WARNING: ${appointmentSuggestion.contraindications.join('; ')}`;
+      const warn =
+        language === 'vi'
+          ? `⚠️ CẢNH BÁO DỊ ỨNG: ${appointmentSuggestion.contraindications.join('; ')}`
+          : `⚠️ ALLERGY WARNING: ${appointmentSuggestion.contraindications.join('; ')}`;
       parts.push(warn);
     }
 
-    parts.push(language === 'vi'
-      ? 'Trả lời bằng TIẾNG VIỆT, ngôn ngữ tự nhiên, rõ ràng, đồng cảm.'
-      : 'Respond in ENGLISH, natural language, clear and empathetic.');
+    parts.push(
+      language === 'vi'
+        ? 'Trả lời bằng TIẾNG VIỆT, ngôn ngữ tự nhiên, rõ ràng, đồng cảm.'
+        : 'Respond in ENGLISH, natural language, clear and empathetic.'
+    );
 
     return parts.join('\n\n');
-  }
-
-  // ==================== BOOKING CONTEXT BLOCK ====================
-
-  private async buildBookingContextBlock(appt: AppointmentSuggestion, language: Language): Promise<string> {
-    if (!appt.shouldBook) return '';
-
-    const hasDoctors = appt.suggestedDoctors && appt.suggestedDoctors.length > 0;
-    const urgencyLevel = appt.urgencyLevel;
-
-    // For high urgency, show more urgent tone
-    const urgencyEmoji = { high: '⚠️', medium: '📋', low: '📅', critical: '🚨' }[urgencyLevel];
-    const urgencyLabel = {
-      high: { vi: 'KHẨN — trong 24 giờ', en: 'URGENT — within 24 hours' },
-      medium: { vi: 'Sớm — trong 2–3 ngày', en: 'Soon — within 2-3 days' },
-      low: { vi: 'Định kỳ — trong tuần này', en: 'Routine — this week' },
-      critical: { vi: 'CẤP CỨU', en: 'EMERGENCY' },
-    }[urgencyLevel][language];
-
-    if (hasDoctors) {
-      const doc = appt.suggestedDoctors![0];
-      const slot = doc.availableSlots[0];
-      const fee = doc.consultationFee
-        ? language === 'vi' ? `${doc.consultationFee.toLocaleString('vi-VN')} VNĐ` : `$${doc.consultationFee}`
-        : language === 'vi' ? 'Liên hệ phòng khám' : 'Contact clinic';
-
-      const tomorrow = new Date();
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      const dateStr = tomorrow.toLocaleDateString(
-        language === 'vi' ? 'vi-VN' : 'en-US',
-        { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }
-      );
-
-      return language === 'vi'
-        ? `\n---\n${urgencyEmoji} **Gợi ý đặt lịch khám** [${urgencyLabel}]\nChuyên khoa: **${appt.suggestedSpecialty}**\n👨‍⚕️ **Bác sĩ ${doc.name}** ${doc.experience ? `(${doc.experience}+ năm KN)` : ''} ${doc.rating ? `⭐ ${doc.rating.toFixed(1)}` : ''}\n🕐 Khung giờ trống: **${slot}** — 📅 **${dateStr}** — 💰 **${fee}**\n\n💬 **Bạn có muốn đặt lịch không?** Nhấn nút bên dưới để xác nhận.\n---`
-        : `\n---\n${urgencyEmoji} **Appointment Recommendation** [${urgencyLabel}]\nSpecialty: **${appt.suggestedSpecialty}**\n👨‍⚕️ **Dr. ${doc.name}** ${doc.experience ? `(${doc.experience}+ yrs exp)` : ''} ${doc.rating ? `⭐ ${doc.rating.toFixed(1)}` : ''}\n🕐 Available slot: **${slot}** — 📅 **${dateStr}** — 💰 **${fee}**\n\n💬 **Would you like to book this appointment?** Click the button below.\n---`;
-    }
-
-    return language === 'vi'
-      ? `\n---\n${urgencyEmoji} **Gợi ý đặt lịch khám** [${urgencyLabel}]\nChuyên khoa phù hợp: **${appt.suggestedSpecialty}**\nThời gian khuyến nghị: **${appt.recommendedTimeframe}**\n\n💬 **Bạn có muốn đặt lịch không?**\n---`
-      : `\n---\n${urgencyEmoji} **Appointment Recommendation** [${urgencyLabel}]\nSuggested specialty: **${appt.suggestedSpecialty}**\nRecommended timeframe: **${appt.recommendedTimeframe}**\n\n💬 **Would you like to book an appointment?**\n---`;
   }
 
   // ==================== GROQ API CALL ====================
@@ -1898,21 +2228,30 @@ Present this assessment to the patient clearly, empathetically, with action appr
       if (!text.trim()) throw new Error('Empty response from Groq');
       return text;
     } catch (error: unknown) {
-      const err = error as { status?: number; message?: string; error?: { type?: string } };
+      const err = error as {
+        status?: number;
+        message?: string;
+        error?: { type?: string };
+      };
       const isQuota =
         err?.status === 429 ||
         err?.error?.type === 'tokens' ||
         err?.message?.toLowerCase().includes('rate limit') ||
         err?.message?.toLowerCase().includes('quota') ||
         err?.message?.toLowerCase().includes('too many requests');
-      if (isQuota) { this.markQuotaExceeded(); throw new QuotaExceededError(); }
+      if (isQuota) {
+        this.markQuotaExceeded();
+        throw new QuotaExceededError();
+      }
       throw error;
     }
   }
 
-  // ==================== SMART GENERATE ====================
-
-  private async tryGenerate(userPrompt: string, category: string, language: Language): Promise<{ text: string; usedFallback: boolean }> {
+  private async tryGenerate(
+    userPrompt: string,
+    category: string,
+    language: Language
+  ): Promise<{ text: string; usedFallback: boolean }> {
     if (this.isQuotaExceeded() || this.isRateLimited()) {
       return { text: this.getFallbackText(category, language), usedFallback: true };
     }
@@ -1920,7 +2259,8 @@ Present this assessment to the patient clearly, empathetically, with action appr
       const text = await this.callGroqAPI(userPrompt, this.buildSystemPrompt());
       return { text, usedFallback: false };
     } catch (error) {
-      if (error instanceof QuotaExceededError) return { text: this.getFallbackText(category, language), usedFallback: true };
+      if (error instanceof QuotaExceededError)
+        return { text: this.getFallbackText(category, language), usedFallback: true };
       console.error('❌ Groq error:', (error as Error)?.message);
       return { text: this.getFallbackText(category, language), usedFallback: true };
     }
@@ -1935,7 +2275,7 @@ Present this assessment to the patient clearly, empathetically, with action appr
     return FALLBACK_RESPONSES[language][key];
   }
 
-  // ==================== MAIN: PROCESS MESSAGE ====================
+  // ==================== MAIN PROCESS MESSAGE ====================
 
   public async processMessage(userMessage: string, userId?: string): Promise<AIResponse> {
     try {
@@ -1943,15 +2283,12 @@ Present this assessment to the patient clearly, empathetically, with action appr
 
       const language = this.detectLanguage(userMessage);
 
-      // 1. Load patient profile
+      // 1. Load patient profile if needed
       if (userId && !this.patientProfile) {
         await this.loadPatientProfile(userId);
       }
 
-      // Accumulate text for progressive triage scoring
-      this.accumulatedSymptomText += ' ' + userMessage;
-
-      // 2. Emergency check (always first, regardless of session state)
+      // 2. Emergency check — always first
       const emergencyCheck = this.detectEmergency(userMessage);
       if (emergencyCheck.isEmergency && emergencyCheck.protocol) {
         auditLogger.log({
@@ -1963,44 +2300,120 @@ Present this assessment to the patient clearly, empathetically, with action appr
           emergencyAlert: true,
           timestamp: new Date(),
         });
-        this.assessmentSession = null; // reset any session
+        this.resetBookingState();
+        this.assessmentSession = null;
         return this.buildEmergencyResponse(emergencyCheck.protocol, language);
       }
 
-      // 3. Quick triage of current message
+      // 3. Detect booking intent
+      let bookingIntent: 'confirm' | 'decline' | 'inquiry' | 'neutral' = 'neutral';
+      
+      // Kiểm tra inquiry trước
+      if (!this.bookingSuggested && !this.bookingConfirmed && !this.bookingDeclined) {
+        bookingIntent = this.detectBookingIntent(userMessage);
+        
+        if (bookingIntent === 'inquiry') {
+          this.bookingInquiryDetected = true;
+          const inquiryResponse = await this.handleBookingInquiry(userId, language);
+          if (inquiryResponse) {
+            this.addToHistory({
+              role: 'user',
+              content: userMessage,
+              timestamp: new Date(),
+              language,
+            });
+            this.addToHistory({
+              role: 'assistant',
+              content: inquiryResponse.response,
+              timestamp: new Date(),
+              category: inquiryResponse.category,
+              language,
+            });
+            return inquiryResponse;
+          }
+        }
+      }
+
+      // Xử lý confirm/decline khi đã suggested
+      if (this.bookingSuggested && !this.bookingConfirmed && !this.bookingDeclined) {
+        const detectedIntent = this.detectBookingIntent(userMessage);
+        if (detectedIntent === 'confirm' || detectedIntent === 'decline') {
+          bookingIntent = detectedIntent;
+          
+          if (bookingIntent === 'confirm') {
+            this.bookingConfirmed = true;
+            auditLogger.log({
+              userId,
+              action: 'booking_confirmed',
+              userMessage,
+              timestamp: new Date(),
+            });
+          } else if (bookingIntent === 'decline') {
+            this.bookingDeclined = true;
+            auditLogger.log({
+              userId,
+              action: 'booking_declined',
+              userMessage,
+              timestamp: new Date(),
+            });
+          }
+        }
+      }
+
+      // 4. Accumulate for triage
+      this.accumulatedSymptomText += ' ' + userMessage;
+
+      // 5. Quick triage
       const quickTriage = ClinicalTriageEngine.score(
-        this.accumulatedSymptomText, language, this.patientProfile
+        this.accumulatedSymptomText,
+        language,
+        this.patientProfile
       );
       const quickUrgency = ClinicalTriageEngine.scoreToUrgency(quickTriage.score);
 
-      // 4. ASSESSMENT STATE MACHINE
-      // a) If high/critical urgency detected from accumulation → skip collection, assess now
-      if (quickUrgency === 'high' && !this.isAssessmentReadyToComplete()) {
-        // Force complete assessment for high urgency
+      // 6. Assessment state machine
+      if (bookingIntent !== 'neutral' && bookingIntent !== 'inquiry') {
         if (this.assessmentSession) this.assessmentSession.phase = 'assessing';
       }
 
-      // b) No session yet — detect symptom type and start one
-      if (!this.assessmentSession) {
+      if (quickUrgency === 'high' && !this.isAssessmentReadyToComplete()) {
+        if (this.assessmentSession) this.assessmentSession.phase = 'assessing';
+      }
+
+      if (!this.assessmentSession && bookingIntent === 'neutral') {
         const symptomType = this.detectSymptomType(userMessage);
         if (symptomType && quickUrgency !== 'high') {
           this.startAssessmentSession(symptomType, language);
         }
       }
 
-      // c) Active session that needs more info
-      if (this.assessmentSession && !this.isAssessmentReadyToComplete()) {
+      // Ask clarifying questions if assessment in progress
+      if (
+        this.assessmentSession &&
+        !this.isAssessmentReadyToComplete() &&
+        bookingIntent === 'neutral'
+      ) {
         this.advanceAssessment(userMessage);
         const nextQuestion = this.getNextAssessmentQuestion(language);
 
         if (nextQuestion) {
-          // Still collecting — ask next question
-          const questionResponse = language === 'vi'
-            ? `Cảm ơn bạn đã chia sẻ. Để đánh giá chính xác hơn:\n\n❓ **${nextQuestion}**\n\n⚕️ Thông tin này chỉ mang tính giáo dục, không thay thế tư vấn y tế chuyên nghiệp.`
-            : `Thank you for sharing. To assess more accurately:\n\n❓ **${nextQuestion}**\n\n⚕️ This information is for educational purposes only and does not replace professional medical advice.`;
+          const questionResponse =
+            language === 'vi'
+              ? `Cảm ơn bạn đã chia sẻ. Để đánh giá chính xác hơn:\n\n❓ **${nextQuestion}**\n\n⚕️ Thông tin này chỉ mang tính giáo dục, không thay thế tư vấn y tế chuyên nghiệp.`
+              : `Thank you for sharing. To assess more accurately:\n\n❓ **${nextQuestion}**\n\n⚕️ This information is for educational purposes only and does not replace professional medical advice.`;
 
-          this.addToHistory({ role: 'user', content: userMessage, timestamp: new Date(), language });
-          this.addToHistory({ role: 'assistant', content: questionResponse, timestamp: new Date(), language });
+          this.addToHistory({
+            role: 'user',
+            content: userMessage,
+            timestamp: new Date(),
+            language,
+          });
+          this.addToHistory({
+            role: 'assistant',
+            content: questionResponse,
+            timestamp: new Date(),
+            language,
+          });
 
           return {
             response: questionResponse,
@@ -2012,76 +2425,152 @@ Present this assessment to the patient clearly, empathetically, with action appr
             provider: 'local',
           };
         }
-        // No more questions from template → move to assessing
+
         if (this.assessmentSession) this.assessmentSession.phase = 'assessing';
       }
 
-      // d) Continue advancing session if we're in the middle of turns
       if (this.assessmentSession && !this.isAssessmentReadyToComplete()) {
         this.advanceAssessment(userMessage);
       }
 
-      // 5. Build clinical assessment
+      // 7. Build clinical assessment
       const clinicalAssessment = this.buildClinicalAssessment(language);
+      this.lastAssessedUrgency = clinicalAssessment.urgencyLevel;
 
-      // 6. Detect category + specialty
+      // 8. Detect category + specialty
       const { category, specialtyId } = await this.detectCategory(
         this.accumulatedSymptomText
       );
 
-      // 7. Evaluate appointment need based on clinical assessment
+      // 9. Evaluate appointment need
       const appointmentRecommendation = await this.evaluateAppointmentNeed(
-        clinicalAssessment, category, specialtyId, language, userId
+        clinicalAssessment,
+        category,
+        specialtyId,
+        language,
+        userId,
+        this.bookingConfirmed
       );
 
-      // 8. Get symptom history
+      // 10. Update booking state
+      let shouldAskBookingConfirmation = false;
+      
+      if (
+        !this.bookingSuggested &&
+        !this.bookingDeclined &&
+        !this.bookingConfirmed &&
+        (clinicalAssessment.urgencyLevel === 'medium' || clinicalAssessment.urgencyLevel === 'low') &&
+        clinicalAssessment.assessmentComplete &&
+        bookingIntent === 'neutral' &&
+        !appointmentRecommendation.hasExistingAppointment
+      ) {
+        shouldAskBookingConfirmation = true;
+        this.bookingSuggested = true;
+        
+        auditLogger.log({
+          userId,
+          action: 'booking_confirmation_asked',
+          userMessage,
+          category,
+          urgencyLevel: clinicalAssessment.urgencyLevel,
+          timestamp: new Date(),
+        });
+      }
+
+      // Reset booking confirmed after showing card
+      if (this.bookingConfirmed && appointmentRecommendation.shouldBook) {
+        this.resetBookingState();
+      }
+
+      // 11. Get symptom history
       let symptomHistory = '';
       if (userId) {
         symptomHistory = await SymptomTrackerService.getContextSummary(userId, language);
         if (appointmentRecommendation.symptoms.length) {
-          const sessionId = this.conversationHistory[0]?.timestamp.toISOString() || 'unknown';
+          const sessionId =
+            this.conversationHistory[0]?.timestamp.toISOString() || 'unknown';
           await SymptomTrackerService.logSymptoms(
-            userId, sessionId, appointmentRecommendation.symptoms, userMessage, category
+            userId,
+            sessionId,
+            appointmentRecommendation.symptoms,
+            userMessage,
+            category
           );
         }
       }
 
-      // 9. Save user message to history
-      this.addToHistory({ role: 'user', content: userMessage, timestamp: new Date(), category, language });
+      // 12. Save user message to history
+      this.addToHistory({
+        role: 'user',
+        content: userMessage,
+        timestamp: new Date(),
+        category,
+        language,
+      });
 
-      // 10. Build AI prompt with assessment context
+      // 13. Build AI prompt
       const userPrompt = await this.buildUserPrompt(
-        userMessage, category, specialtyId, language,
+        userMessage,
+        category,
+        specialtyId,
+        language,
         clinicalAssessment,
         appointmentRecommendation,
-        symptomHistory
+        symptomHistory,
+        bookingIntent
       );
 
-      const { text: responseText, usedFallback } = await this.tryGenerate(userPrompt, category, language);
+      const { text: responseText, usedFallback } = await this.tryGenerate(
+        userPrompt,
+        category,
+        language
+      );
 
-      this.addToHistory({ role: 'assistant', content: responseText, timestamp: new Date(), category, language });
+      // Nếu cần hỏi booking confirmation và AI chưa hỏi, thêm vào response
+      let finalResponseText = responseText;
+      if (shouldAskBookingConfirmation && appointmentRecommendation.bookingQuestion) {
+        // Kiểm tra xem AI đã hỏi chưa
+        const lowerResponse = responseText.toLowerCase();
+        const hasAskedBooking = 
+          lowerResponse.includes('đặt lịch') || 
+          lowerResponse.includes('book') ||
+          lowerResponse.includes('hẹn') ||
+          lowerResponse.includes('appointment');
+        
+        if (!hasAskedBooking) {
+          finalResponseText += '\n\n' + appointmentRecommendation.bookingQuestion;
+        }
+      }
 
-      // 11. Mark session complete
+      this.addToHistory({
+        role: 'assistant',
+        content: finalResponseText,
+        timestamp: new Date(),
+        category,
+        language,
+      });
+
+      // Mark assessment complete
       if (this.assessmentSession) this.assessmentSession.phase = 'complete';
 
-      // 12. Audit log
       auditLogger.log({
         userId,
         action: 'chat_message',
         userMessage,
-        aiResponse: responseText.substring(0, 500),
+        aiResponse: finalResponseText.substring(0, 500),
         category,
         urgencyLevel: clinicalAssessment.urgencyLevel,
         emergencyAlert: false,
         timestamp: new Date(),
       });
 
-      const analysis = this.analyzeResponse(responseText, language);
+      const analysis = this.analyzeResponse(finalResponseText, language);
       let relatedSpecialties: string[] = [];
-      if (specialtyId) relatedSpecialties = await this.specialtyManager.getRelatedSpecialties(specialtyId);
+      if (specialtyId)
+        relatedSpecialties = await this.specialtyManager.getRelatedSpecialties(specialtyId);
 
       return {
-        response: responseText,
+        response: finalResponseText,
         confidence: usedFallback ? 0.5 : analysis.confidence,
         suggestedActions: analysis.suggestedActions,
         emergencyAlert: false,
@@ -2095,6 +2584,11 @@ Present this assessment to the patient clearly, empathetically, with action appr
         clinicalAssessment,
         triageScore: clinicalAssessment.triageScore,
         urgencyLevel: clinicalAssessment.urgencyLevel,
+        shouldAskBookingConfirmation,
+        requiresMoreInfo: appointmentRecommendation.awaitingBookingConfirmation || shouldAskBookingConfirmation,
+        followUpQuestions: appointmentRecommendation.awaitingBookingConfirmation
+          ? [appointmentRecommendation.bookingQuestion || '']
+          : undefined,
       };
     } catch (error) {
       if (!(error instanceof EmptyMessageError)) {
@@ -2104,16 +2598,31 @@ Present this assessment to the patient clearly, empathetically, with action appr
     }
   }
 
+  // ==================== BOOKING STATE RESET ====================
+
+  private resetBookingState(): void {
+    this.bookingSuggested = false;
+    this.bookingConfirmed = false;
+    this.bookingDeclined = false;
+    this.bookingInquiryDetected = false;
+  }
+
   // ==================== RESPONSE BUILDERS ====================
 
-  private buildEmergencyResponse(protocol: EmergencyProtocol, language: Language): AIResponse {
-    const responseText = EMERGENCY_PROTOCOLS[language][protocol] ?? EMERGENCY_PROTOCOLS[language].cardiac_emergency;
+  private buildEmergencyResponse(
+    protocol: EmergencyProtocol,
+    language: Language
+  ): AIResponse {
+    const responseText =
+      EMERGENCY_PROTOCOLS[language][protocol] ??
+      EMERGENCY_PROTOCOLS[language].cardiac_emergency;
     return {
       response: responseText,
       confidence: 0.98,
-      suggestedActions: language === 'vi'
-        ? ['Gọi cấp cứu 115', 'Đến bệnh viện gần nhất', 'Liên hệ người thân']
-        : ['Call emergency 911/115', 'Go to nearest hospital', 'Contact family member'],
+      suggestedActions:
+        language === 'vi'
+          ? ['Gọi cấp cứu 115', 'Đến bệnh viện gần nhất', 'Liên hệ người thân']
+          : ['Call emergency 911/115', 'Go to nearest hospital', 'Contact family member'],
       emergencyAlert: true,
       category: 'emergency',
       relatedSpecialties: [],
@@ -2125,15 +2634,17 @@ Present this assessment to the patient clearly, empathetically, with action appr
   }
 
   private buildErrorResponse(language: Language): AIResponse {
-    const response = language === 'vi'
-      ? 'Xin lỗi, đang gặp sự cố kỹ thuật.\n1. Liên hệ trực tiếp nhà cung cấp y tế\n2. Gọi 115 nếu cần cấp cứu\n\n⚕️ Thông tin này chỉ mang tính giáo dục.'
-      : 'Technical difficulty encountered.\n1. Contact your healthcare provider directly\n2. Call 911/115 for emergencies\n\n⚕️ Educational purposes only.';
+    const response =
+      language === 'vi'
+        ? 'Xin lỗi, đang gặp sự cố kỹ thuật.\n1. Liên hệ trực tiếp nhà cung cấp y tế\n2. Gọi 115 nếu cần cấp cứu\n\n⚕️ Thông tin này chỉ mang tính giáo dục.'
+        : 'Technical difficulty encountered.\n1. Contact your healthcare provider directly\n2. Call 911/115 for emergencies\n\n⚕️ Educational purposes only.';
     return {
       response,
       confidence: 0.3,
-      suggestedActions: language === 'vi'
-        ? ['Liên hệ nhà cung cấp y tế', 'Gọi cấp cứu nếu cần']
-        : ['Contact healthcare provider', 'Call emergency services if needed'],
+      suggestedActions:
+        language === 'vi'
+          ? ['Liên hệ nhà cung cấp y tế', 'Gọi cấp cứu nếu cần']
+          : ['Contact healthcare provider', 'Call emergency services if needed'],
       emergencyAlert: false,
       category: 'technical',
       language,
@@ -2144,35 +2655,48 @@ Present this assessment to the patient clearly, empathetically, with action appr
 
   // ==================== RESPONSE ANALYSIS ====================
 
-  private analyzeResponse(responseText: string, language: Language): { confidence: number; suggestedActions: string[] } {
+  private analyzeResponse(
+    responseText: string,
+    language: Language
+  ): { confidence: number; suggestedActions: string[] } {
     const lower = responseText.toLowerCase();
     let confidence = 0.78;
 
-    const highTerms = language === 'vi'
-      ? ['nghiên cứu cho thấy', 'dựa trên bằng chứng', 'hướng dẫn y khoa']
-      : ['research shows', 'evidence-based', 'medical guidelines', 'clinical studies'];
-    const cautionTerms = language === 'vi'
-      ? ['có thể', 'đôi khi', 'trong một số trường hợp']
-      : ['may be', 'could possibly', 'sometimes', 'in some cases'];
+    const highTerms =
+      language === 'vi'
+        ? ['nghiên cứu cho thấy', 'dựa trên bằng chứng', 'hướng dẫn y khoa']
+        : ['research shows', 'evidence-based', 'medical guidelines', 'clinical studies'];
+    const cautionTerms =
+      language === 'vi'
+        ? ['có thể', 'đôi khi', 'trong một số trường hợp']
+        : ['may be', 'could possibly', 'sometimes', 'in some cases'];
 
     if (highTerms.some(t => lower.includes(t))) confidence = 0.88;
-    if (cautionTerms.some(t => lower.includes(t))) confidence = Math.min(confidence, 0.65);
+    if (cautionTerms.some(t => lower.includes(t)))
+      confidence = Math.min(confidence, 0.65);
 
-    const actionMap = language === 'vi'
-      ? {
-          doctor: { trigger: 'bác sĩ', label: 'Đặt lịch khám với bác sĩ' },
-          pharmacist: { trigger: 'dược sĩ', label: 'Tham khảo dược sĩ về thuốc' },
-          test: { trigger: 'xét nghiệm', label: 'Thực hiện xét nghiệm theo chỉ định' },
-          emergency: { trigger: 'cấp cứu', label: 'Tìm kiếm chăm sóc y tế ngay' },
-          specialist: { trigger: 'chuyên khoa', label: 'Tham khảo bác sĩ chuyên khoa' },
-        }
-      : {
-          doctor: { trigger: 'doctor', label: 'Schedule an appointment with your doctor' },
-          pharmacist: { trigger: 'pharmacist', label: 'Consult a pharmacist about medications' },
-          test: { trigger: 'test', label: 'Get recommended tests done' },
-          emergency: { trigger: 'emergency', label: 'Seek immediate medical attention' },
-          specialist: { trigger: 'specialist', label: 'See a specialist for evaluation' },
-        };
+    const actionMap =
+      language === 'vi'
+        ? {
+            doctor: { trigger: 'bác sĩ', label: 'Đặt lịch khám với bác sĩ' },
+            pharmacist: { trigger: 'dược sĩ', label: 'Tham khảo dược sĩ về thuốc' },
+            test: { trigger: 'xét nghiệm', label: 'Thực hiện xét nghiệm theo chỉ định' },
+            emergency: { trigger: 'cấp cứu', label: 'Tìm kiếm chăm sóc y tế ngay' },
+            specialist: { trigger: 'chuyên khoa', label: 'Tham khảo bác sĩ chuyên khoa' },
+          }
+        : {
+            doctor: { trigger: 'doctor', label: 'Schedule an appointment with your doctor' },
+            pharmacist: {
+              trigger: 'pharmacist',
+              label: 'Consult a pharmacist about medications',
+            },
+            test: { trigger: 'test', label: 'Get recommended tests done' },
+            emergency: { trigger: 'emergency', label: 'Seek immediate medical attention' },
+            specialist: {
+              trigger: 'specialist',
+              label: 'See a specialist for evaluation',
+            },
+          };
 
     const suggestedActions: string[] = [];
     for (const { trigger, label } of Object.values(actionMap)) {
@@ -2199,9 +2723,14 @@ Present this assessment to the patient clearly, empathetically, with action appr
   private serializeHistory(): string {
     return this.conversationHistory
       .map(msg => {
-        const role = msg.role === 'user'
-          ? (msg.language === 'vi' ? 'Bệnh nhân' : 'Patient')
-          : (msg.language === 'vi' ? 'Trợ lý AI' : 'AI Assistant');
+        const role =
+          msg.role === 'user'
+            ? msg.language === 'vi'
+              ? 'Bệnh nhân'
+              : 'Patient'
+            : msg.language === 'vi'
+            ? 'Trợ lý AI'
+            : 'AI Assistant';
         return `${role}: ${msg.content.substring(0, 300)}`;
       })
       .join('\n');
@@ -2209,25 +2738,31 @@ Present this assessment to the patient clearly, empathetically, with action appr
 
   // ==================== ADDITIONAL SERVICES ====================
 
-  public async getMedicationInfo(medicationName: string, userId?: string): Promise<MedicationInfo> {
+  public async getMedicationInfo(
+    medicationName: string,
+    userId?: string
+  ): Promise<MedicationInfo> {
     let allergies: string[] = [];
     if (userId) {
       const profile = await PatientProfileService.getProfile(userId);
       if (profile) allergies = profile.allergies;
     }
 
-    const allergyWarning = allergies.some(a =>
-      medicationName.toLowerCase().includes(a.toLowerCase()) ||
-      a.toLowerCase().includes(medicationName.toLowerCase())
+    const allergyWarning = allergies.some(
+      a =>
+        medicationName.toLowerCase().includes(a.toLowerCase()) ||
+        a.toLowerCase().includes(medicationName.toLowerCase())
     );
 
     const allergyNote = allergyWarning
       ? `⚠️ CẢNH BÁO DỊ ỨNG: Bệnh nhân có thể dị ứng với ${medicationName}. Tham khảo bác sĩ ngay!\n\n`
       : '';
 
-    const prompt = `Cung cấp thông tin chi tiết về thuốc: "${medicationName}"\n\nBao gồm:\n1. Tên thương mại phổ biến\n2. Công dụng điều trị\n3. Liều dùng thông thường (theo lứa tuổi nếu có)\n4. Tác dụng phụ thường gặp và nghiêm trọng\n5. Chống chỉ định\n6. Tương tác thuốc quan trọng\n7. Lưu ý đặc biệt\n\nTrả lời bằng TIẾNG VIỆT.\n\n⚕️ Kết thúc bằng: "Thông tin này chỉ mang tính giáo dục, không thay thế tư vấn y tế chuyên nghiệp."`;
+    const prompt = `Cung cấp thông tin chi tiết về thuốc: "${medicationName}"\n\nBao gồm:\n1. Tên thương mại phổ biến\n2. Công dụng điều trị\n3. Liều dùng thông thường\n4. Tác dụng phụ thường gặp và nghiêm trọng\n5. Chống chỉ định\n6. Tương tác thuốc quan trọng\n7. Lưu ý đặc biệt\n\nTrả lời bằng TIẾNG VIỆT.\n\n⚕️ Kết thúc bằng: "Thông tin này chỉ mang tính giáo dục, không thay thế tư vấn y tế chuyên nghiệp."`;
     const { text } = await this.tryGenerate(prompt, 'medications', 'vi');
-    const warnings = allergyWarning ? [`⚠️ Potential allergy conflict: ${medicationName}`] : [];
+    const warnings = allergyWarning
+      ? [`⚠️ Potential allergy conflict: ${medicationName}`]
+      : [];
 
     return {
       name: medicationName,
@@ -2240,48 +2775,28 @@ Present this assessment to the patient clearly, empathetically, with action appr
 
   public async explainMedicalTerm(term: string): Promise<TermExplanation> {
     const language = this.detectLanguage(term);
-    const prompt = language === 'vi'
-      ? `Giải thích thuật ngữ y khoa: "${term}"\n\nBao gồm:\n1. Định nghĩa y khoa chính xác\n2. Giải thích bằng ngôn ngữ đơn giản\n3. Ví dụ lâm sàng thực tế\n4. Khi nào cần gặp bác sĩ\n\nTrả lời bằng TIẾNG VIỆT, gần gũi và dễ hiểu.`
-      : `Explain the medical term: "${term}"\n\nInclude:\n1. Precise medical definition\n2. Plain language explanation\n3. Real clinical examples\n4. When to see a doctor\n\nRespond in ENGLISH, friendly and easy to understand.`;
+    const prompt =
+      language === 'vi'
+        ? `Giải thích thuật ngữ y khoa: "${term}"\n\nBao gồm:\n1. Định nghĩa y khoa chính xác\n2. Giải thích bằng ngôn ngữ đơn giản\n3. Ví dụ lâm sàng thực tế\n4. Khi nào cần gặp bác sĩ\n\nTrả lời bằng TIẾNG VIỆT, gần gũi và dễ hiểu.`
+        : `Explain the medical term: "${term}"\n\nInclude:\n1. Precise medical definition\n2. Plain language explanation\n3. Real clinical examples\n4. When to see a doctor\n\nRespond in ENGLISH, friendly and easy to understand.`;
     const { text } = await this.tryGenerate(prompt, 'general', language);
     return { term, explanation: text, confidence: 0.9 };
   }
 
   public async getLifestyleAdvice(topic: string): Promise<LifestyleAdvice> {
     const language = this.detectLanguage(topic);
-
-    const prompt = language === 'vi'
-      ? `Cung cấp lời khuyên chi tiết về lối sống cho chủ đề: "${topic}"
-
-Yêu cầu:
-1. Giải thích ngắn gọn về tầm quan trọng của chủ đề
-2. Đưa ra 3–5 lời khuyên cụ thể, thực tế với:
-   - Mô tả ngắn gọn
-   - Cách thực hiện hàng ngày
-   - Lợi ích mong đợi
-3. Những điều nên tránh
-4. Kết thúc bằng lưu ý quan trọng
-
-Định dạng: sử dụng emoji phù hợp, ngôn ngữ thân thiện.
-
-⚕️ Thông tin này chỉ mang tính giáo dục, không thay thế tư vấn y tế chuyên nghiệp.`
-      : `Provide detailed lifestyle advice for: "${topic}"
-
-Requirements:
-1. Brief explanation of why this topic matters
-2. 3–5 specific, actionable tips with:
-   - Short description
-   - Daily implementation steps
-   - Expected benefits
-3. What to avoid
-4. Close with important notes
-
-Format: use appropriate emojis, friendly language.
-
-⚕️ This information is for educational purposes only and does not replace professional medical advice.`;
+    const prompt =
+      language === 'vi'
+        ? `Cung cấp lời khuyên chi tiết về lối sống cho chủ đề: "${topic}"\n\nYêu cầu:\n1. Giải thích tầm quan trọng\n2. Đưa ra 3–5 lời khuyên cụ thể với cách thực hiện và lợi ích\n3. Những điều nên tránh\n4. Kết thúc bằng lưu ý quan trọng\n\n⚕️ Thông tin này chỉ mang tính giáo dục, không thay thế tư vấn y tế chuyên nghiệp.`
+        : `Provide detailed lifestyle advice for: "${topic}"\n\nRequirements:\n1. Why this topic matters\n2. 3–5 actionable tips with daily steps and expected benefits\n3. What to avoid\n4. Important closing notes\n\n⚕️ Educational purposes only.`;
 
     const { text, usedFallback } = await this.tryGenerate(prompt, 'lifestyle', language);
-    return { topic, advice: text, confidence: usedFallback ? 0.5 : 0.85, category: 'lifestyle' };
+    return {
+      topic,
+      advice: text,
+      confidence: usedFallback ? 0.5 : 0.85,
+      category: 'lifestyle',
+    };
   }
 
   // ==================== PUBLIC UTILITIES ====================
@@ -2292,39 +2807,43 @@ Format: use appropriate emojis, friendly language.
     this.assessmentSession = null;
     this.accumulatedSymptomText = '';
     this.patientProfile = null;
+    this.resetBookingState();
+    this.lastAssessedUrgency = 'low';
   }
 
-  public getHistory(): AIMessage[] { return [...this.conversationHistory]; }
-  public getLastDetectedLanguage(): Language | null { return this.conversationHistory.at(-1)?.language ?? null; }
+  public getHistory(): AIMessage[] {
+    return [...this.conversationHistory];
+  }
 
-  /**
-   * NEW: Get current assessment session state (for frontend to display progress)
-   */
+  public getLastDetectedLanguage(): Language | null {
+    return this.conversationHistory.at(-1)?.language ?? null;
+  }
+
   public getAssessmentState(): {
     active: boolean;
     phase: AssessmentPhase;
     turnCount: number;
     urgencyPreview?: UrgencyLevel;
+    bookingSuggested: boolean;
+    bookingConfirmed: boolean;
+    bookingDeclined: boolean;
   } {
-    if (!this.assessmentSession) {
-      return { active: false, phase: 'idle', turnCount: 0 };
-    }
     const quickTriage = ClinicalTriageEngine.score(
       this.accumulatedSymptomText,
-      this.assessmentSession.language,
+      this.assessmentSession?.language ?? 'vi',
       this.patientProfile
     );
     return {
-      active: true,
-      phase: this.assessmentSession.phase,
-      turnCount: this.assessmentSession.turnCount,
+      active: !!this.assessmentSession,
+      phase: this.assessmentSession?.phase ?? 'idle',
+      turnCount: this.assessmentSession?.turnCount ?? 0,
       urgencyPreview: ClinicalTriageEngine.scoreToUrgency(quickTriage.score),
+      bookingSuggested: this.bookingSuggested,
+      bookingConfirmed: this.bookingConfirmed,
+      bookingDeclined: this.bookingDeclined,
     };
   }
 
-  /**
-   * NEW: Force complete the assessment and return the result (e.g., user clicks "Get Assessment")
-   */
   public forceCompleteAssessment(language?: Language): ClinicalAssessment {
     const lang = language ?? this.getLastDetectedLanguage() ?? 'vi';
     if (this.assessmentSession) this.assessmentSession.phase = 'assessing';
@@ -2343,12 +2862,26 @@ Format: use appropriate emojis, friendly language.
 
   public async getAllSpecialties() {
     const s = await this.specialtyManager.getAllSpecialties();
-    return s.map(sp => ({ id: sp.id, name: sp.name, icon: sp.icon, color: sp.color, category: sp.category }));
+    return s.map(sp => ({
+      id: sp.id,
+      name: sp.name,
+      icon: sp.icon,
+      color: sp.color,
+      category: sp.category,
+    }));
   }
 
-  public async getAllCategories(): Promise<string[]> { return this.specialtyManager.getAllCategories(); }
-  public async getSpecialtyById(id: string) { return this.specialtyManager.getSpecialtyById(id); }
-  public async refreshSpecialties(): Promise<void> { await this.specialtyManager.loadSpecialties(true); }
+  public async getAllCategories(): Promise<string[]> {
+    return this.specialtyManager.getAllCategories();
+  }
+
+  public async getSpecialtyById(id: string) {
+    return this.specialtyManager.getSpecialtyById(id);
+  }
+
+  public async refreshSpecialties(): Promise<void> {
+    await this.specialtyManager.loadSpecialties(true);
+  }
 }
 
 // ==================== SESSION MANAGER ====================

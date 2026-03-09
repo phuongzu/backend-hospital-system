@@ -833,7 +833,7 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
     }
 
     // Calculate appointment end time (default 30 minutes)
-    const appointmentEndTime = calculateEndTime(time_slot, 30); // SỬA: gọi hàm trực tiếp
+    const appointmentEndTime = calculateEndTime(time_slot, 30);
 
     // Create new appointment
     const appointment = new Appointment({
