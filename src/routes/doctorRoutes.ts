@@ -1,194 +1,198 @@
-import express from 'express';
-import { 
-  getAvailableDoctors, 
-  getDoctorsBySpecialty, 
-  getDoctorsFromUsers,
-  changeDoctorStatus,
-  getDoctorAppointments,
-  getDoctorPatients,
-  getDoctorNotifications,
-  getDoctorStats,
-  getDoctorProfile,
-  updateDoctorAvailability,
-  confirmAppointment,
-  cancelAppointment,
-  completeAppointment,
-  uploadDoctorAvatar,
-  getDoctorAvatar,
-  getActiveConsultation,
-  createConsultation,
-  addTreatmentStep,
-  approveTreatmentStep,
-  completeConsultation,
-  updateConsultationStatus,
-  setActiveConsultation,
-  clearActiveConsultation,
-  getDoctorConsultations,
-  updateConsultationDetails,
-  updateTreatmentStep,
-  getAllPatients,
-  getAllDrugs,
-  deleteTreatmentStep,
-  startTreatmentStep,
-  rejectTreatmentStep,
-  reviewAndDecideStep,
-  scheduleReExamination,
-  confirmReExaminationArrival,
-  getAvailableSlots,
-  cancelReExamination,
-  completeReExamination,
-  getReExaminationDetail,
-  getReExaminationAppointments,
-  markAppointmentCompleted,
-  completeReExaminationStep
-} from '../controllers/doctorcontroller';
-import multer from 'multer';
-import path from 'path';
-import fs from 'fs';
-import { protect } from '../middlewares/authmiddleware';
-import { validateRequest } from '../middlewares/validateRequest';
-import logger from '../utils/logger';
+  import express from 'express';
+  import { 
+    getAvailableDoctors, 
+    getDoctorsBySpecialty, 
+    getDoctorsFromUsers,
+    changeDoctorStatus,
+    getDoctorAppointments,
+    getDoctorPatients,
+    getDoctorNotifications,
+    getDoctorStats,
+    getDoctorProfile,
+    updateDoctorAvailability,
+    confirmAppointment,
+    cancelAppointment,
+    completeAppointment,
+    uploadDoctorAvatar,
+    getDoctorAvatar,
+    getActiveConsultation,
+    createConsultation,
+    addTreatmentStep,
+    approveTreatmentStep,
+    completeConsultation,
+    updateConsultationStatus,
+    setActiveConsultation,
+    clearActiveConsultation,
+    getDoctorConsultations,
+    updateConsultationDetails,
+    updateTreatmentStep,
+    getAllPatients,
+    getAllDrugs,
+    deleteTreatmentStep,
+    startTreatmentStep,
+    rejectTreatmentStep,
+    reviewAndDecideStep,
+    scheduleReExamination,
+    confirmReExaminationArrival,
+    getAvailableSlots,
+    cancelReExamination,
+    completeReExamination,
+    getReExaminationDetail,
+    getReExaminationAppointments,
+    markAppointmentCompleted,
+    completeReExaminationStep,
+    getStepAppointmentStatus
+  } from '../controllers/doctorcontroller';
+  import multer from 'multer';
+  import path from 'path';
+  import fs from 'fs';
+  import { protect } from '../middlewares/authmiddleware';
+  import { validateRequest } from '../middlewares/validateRequest';
+  import logger from '../utils/logger';
 
-const router = express.Router();
+  const router = express.Router();
 
 
-const uploadsDir = path.join(__dirname, '..', 'uploads', 'avatars');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadsDir);
-  },
-  filename: (req, file, cb) => {
-    logger.debug('=== MULTER FILENAME DEBUG ===');
-    
-    let doctorId = req.query.doctorId as string;
-    
-    logger.debug('DoctorId from query:', { doctorId });
-    
-    if (!doctorId || doctorId === 'undefined') {
-      logger.error('❌ Doctor ID not found in query parameters');
-      return cb(new Error('Doctor ID is required'), '');
-    }
-    
-    doctorId = String(doctorId).trim();
-    
-    // Tạo tên file: doctor-{doctorId}-{timestamp}.{ext}
-    const ext = path.extname(file.originalname).toLowerCase();
-    const timestamp = Date.now();
-    const filename = `doctor-${doctorId}-${timestamp}${ext}`;
-    logger.debug('✅ Final filename:', { filename });
-    cb(null, filename);
+  const uploadsDir = path.join(__dirname, '..', 'uploads', 'avatars');
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
   }
-});
 
-const upload = multer({ 
-  storage: storage,
-  limits: {
-    fileSize: 5 * 1024 * 1024 // 5MB
-  },
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only image files are allowed!'));
+  const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+      cb(null, uploadsDir);
+    },
+    filename: (req, file, cb) => {
+      logger.debug('=== MULTER FILENAME DEBUG ===');
+      
+      let doctorId = req.query.doctorId as string;
+      
+      logger.debug('DoctorId from query:', { doctorId });
+      
+      if (!doctorId || doctorId === 'undefined') {
+        logger.error('❌ Doctor ID not found in query parameters');
+        return cb(new Error('Doctor ID is required'), '');
+      }
+      
+      doctorId = String(doctorId).trim();
+      
+      // Tạo tên file: doctor-{doctorId}-{timestamp}.{ext}
+      const ext = path.extname(file.originalname).toLowerCase();
+      const timestamp = Date.now();
+      const filename = `doctor-${doctorId}-${timestamp}${ext}`;
+      logger.debug('✅ Final filename:', { filename });
+      cb(null, filename);
     }
-  }
-});
+  });
 
-
-// Get all available doctors (filtered by user.status === 'working')
-router.get('/', getAvailableDoctors);
-
-// Get available doctors by specialty (filtered by user.status === 'working')
-router.get('/specialty/:specialtyId', getDoctorsBySpecialty);
-
-// Search doctors from user accounts
-router.get('/search', getDoctorsFromUsers);
-
-// Change status of doctor
-router.patch('/:doctorId/status', changeDoctorStatus);
-
-// Update doctor availability
-router.patch('/availability', updateDoctorAvailability);
-
-// Get appointments for a specific doctor
-router.get('/:doctorId/appointments', getDoctorAppointments);
-
-// Get patients for a specific doctor
-router.get('/:doctorId/patients', getDoctorPatients);
-
-// Get profile for a specific doctor
-router.get('/profile/:doctorId', getDoctorProfile);
-
-// Get notifications for a specific doctor
-router.get('/notifications/:doctorId', getDoctorNotifications);
-
-// Get statistics for a specific doctor
-router.get('/stats/:doctorId', getDoctorStats);
-router.post('/consultations/:consultationId/steps/:stepNumber/review', protect, reviewAndDecideStep);
-
-router.get('/re-examinations/appointments/:appointmentId', protect, getReExaminationDetail);
-router.get('/re-examinations/appointments', protect, getReExaminationAppointments);
-
-// Thêm vào doctor routes
-router.post('/consultations/:consultationId/steps/:stepNumber/schedule-re-examination',protect, scheduleReExamination);
-router.post('/consultations/:consultationId/steps/:stepNumber/confirm-arrival', confirmReExaminationArrival);
-router.patch('/appointments/:appointmentId/complete-status', protect, markAppointmentCompleted);
-router.post('/consultations/:consultationId/steps/:stepNumber/complete-re-examination-step', protect, completeReExaminationStep);
-
-
-// upload image  doctor avatar
-router.post('/avatar', 
-  (req, res, next) => {
-    logger.debug('=== AVATAR UPLOAD MIDDLEWARE ===');
-    logger.debug('Query params:', { queryParams: req.query });
-    logger.debug('Doctor ID from query:', { doctorId: req.query.doctorId });
-    next();
-  },
-  upload.single('avatar'),
-  (req, res, next) => {
-    if (!req.file) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'No file uploaded or upload failed' 
-      });
+  const upload = multer({ 
+    storage: storage,
+    limits: {
+      fileSize: 5 * 1024 * 1024 // 5MB
+    },
+    fileFilter: (req, file, cb) => {
+      if (file.mimetype.startsWith('image/')) {
+        cb(null, true);
+      } else {
+        cb(new Error('Only image files are allowed!'));
+      }
     }
-    next();
-  },
-  uploadDoctorAvatar
-);
+  });
 
-// Get doctor avatar by filename
-router.get('/avatar/:filename', getDoctorAvatar);
 
-// NEW: Appointment actions
-router.patch('/appointments/:appointmentId/confirm', confirmAppointment);
-router.patch('/appointments/:appointmentId/cancel', cancelAppointment);
-router.patch('/appointments/:appointmentId/complete', completeAppointment);
+  // Get all available doctors (filtered by user.status === 'working')
+  router.get('/', getAvailableDoctors);
 
-// Consultation routes
-router.get('/:doctorId/consultations/active', getActiveConsultation);
-router.post('/consultations', createConsultation);
-router.post('/consultations/:consultationId/steps', addTreatmentStep);
-router.post('/consultations/:consultationId/steps/:stepNumber/approve', approveTreatmentStep);
-router.post('/consultations/:consultationId/complete', completeConsultation);
-router.put('/consultations/:consultationId/steps/:stepNumber', updateTreatmentStep);
-router.patch('/consultations/:consultationId/status', updateConsultationStatus);
-router.post('/consultations/:consultationId/set-active', setActiveConsultation);
-router.post('/consultations/clear-active/:doctorId', clearActiveConsultation);
-router.get('/:doctorId/consultations', getDoctorConsultations);
-router.put('/consultations/:consultationId', updateConsultationDetails);
-router.delete('/consultations/:consultationId/steps/:stepNumber', deleteTreatmentStep);
-router.post('/consultations/:consultationId/steps/:stepNumber/start', startTreatmentStep);
-router.post('/consultations/:consultationId/steps/:stepNumber/reject', rejectTreatmentStep);
-router.get('/drugs', getAllDrugs);
-router.get('/appointments/available-slots', getAvailableSlots);
-router.delete('/consultations/:consultationId/steps/:stepNumber/cancel-re-examination', cancelReExamination);
-// Thêm route mới
-router.post('/consultations/:consultationId/steps/:stepNumber/complete-re-examination', protect, completeReExamination);// Patient routes
-router.get('/:doctorId/patients/all', getAllPatients);
+  // Get available doctors by specialty (filtered by user.status === 'working')
+  router.get('/specialty/:specialtyId', getDoctorsBySpecialty);
 
-export default router;
+  // Search doctors from user accounts
+  router.get('/search', getDoctorsFromUsers);
+
+  // Change status of doctor
+  router.patch('/:doctorId/status', changeDoctorStatus);
+
+  // Update doctor availability
+  router.patch('/availability', updateDoctorAvailability);
+
+  // Get appointments for a specific doctor
+  router.get('/:doctorId/appointments', getDoctorAppointments);
+
+  // Get patients for a specific doctor
+  router.get('/:doctorId/patients', getDoctorPatients);
+
+  // Get profile for a specific doctor
+  router.get('/profile/:doctorId', getDoctorProfile);
+
+  // Get notifications for a specific doctor
+  router.get('/notifications/:doctorId', getDoctorNotifications);
+
+  // Get statistics for a specific doctor
+  router.get('/stats/:doctorId', getDoctorStats);
+  router.post('/consultations/:consultationId/steps/:stepNumber/review', protect, reviewAndDecideStep);
+
+  router.get('/re-examinations/appointments/:appointmentId', protect, getReExaminationDetail);
+  router.get('/re-examinations/appointments', protect, getReExaminationAppointments);
+
+  router.post('/consultations/:consultationId/steps/:stepNumber/schedule-re-examination',protect, scheduleReExamination);
+  router.post('/consultations/:consultationId/steps/:stepNumber/confirm-arrival',protect, confirmReExaminationArrival);
+  router.patch('/appointments/:appointmentId/complete-status', protect, markAppointmentCompleted);
+  router.post('/consultations/:consultationId/steps/:stepNumber/complete-re-examination-step', protect, completeReExaminationStep);
+  router.get(
+    '/consultations/:consultationId/steps/:stepNumber/appointment-status',
+    protect,
+    getStepAppointmentStatus
+  );
+
+  // upload image  doctor avatar
+  router.post('/avatar', 
+    (req, res, next) => {
+      logger.debug('=== AVATAR UPLOAD MIDDLEWARE ===');
+      logger.debug('Query params:', { queryParams: req.query });
+      logger.debug('Doctor ID from query:', { doctorId: req.query.doctorId });
+      next();
+    },
+    upload.single('avatar'),
+    (req, res, next) => {
+      if (!req.file) {
+        return res.status(400).json({ 
+          success: false, 
+          message: 'No file uploaded or upload failed' 
+        });
+      }
+      next();
+    },
+    uploadDoctorAvatar
+  );
+
+  // Get doctor avatar by filename
+  router.get('/avatar/:filename', getDoctorAvatar);
+
+  // NEW: Appointment actions
+  router.patch('/appointments/:appointmentId/confirm', confirmAppointment);
+  router.patch('/appointments/:appointmentId/cancel', cancelAppointment);
+  router.patch('/appointments/:appointmentId/complete', completeAppointment);
+
+  // Consultation routes
+  router.get('/:doctorId/consultations/active', getActiveConsultation);
+  router.post('/consultations', createConsultation);
+  router.post('/consultations/:consultationId/steps', addTreatmentStep);
+  router.post('/consultations/:consultationId/steps/:stepNumber/approve', approveTreatmentStep);
+  router.post('/consultations/:consultationId/complete', completeConsultation);
+  router.put('/consultations/:consultationId/steps/:stepNumber', updateTreatmentStep);
+  router.patch('/consultations/:consultationId/status', updateConsultationStatus);
+  router.post('/consultations/:consultationId/set-active', setActiveConsultation);
+  router.post('/consultations/clear-active/:doctorId', clearActiveConsultation);
+  router.get('/:doctorId/consultations', getDoctorConsultations);
+  router.put('/consultations/:consultationId', updateConsultationDetails);
+  router.delete('/consultations/:consultationId/steps/:stepNumber', deleteTreatmentStep);
+  router.post('/consultations/:consultationId/steps/:stepNumber/start', startTreatmentStep);
+  router.post('/consultations/:consultationId/steps/:stepNumber/reject', rejectTreatmentStep);
+  router.get('/drugs', getAllDrugs);
+  router.get('/appointments/available-slots', getAvailableSlots);
+  router.delete('/consultations/:consultationId/steps/:stepNumber/cancel-re-examination', cancelReExamination);
+  // Thêm route mới
+  router.post('/consultations/:consultationId/steps/:stepNumber/complete-re-examination', protect, completeReExamination);// Patient routes
+  router.get('/:doctorId/patients/all', getAllPatients);
+
+  export default router;

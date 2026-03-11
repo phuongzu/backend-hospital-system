@@ -11,17 +11,17 @@ export interface IDrugSpecialtyIndication {
 export interface IDrug extends Document {
   name: string;
   generic_name: string;
-  brand?: string; // Updated from brand_name to match frontend
+  brand?: string;
   description?: string;
   price: number;
   currency: string;
   stock_quantity: number;
   form: string;
   strength: string;
-  unit: string; // New field
+  unit: string;
   manufacturer?: string;
-  category_id: mongoose.Types.ObjectId; // New field
-  expiry_date?: Date; // New field
+  category_id: mongoose.Types.ObjectId;
+  expiry_date?: Date;
   
   specialty_data: IDrugSpecialtyIndication[];
   

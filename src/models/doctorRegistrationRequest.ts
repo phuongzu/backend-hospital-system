@@ -27,7 +27,6 @@ const DoctorRegistrationRequestSchema: Schema = new Schema({
     unique: true,
     lowercase: true,
     trim: true
-    // Remove index: true to avoid duplicate index warning
   },
   phoneNumber: {
     type: String,
@@ -44,7 +43,6 @@ const DoctorRegistrationRequestSchema: Schema = new Schema({
     required: [true, 'License number is required'],
     unique: true,
     trim: true
-    // Remove index: true to avoid duplicate index warning
   },
   years_of_experience: {
     type: Number,
