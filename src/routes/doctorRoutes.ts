@@ -41,7 +41,12 @@
     getReExaminationAppointments,
     markAppointmentCompleted,
     completeReExaminationStep,
-    getStepAppointmentStatus
+    getStepAppointmentStatus,
+    checkInAppointment,
+    getPatientContext,
+    getPatientConsultations,
+    saveDoctorAppointmentNote,
+    scheduleFollowUpAppointment
   } from '../controllers/doctorcontroller';
   import multer from 'multer';
   import path from 'path';
@@ -191,8 +196,13 @@
   router.get('/drugs', getAllDrugs);
   router.get('/appointments/available-slots', getAvailableSlots);
   router.delete('/consultations/:consultationId/steps/:stepNumber/cancel-re-examination', cancelReExamination);
-  // Thêm route mới
+
   router.post('/consultations/:consultationId/steps/:stepNumber/complete-re-examination', protect, completeReExamination);// Patient routes
   router.get('/:doctorId/patients/all', getAllPatients);
+  router.patch('/appointments/:appointmentId/check-in', checkInAppointment);
+  router.get('/patients/:patientId/context', getPatientContext);
+  router.get('/patients/:patientId/consultations', getPatientConsultations);
+  router.patch('/appointments/:appointmentId/notes', saveDoctorAppointmentNote);
+  router.post('/appointments/follow-up', scheduleFollowUpAppointment);
 
   export default router;

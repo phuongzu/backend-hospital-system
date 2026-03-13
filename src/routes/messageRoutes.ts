@@ -17,7 +17,9 @@ import {
   deleteMessage,
   addReaction,
   getMessageReactions,
-  removeMyReactions
+  removeMyReactions,
+  searchUserByPhone,
+  findOrCreateConversation,
 } from '../controllers/messageController';
 
 
@@ -97,7 +99,8 @@ router.delete('/:messageId', deleteMessage);
 router.post('/:messageId/react', protect, addReaction);
 router.get('/:messageId/reactions', protect, getMessageReactions);
 router.delete('/:messageId/reactions/me', protect, removeMyReactions);
-
+router.get('/search-user', searchUserByPhone);
+router.post('/conversations/find-or-create', findOrCreateConversation);
 // ✅ File upload with error handling
 router.post(
   '/send-with-media',

@@ -3,6 +3,7 @@ import Message from '../models/message';
 import Conversation from '../models/conversation';
 import { AuthRequest } from '../middlewares/authmiddleware';
 import { socketService } from '../utils/socketService';
+import User from '../models/user';
 
 /* =======================
    GET MESSAGES BY RECORD
@@ -797,6 +798,126 @@ export const removeMyReactions = async (req: AuthRequest, res: ExpressResponse) 
     res.status(500).json({
       success: false,
       message: 'Error removing reactions'
+    });
+  }
+};
+
+export const searchUserByPhone = async (req: AuthRequest, res: ExpressResponse) => {
+  try {
+    const { phone } = req.query;
+ 
+    if (!phone || typeof phone !== 'string') {
+      return res.status(400).json({
+        success: false,
+        message: 'Phone number is required',
+      });
+    }
+ 
+    // Normalize input: strip whitespace/dashes/dots, convert +84 → 0
+    const normalized = phone
+      .trim()
+      .replace(/[\s\-\.]/g, '')
+      .replace(/^\+84/, '0');
+ 
+    if (normalized.length < 9) {
+      return res.status(400).json({
+        success: false,
+        message: 'Phone number too short',
+      });
+    }
+ 
+    // Accept both stored formats: "0912345678" and "+84912345678"
+    const withZero = normalized.startsWith('0')
+      ? normalized
+      : `0${normalized}`;
+    const with84 = normalized.startsWith('0')
+      ? `+84${normalized.slice(1)}`
+      : `+84${normalized}`;
+ 
+    // Query directly on the `phoneNumber` field (IUser schema field name)
+    const user = await User.findOne({
+      phoneNumber: { $in: [withZero, with84] }, // exact match, both variants
+      role: 'patient',                          // only patients
+      isActive: true,                           // skip deactivated accounts
+      _id: { $ne: req.user?._id },              // exclude the caller themselves
+    }).select('_id name avatar phoneNumber role');
+ 
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'No patient found with this phone number',
+      });
+    }
+ 
+    return res.status(200).json({
+      success: true,
+      data: user,
+    });
+  } catch (error) {
+    console.error('Search user by phone error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error searching for user',
+    });
+  }
+};
+ 
+export const findOrCreateConversation = async (req: AuthRequest, res: ExpressResponse) => {
+  try {
+    const { participantId } = req.body;
+    const userId = req.user?._id;
+ 
+    if (!participantId) {
+      return res.status(400).json({
+        success: false,
+        message: 'participantId is required',
+      });
+    }
+ 
+    // Consistent sort to prevent duplicate conversations
+    const participantIds = [userId.toString(), participantId.toString()].sort();
+ 
+    const conversation = await Conversation.findOneAndUpdate(
+      { participant_ids: participantIds },
+      {
+        $setOnInsert: {
+          participant_ids: participantIds,
+          medical_record_id: null,
+          appointment_id: null,
+          unread_count: 0,
+          last_message_at: new Date(),
+        },
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    )
+      .populate('participant_ids', 'name avatar role phoneNumber')
+      .populate({
+        path: 'last_message',
+        populate: { path: 'sender_id receiver_id', select: 'name avatar role' },
+      });
+ 
+    // Format response same as getConversations
+    const otherParticipant = (conversation.participant_ids as any[]).find(
+      (p: any) => p._id.toString() !== userId.toString()
+    );
+ 
+    return res.status(200).json({
+      success: true,
+      data: {
+        _id: conversation._id,
+        participant: otherParticipant,
+        last_message: conversation.last_message,
+        last_message_at: conversation.last_message_at,
+        unread_count: 0,
+        medical_record_id: conversation.medical_record_id,
+        appointment_id: conversation.appointment_id,
+      },
+    });
+  } catch (error) {
+    console.error('Find or create conversation error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error creating conversation',
     });
   }
 };

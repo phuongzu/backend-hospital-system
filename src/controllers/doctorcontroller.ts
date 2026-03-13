@@ -666,56 +666,85 @@ export const changeDoctorStatus = async (req: Request, res: Response) => {
 export const getDoctorAppointments = async (req: Request, res: Response) => {
   try {
     const { doctorId } = req.params;
-    console.log('=== GET DOCTOR APPOINTMENTS ===');
-    console.log('Doctor ID from params:', doctorId);
-
+ 
     if (!doctorId) {
       return res.status(400).json({ success: false, message: 'Doctor ID is required' });
     }
-
-    // First, find the doctor document by user_id
+ 
     const doctor = await Doctor.findOne({ user_id: doctorId });
-    console.log('Found doctor:', doctor);
-
     if (!doctor) {
       return res.status(404).json({ success: false, message: 'Doctor not found' });
     }
-
-    // Use the doctor's _id to find appointments
+ 
     const doctorObjectId = doctor._id;
-    console.log('Using doctor ObjectId for appointments:', doctorObjectId);
-
     let query: any = { doctor_id: doctorObjectId };
-
-    // Optional: filter by date if provided as query param
+ 
     if (req.query.date) {
       const date = new Date(req.query.date as string);
       if (isNaN(date.getTime())) {
         return res.status(400).json({ success: false, message: 'Invalid date format' });
       }
-
       const nextDay = new Date(date);
       nextDay.setDate(date.getDate() + 1);
       query.appointment_date = { $gte: date, $lt: nextDay };
     }
-
+ 
     const appointments = await Appointment.find(query)
       .populate('user_id', 'name email phoneNumber dateOfBirth gender')
       .populate('specialty_id', 'name')
       .sort({ appointment_date: 1, time_slot: 1 })
       .lean();
-
-    console.log('Found appointments:', appointments.length);
-    console.log('Appointments:', appointments);
-
-    res.status(200).json({
+ 
+    // ── NEW: Enrich with clinical flags if requested ────────
+    const includeClinical = req.query.includeClinical === 'true';
+ 
+    if (includeClinical) {
+      const enriched = await Promise.all(
+        appointments.map(async (apt: any) => {
+          // user_id is populated, so apt.user_id is an object with _id
+          const userId = apt.user_id?._id ?? apt.user_id;
+          if (!userId) return { ...apt, clinicalFlags: null };
+ 
+          try {
+            const userInfo = await UserInformation.findOne({ user_id: userId })
+              .select('blood_type allergies chronic_diseases')
+              .lean();
+ 
+            return {
+              ...apt,
+              clinicalFlags: {
+                hasAllergies: Array.isArray((userInfo as any)?.allergies) && (userInfo as any).allergies.length > 0,
+                allergies:       ((userInfo as any)?.allergies         as string[]) ?? [],
+                chronicDiseases: ((userInfo as any)?.chronic_diseases  as string[]) ?? [],
+                bloodType:        (userInfo as any)?.blood_type        ?? null,
+              },
+            };
+          } catch {
+            return { ...apt, clinicalFlags: null };
+          }
+        })
+      );
+ 
+      return res.status(200).json({
+        success: true,
+        data: enriched,
+        debug: {
+          doctorIdFromParams: doctorId,
+          doctorObjectId,
+          appointmentsCount: enriched.length,
+          clinicalEnriched: true,
+        },
+      });
+    }
+ 
+    return res.status(200).json({
       success: true,
       data: appointments,
       debug: {
         doctorIdFromParams: doctorId,
-        doctorObjectId: doctorObjectId,
-        appointmentsCount: appointments.length
-      }
+        doctorObjectId,
+        appointmentsCount: appointments.length,
+      },
     });
   } catch (error) {
     console.error('Error fetching appointments:', error);
@@ -3846,5 +3875,403 @@ export const patientCheckIn = async (
   } catch (error: any) {
     console.error('Error during patient check-in:', error);
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const checkInAppointment = async (req: Request, res: Response) => {
+  try {
+    const { appointmentId } = req.params;
+    const { doctorId } = req.body;
+ 
+    console.log('=== CHECK-IN APPOINTMENT ===');
+    console.log('Appointment ID:', appointmentId);
+    console.log('Doctor ID (user_id):', doctorId);
+ 
+    // Resolve doctor's ObjectId from the user_id stored in localStorage
+    const doctor = await Doctor.findOne({ user_id: doctorId });
+    if (!doctor) {
+      return res.status(404).json({ success: false, message: 'Doctor not found' });
+    }
+ 
+    const appointment = await Appointment.findOneAndUpdate(
+      {
+        _id: appointmentId,
+        doctor_id: doctor._id,
+        // Only "confirmed" appointments can be checked-in
+        status: 'confirmed',
+      },
+      {
+        status: 'checked-in',
+        'metadata.checked_in_at': new Date(),
+        'metadata.checked_in_by': 'doctor',
+      },
+      { new: true }
+    ).populate('user_id', 'name email phoneNumber');
+ 
+    if (!appointment) {
+      return res.status(404).json({
+        success: false,
+        message:
+          'Appointment not found or cannot be checked-in (must be "confirmed" first)',
+      });
+    }
+ 
+    // Notify patient that their turn is coming up
+    try {
+      const patientUserId = (appointment.user_id as any)?._id?.toString();
+      if (patientUserId) {
+        await notificationService.sendNotification({
+          user_id: patientUserId,
+          title: 'You Are Checked In',
+          message: 'The clinic has confirmed your arrival. Please wait — the doctor will see you shortly.',
+          template_key: 'patient_checked_in',
+          variables: {
+            doctor_name: doctor.name || 'Your doctor',
+            appointment_time: appointment.time_slot,
+          },
+          type: 'appointment',
+          category: 'info',
+          priority: 'high',
+          related_record: appointmentId,
+          related_record_type: 'appointment',
+          action_url: `/appointments/${appointmentId}`,
+          action_label: 'View Appointment',
+        });
+      }
+    } catch (notifError) {
+      console.error('Notification error (non-fatal):', notifError);
+    }
+ 
+    return res.status(200).json({
+      success: true,
+      message: 'Patient checked in successfully',
+      data: appointment,
+    });
+  } catch (error) {
+    console.error('Error checking in appointment:', error);
+    return res.status(500).json({ success: false, message: 'Error checking in appointment' });
+  }
+};
+
+
+export const getPatientContext = async (req: Request, res: Response) => {
+  try {
+    const { patientId } = req.params;
+ 
+    console.log('=== GET PATIENT CONTEXT ===');
+    console.log('Patient ID:', patientId);
+ 
+    if (!patientId) {
+      return res.status(400).json({ success: false, message: 'Patient ID is required' });
+    }
+ 
+    // --- Recent consultations (last 3) ---
+    const recentConsultations = await MedicalRecord.find({ user_id: patientId })
+      .sort({ created_at: -1 })
+      .limit(3)
+      .select('diagnosis severity notes created_at treatment_plan')
+      .lean();
+ 
+    // Shape each consultation so the frontend gets a clean initialStep summary
+    const shapedConsultations = recentConsultations.map((record: any) => {
+      const firstStep = record.treatment_plan?.[0] ?? null;
+      return {
+        _id: record._id,
+        diagnosis:  record.diagnosis  || '',
+        severity:   record.severity   || 'mild',
+        notes:      record.notes      || '',
+        created_at: record.created_at,
+        initialStep: firstStep
+          ? {
+              title:        firstStep.title        || '',
+              medication:   firstStep.medication   || '',
+              dosage:       firstStep.dosage        || '',
+              duration:     firstStep.duration     || '',
+              instructions: firstStep.instructions || '',
+            }
+          : null,
+      };
+    });
+ 
+    // --- Allergies & current medications from UserInformation ---
+    const userInfo = await UserInformation.findOne({ user_id: patientId })
+      .select('allergies chronic_diseases blood_type height weight BMI')
+      .lean();
+ 
+    // Current medications: collect the last active treatment medication across records
+    const activeMedications: string[] = [];
+    const activeRecords = await MedicalRecord.find({
+      user_id: patientId,
+      consultation_status: { $in: ['in-progress', 'active'] },
+    })
+      .select('treatment_plan')
+      .lean();
+ 
+    activeRecords.forEach((record: any) => {
+      record.treatment_plan?.forEach((step: any) => {
+        if (
+          step.status === 'in-progress' &&
+          step.medication &&
+          !activeMedications.includes(step.medication)
+        ) {
+          // medication field might be "Drug A + Drug B"
+          step.medication.split(' + ').forEach((med: string) => {
+            const trimmed = med.trim();
+            if (trimmed && !activeMedications.includes(trimmed)) {
+              activeMedications.push(trimmed);
+            }
+          });
+        }
+      });
+    });
+ 
+    return res.status(200).json({
+      success: true,
+      data: {
+        recentConsultations: shapedConsultations,
+        allergies:           (userInfo as any)?.allergies          ?? [],
+        currentMedications:  activeMedications,
+        bloodType:           (userInfo as any)?.blood_type         ?? null,
+        chronicDiseases:     (userInfo as any)?.chronic_diseases   ?? [],
+        height:              (userInfo as any)?.height             ?? null,
+        weight:              (userInfo as any)?.weight             ?? null,
+        BMI:                 (userInfo as any)?.BMI                ?? null,
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching patient context:', error);
+    return res.status(500).json({ success: false, message: 'Error fetching patient context' });
+  }
+};
+export const getPatientConsultations = async (req: Request, res: Response) => {
+  try {
+    const { patientId } = req.params;
+    const limit = Math.min(parseInt(req.query.limit as string) || 5, 20);
+ 
+    console.log('=== GET PATIENT CONSULTATIONS (Smart Prescription) ===');
+    console.log('Patient ID:', patientId, '| Limit:', limit);
+ 
+    if (!patientId) {
+      return res.status(400).json({ success: false, message: 'Patient ID is required' });
+    }
+ 
+    const consultations = await MedicalRecord.find({ user_id: patientId })
+      .sort({ created_at: -1 })
+      .limit(limit)
+      .select('diagnosis severity notes created_at treatment_plan consultation_status')
+      .lean();
+ 
+    const shaped = consultations.map((record: any) => {
+      const firstStep = record.treatment_plan?.[0] ?? null;
+      return {
+        _id:         record._id,
+        diagnosis:   record.diagnosis  || '',
+        severity:    record.severity   || 'mild',
+        notes:       record.notes      || '',
+        created_at:  record.created_at,
+        status:      record.consultation_status,
+        initialStep: firstStep
+          ? {
+              title:        firstStep.title        || '',
+              medication:   firstStep.medication   || '',
+              dosage:       firstStep.dosage        || '',
+              duration:     firstStep.duration     || '',
+              instructions: firstStep.instructions || '',
+            }
+          : null,
+      };
+    });
+ 
+    return res.status(200).json({ success: true, data: shaped });
+  } catch (error) {
+    console.error('Error fetching patient consultations:', error);
+    return res
+      .status(500)
+      .json({ success: false, message: 'Error fetching patient consultations' });
+  }
+};
+export const saveDoctorAppointmentNote = async (req: Request, res: Response) => {
+  try {
+    const { appointmentId } = req.params;
+    const { doctorNote, doctorId } = req.body;
+ 
+    console.log('=== SAVE DOCTOR APPOINTMENT NOTE ===');
+    console.log('Appointment ID:', appointmentId);
+ 
+    if (!appointmentId) {
+      return res.status(400).json({ success: false, message: 'Appointment ID is required' });
+    }
+ 
+    const doctor = await Doctor.findOne({ user_id: doctorId });
+    if (!doctor) {
+      return res.status(404).json({ success: false, message: 'Doctor not found' });
+    }
+ 
+    // Only the owning doctor can write notes on their appointments
+    const appointment = await Appointment.findOneAndUpdate(
+      { _id: appointmentId, doctor_id: doctor._id },
+      {
+        doctorNote,
+        'metadata.note_updated_at': new Date(),
+      },
+      { new: true }
+    );
+ 
+    if (!appointment) {
+      return res.status(404).json({
+        success: false,
+        message: 'Appointment not found or access denied',
+      });
+    }
+ 
+    return res.status(200).json({
+      success: true,
+      message: 'Doctor note saved',
+      data: { appointmentId, doctorNote },
+    });
+  } catch (error) {
+    console.error('Error saving doctor note:', error);
+    return res.status(500).json({ success: false, message: 'Error saving doctor note' });
+  }
+};
+export const scheduleFollowUpAppointment = async (req: Request, res: Response) => {
+  try {
+    const {
+      user_id,
+      doctor_id,            // this is the doctor's user_id (from localStorage)
+      appointment_date,
+      time_slot,
+      reason,
+      source_consultation_id,
+    } = req.body;
+ 
+    console.log('=== SCHEDULE FOLLOW-UP APPOINTMENT ===');
+    console.log('Patient ID:', user_id, '| Doctor user_id:', doctor_id);
+    console.log('Date:', appointment_date, '| Slot:', time_slot);
+ 
+    // Validate required fields
+    if (!user_id || !doctor_id || !appointment_date || !time_slot) {
+      return res.status(400).json({
+        success: false,
+        message: 'user_id, doctor_id, appointment_date and time_slot are required',
+      });
+    }
+ 
+    // Resolve doctor ObjectId
+    const doctor = await Doctor.findOne({ user_id: doctor_id });
+    if (!doctor) {
+      return res.status(404).json({ success: false, message: 'Doctor not found' });
+    }
+ 
+    const parsedDate = new Date(appointment_date);
+    if (isNaN(parsedDate.getTime())) {
+      return res.status(400).json({ success: false, message: 'Invalid appointment_date format' });
+    }
+ 
+    // Check for slot conflict
+    const startOfDay = new Date(parsedDate);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(parsedDate);
+    endOfDay.setHours(23, 59, 59, 999);
+ 
+    const conflict = await Appointment.findOne({
+      doctor_id: doctor._id,
+      appointment_date: { $gte: startOfDay, $lte: endOfDay },
+      time_slot,
+      status: { $in: ['pending', 'confirmed', 'scheduled', 'checked-in'] },
+    });
+ 
+    if (conflict) {
+      return res.status(409).json({
+        success: false,
+        message: `Slot ${time_slot} on ${parsedDate.toLocaleDateString()} is already booked`,
+        conflict_id: conflict._id,
+      });
+    }
+ 
+    // Create the follow-up appointment
+    const followUp = new Appointment({
+      user_id,
+      doctor_id:    doctor._id,
+      specialty_id: doctor.specialty_id,
+      appointment_date: parsedDate,
+      time_slot,
+      status: 'confirmed',  // auto-confirmed since doctor is scheduling it
+      reason: reason || 'Follow-up consultation',
+      notes: source_consultation_id
+        ? `Follow-up from consultation ${source_consultation_id}`
+        : undefined,
+      is_follow_up: true,
+      metadata: {
+        source_consultation_id: source_consultation_id ?? null,
+        created_by:  'doctor',
+        created_at:  new Date(),
+        is_follow_up: true,
+      },
+    });
+ 
+    await followUp.save();
+ 
+    // Link the source consultation to this follow-up
+    if (source_consultation_id) {
+      await MedicalRecord.findByIdAndUpdate(source_consultation_id, {
+        follow_up_appointment_id: followUp._id,
+        next_appointment: parsedDate,
+      });
+    }
+ 
+    // Notify patient about the scheduled follow-up
+    try {
+      const patientUser = await User.findById(user_id).select('name email');
+      const doctorUser  = await User.findById(doctor_id).select('name');
+ 
+      if (patientUser) {
+        await notificationService.sendNotification({
+          user_id: user_id.toString(),
+          title:   'Follow-Up Appointment Scheduled',
+          message: `Dr. ${doctorUser?.name || 'Your doctor'} has scheduled a follow-up appointment for you on ${parsedDate.toLocaleDateString()} at ${time_slot}.`,
+          template_key: 'follow_up_scheduled',
+          variables: {
+            doctor_name:      doctorUser?.name || 'Your doctor',
+            appointment_date: parsedDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }),
+            appointment_time: time_slot,
+          },
+          type:     'appointment',
+          category: 'success',
+          priority: 'high',
+          related_record:      followUp._id.toString(),
+          related_record_type: 'appointment',
+          action_url:   `/appointments/${followUp._id}`,
+          action_label: 'View Appointment',
+        });
+ 
+        // Also send an email notification
+        if (patientUser.email) {
+          await emailService.sendAppointmentConfirmationEmail(
+            patientUser.email,
+            patientUser.name,
+            {
+              appointment_date: parsedDate.toLocaleDateString(),
+              appointment_time: time_slot,
+              doctor_name:      doctorUser?.name || 'Your doctor',
+              reason:           reason || 'Follow-up consultation',
+            }
+          );
+        }
+      }
+    } catch (notifError) {
+      console.error('Notification error (non-fatal):', notifError);
+    }
+ 
+    return res.status(201).json({
+      success: true,
+      message: 'Follow-up appointment scheduled successfully',
+      data: followUp,
+    });
+  } catch (error) {
+    console.error('Error scheduling follow-up appointment:', error);
+    return res
+      .status(500)
+      .json({ success: false, message: 'Error scheduling follow-up appointment' });
   }
 };
