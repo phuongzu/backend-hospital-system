@@ -87,7 +87,6 @@ specialtySchema.virtual('status').get(function () {
 });
 
 // Indexes
-specialtySchema.index({ name: 1 }, { unique: true });
 specialtySchema.index({ isActive: 1, doctorCount: -1 });
 specialtySchema.index({ category: 1, isActive: 1 });
 specialtySchema.index({ keywords: 1 });

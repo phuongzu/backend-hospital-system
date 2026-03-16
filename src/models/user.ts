@@ -15,6 +15,7 @@ export interface IUser extends Document {
   gender?: string;
   address?: string;
   avatar?: string;
+  avatarUpdatedAt?: Date;
   status?: 'working' | 'busy' | 'not working';
   dayOff?: string[];
   loginAttempts?: number;

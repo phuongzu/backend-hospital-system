@@ -10,10 +10,9 @@ export interface IAppointment extends Document {
   reason?: string;
   notes?: string;
   created_at: Date;
-
-    // === RE-EXAMINATION SPECIFIC ===
+  updated_at?: Date | null;
   is_re_examination: boolean;
-  re_examination_step_id?: mongoose.Types.ObjectId;
+  re_examination_step_id: mongoose.Types.ObjectId;
   re_examination_type?: 'followup' | 'physical' | 'lab';
   
   // Metadata for tracking
@@ -23,6 +22,18 @@ export interface IAppointment extends Document {
     step_title?: string;
     arrival_confirmed_at?: Date;
     physical_exam_completed_at?: Date;
+    lab_test_completed_at?: Date;
+    diagnosis_made_at?: Date;
+    treatment_plan_created_at?: Date;
+    treatment_plan_updated_at?: Date;
+    doctor_notes_updated_at?: Date;
+    patient_notes_updated_at?: Date;
+    completed_by?: String;
+    updated_by?: String;
+    completed_at?: Date;
+    previous_date?: Date;
+    previous_time?: string;
+    rescheduled_at?: Date;
   };
 }
 

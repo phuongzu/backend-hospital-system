@@ -11,6 +11,8 @@ import DoctorRegistrationRequest from '../models/doctorRegistrationRequest';
 import mongoose from 'mongoose';
 import DrugCategory from '../models/DrugCategory'
 import Drug from '../models/drug'
+import { emailService } from '../utils/emailService';
+
 
 
 export const getAdminDashboard = async (req: AuthRequest, res: Response): Promise<void> => {
@@ -247,8 +249,7 @@ export const getAllDoctors = async (req: AuthRequest, res: Response): Promise<vo
           createdAt: doctor.createdAt,
           isActive: doctor.isActive,
           status: doctor.status,
-          // Include doctor profile details
-          specialty: doctorProfile?.specialty_id?.name || 'Not specified',
+          specialty: doctorProfile?.specialty_id || 'Not specified',
           licenseNumber: doctorProfile?.license_number || 'Not specified',
           yearsOfExperience: doctorProfile?.years_of_experience || 0,
           consultationFee: doctorProfile?.consultation_fee || 0,
@@ -1054,7 +1055,6 @@ export const approveDoctorRegistration = async (req: AuthRequest, res: Response)
       console.log(`✅ Approval email sent to: ${request.email}`);
     } catch (emailError) {
       console.error('❌ Error sending approval email:', emailError);
-      // Continue even if email fails
     }
 
     res.status(200).json({
@@ -1079,9 +1079,7 @@ export const approveDoctorRegistration = async (req: AuthRequest, res: Response)
 
   } catch (error) {
     console.error('❌ Error approving doctor registration:', error);
-    
-    // Xử lý lỗi validation chi tiết
-    if (error instanceof mongoose.Error.ValidationError) {
+        if (error instanceof mongoose.Error.ValidationError) {
       const errorDetails = Object.values(error.errors).map((err: any) => ({
         field: err.path,
         message: err.message,
@@ -1222,8 +1220,7 @@ export const getAllMedicalRecords = async (req: AuthRequest, res: Response): Pro
 
 export const getSystemLogs = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const logs: SystemLog[] = []; // Thay bằng SystemLog.find() nếu có model
-    
+    const logs: any[] = [];
     res.status(200).json({
       success: true,
       data: logs

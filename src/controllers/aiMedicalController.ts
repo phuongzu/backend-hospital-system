@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import crypto from 'crypto';
+import { Types } from 'mongoose';
 import ChatSession from '../models/chatbot';
 import { AuthRequest } from '../middlewares/authmiddleware';
 import { AIMedicalService, getServiceForSession, cleanupServiceForSession } from '../utils/aiMedicalService';
@@ -13,6 +14,7 @@ import { sanitizeInput } from '../middlewares/SecurityMiddleware';
 import { notificationService } from '../utils/notificationService';
 import { emailService } from '../utils/emailService';
 import { smsService } from '../utils/smsService';
+
 
 function calculateEndTime(startTime: string, durationMinutes: number): string {
   const [h, m] = startTime.split(':').map(Number);
@@ -223,9 +225,8 @@ export const sendMessage = async (
       followUpQuestions: aiResponse.followUpQuestions,
       requiresMoreInfo: aiResponse.requiresMoreInfo,
       patientContextUsed: aiResponse.patientContextUsed,
-      appointmentRecommendation: aiResponse.appointmentRecommendation,
-    });
-
+      appointmentRecommendation: aiResponse.appointmentRecommendation as any,
+});;
     auditLogger.log({
       userId: req.user._id.toString(),
       sessionId: session.session_id,
@@ -480,7 +481,7 @@ export const getDoctorsBySpecialty = async (
 
     const result = doctors
       .map(doctor => {
-        const id = doctor._id.toString();
+        const id = (doctor._id as Types.ObjectId).toString();
         const booked = bookedByDoctor.get(id) || new Set();
         const available = ALL_TIME_SLOTS.filter(s => !booked.has(s));
         const rating = ratingMap.get(id) || { avg: 0, total: 0 };
@@ -589,7 +590,7 @@ export const findDoctorsForAppointment = async (
 
     const available = doctors
       .map(doc => {
-        const id = doc._id.toString();
+        const id = (doc._id as Types.ObjectId).toString();
         const booked = bookedByDoctor.get(id) || new Set();
         const slots = ALL_TIME_SLOTS.filter(s => !booked.has(s));
         if (!slots.length) return null;
@@ -725,7 +726,7 @@ export const bookAppointmentFromAI = async (
     const doctorName = doctor.user_id?.name ?? 'Doctor';
     const specialtyName = (doctor.specialty_id as any)?.name ?? 'General Medicine';
     const specialtyId = (doctor.specialty_id as any)?._id?.toString();
-    const appointmentId = appointment._id.toString();
+    const appointmentId = (appointment._id as Types.ObjectId).toString();
 
     const user_id = req.user._id.toString();
     const user_name = (req.user as any).name as string | undefined;
@@ -756,7 +757,7 @@ export const bookAppointmentFromAI = async (
       try {
         const session = await ChatSession.findOne({ session_id, user_id: req.user._id });
         if (session) {
-          session.appointments_booked.push(appointment._id);
+          session.appointments_booked.push(appointment._id as Types.ObjectId);
 
           const confirmMsg =
             `✅ Lịch hẹn đã được đặt với Bác sĩ ${doctorName} vào ngày ` +

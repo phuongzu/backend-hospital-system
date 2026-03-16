@@ -35,8 +35,7 @@ export interface TreatmentStep {
   reExaminationAppointmentId?: mongoose.Types.ObjectId; // ID appointment
   reExaminationNotes?: string;           // Ghi chú tái khám
   arrivalConfirmed?: boolean;            // Đã xác nhận đến khám
-  arrivalConfirmedAt?: Date;             // Thời gian xác nhận
-  
+  arrivalConfirmedAt?: Date;           
   _id?: string;
 }
 

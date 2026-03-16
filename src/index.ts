@@ -68,6 +68,7 @@ const socketUserMap = new Map<string, string>(); // socketId -> userId
    SOCKET.IO AUTHENTICATION MIDDLEWARE
 ===================================================== */
 const socketAuthMiddleware = (socket: Socket, next: (err?: Error) => void) => {
+  let token : string | undefined;
   try {
     const token = socket.handshake.auth.token || socket.handshake.headers.authorization?.replace('Bearer ', '');
     
@@ -97,7 +98,7 @@ const socketAuthMiddleware = (socket: Socket, next: (err?: Error) => void) => {
     socket.data.userRole = decoded.role || 'user';
     socket.data.userName = decoded.name || decoded.email || 'User';
     
-    logger.info(`✅ Socket authenticated: ${socket.data.userName} (${userId})`);
+    logger.info(` Socket authenticated: ${socket.data.userName} (${userId})`);
     next();
   } catch (error: any) {
     logger.error('❌ Socket authentication error:', {
@@ -108,37 +109,7 @@ const socketAuthMiddleware = (socket: Socket, next: (err?: Error) => void) => {
   }
 };
 
-// Debug endpoint for token testing
-app.get('/debug/token-test', (req: Request, res: Response) => {
-  const authHeader = req.headers.authorization;
-  
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({
-      success: false,
-      message: 'No token provided'
-    });
-  }
-  
-  const token = authHeader.split(' ')[1];
-  
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!);
-    res.status(200).json({
-      success: true,
-      message: 'Token is valid',
-      user: decoded
-    });
-  } catch (error) {
-    res.status(401).json({
-      success: false,
-      message: 'Invalid token',
-      error: error instanceof Error ? error.message : 'Unknown error'
-    });
-  }
-});
-// Apply authentication middleware
 io.use(socketAuthMiddleware);
-
 /* =====================================================
    SOCKET.IO EVENT HANDLERS
 ===================================================== */
@@ -345,9 +316,8 @@ io.on('connection', (socket: Socket) => {
 
   // Mark messages as read event
   socket.on('mark_as_read', async (data) => {
+    const { conversationId } = data;
     try {
-      const { conversationId } = data;
-      
       if (!conversationId) return;
 
       // Update messages in database
@@ -816,8 +786,8 @@ app.use((err: any, req: Request, res: Response, next: NextFunction) => {
    GET AVATAR BY FILENAME ROUTE
 ===================================================== */
 app.get('/api/avatar/:filename', (req: Request, res: Response) => {
+  const { filename } = req.params;
   try {
-    const { filename } = req.params;
         if (!filename || filename.includes('..') || filename.includes('/')) {
       return res.status(400).json({
         success: false,
@@ -922,18 +892,18 @@ const startServer = async () => {
 
     // 1️⃣ Connect DB FIRST
     await connectDB();
-    logger.info('✅ MongoDB connected successfully');
+    logger.info(' MongoDB connected successfully');
 
     // 2️⃣ Initialize services AFTER DB is ready
     await notificationService.initializeTemplates();
-    logger.info('✅ Notification templates initialized');
+    logger.info(' Notification templates initialized');
 
     notificationScheduler.initialize();
-    logger.info('✅ Notification scheduler initialized');
+    logger.info('   Notification scheduler initialized');
 
     // 3️⃣ Start server
     server.listen(PORT, '0.0.0.0', () => {
-      logger.info(`🚀 Server started successfully!`);
+      logger.info(`   Server started successfully!`);
       logger.info(`   Local: http://localhost:${PORT}`);
       logger.info(`   Socket.IO: ws://localhost:${PORT}`);
       logger.info(`   Health Check: http://localhost:${PORT}/health`);
@@ -994,5 +964,4 @@ process.on('unhandledRejection', (reason: any) => {
 startServer();
 
 // Export socket functions for use in other files
-export { io, userSocketMap, socketUserMap, emitToUser, isUserOnline };
 export default app;

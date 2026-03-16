@@ -195,7 +195,6 @@ notificationSchema.index({ user_id: 1, created_at: -1 });
 notificationSchema.index({ user_id: 1, read: 1, created_at: -1 });
 notificationSchema.index({ type: 1, created_at: -1 });
 notificationSchema.index({ priority: 1, created_at: -1 });
-notificationSchema.index({ expiry_date: 1 }, { expireAfterSeconds: 0 });
 
 // Virtual populate
 notificationSchema.virtual('user', {
@@ -219,7 +218,7 @@ notificationSchema.statics.getUnreadCount = async function(userId: string) {
   return this.countDocuments({ 
     user_id: userId, 
     read: false,
-    expiry_date: { $gt: new Date() } || { $exists: false }
+    expiry_date: { $gt: new Date() }
   });
 };
 

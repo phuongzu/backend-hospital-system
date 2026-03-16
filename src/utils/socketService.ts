@@ -4,6 +4,8 @@ import jwt from 'jsonwebtoken';
 import User from '../models/user';
 import Conversation from '../models/conversation';
 import Message from '../models/message';
+import { Types } from 'mongoose';
+
 
 /* =======================
    TYPES
@@ -14,14 +16,12 @@ interface SocketUser {
   role: string;
 }
 
-/* Extend socket.data typing */
 declare module 'socket.io' {
-  interface Socket {
-    data: {
-      user: SocketUser;
-    };
+  interface SocketData {
+    user: SocketUser;
   }
 }
+
 
 /* =======================
    SOCKET SERVICE
@@ -93,7 +93,7 @@ class SocketService {
       }
 
       socket.data.user = {
-        _id: user._id.toString(),
+      _id: (user._id as Types.ObjectId).toString(),
         role: user.role,
       };
 
@@ -202,8 +202,9 @@ socket.on('react_to_message', async (data: {
     }
 
     const existingReactionIndex = message.reactions.findIndex(
-      r => r.user_id.toString() === userId.toString() && r.emoji === reaction
-    );
+          (r: { user_id: Types.ObjectId; emoji: string }) =>
+            r.user_id.toString() === userId.toString() && r.emoji === reaction
+        );
 
     if (existingReactionIndex !== -1) {
       // Remove reaction

@@ -7,6 +7,7 @@ import Review from '../models/review';
 import { PatientProfileService } from './PatientProfileService';
 import { SymptomTrackerService } from '../data/Symptomtracker';
 import { auditLogger } from '../middlewares/SecurityMiddleware';
+import { Types } from 'mongoose';
 
 // ==================== CORE TYPES ====================
 
@@ -1790,7 +1791,7 @@ export class AIMedicalService {
       const result: AppointmentSuggestion['suggestedDoctors'] = [];
 
       for (const doctor of doctors) {
-        const docId = doctor._id.toString();
+        const docId = (doctor._id as Types.ObjectId).toString();
         const bookedSlots = bookedByDoctor.get(docId) || new Set();
         let slotsForDay = ALL_TIME_SLOTS;
 

@@ -119,9 +119,6 @@
 
   ChatSessionSchema.index({ user_id: 1, last_activity: -1 });
   ChatSessionSchema.index({ user_id: 1, is_active: 1 });
-  ChatSessionSchema.index({ session_id: 1 });
-  ChatSessionSchema.index({ last_activity: 1 });
-  ChatSessionSchema.index({ category: 1 });
   ChatSessionSchema.index(
     { title: 'text', 'messages.content': 'text' },
     {

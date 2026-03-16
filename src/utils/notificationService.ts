@@ -3,6 +3,7 @@ import NotificationTemplate from '../models/notificationTemplate';
 import { emailService } from './emailService';
 import User from '../models/user';
 import Doctor from '../models/doctor';
+import { Types } from 'mongoose';
 
 export interface SendNotificationOptions {
   user_id: string;
@@ -33,6 +34,24 @@ export interface NotificationResponse {
   delivered: boolean;
   read: boolean;
   created_at: Date;
+}
+
+// Populated types dựa theo IDoctor và IUser models
+interface PopulatedDoctorUser {
+  _id: Types.ObjectId;
+  name: string;
+  email: string;
+}
+
+interface PopulatedSpecialty {
+  _id: Types.ObjectId;
+  name: string;
+}
+
+interface PopulatedDoctor {
+  _id: Types.ObjectId;
+  user_id: PopulatedDoctorUser;
+  specialty_id?: PopulatedSpecialty;
 }
 
 class NotificationService {
@@ -114,29 +133,29 @@ class NotificationService {
           is_active: true
         },
         {
-        template_key: 'patient_completed_step_with_message',
-        title_template: 'Patient Completed Treatment Step',
-        message_template: 'Patient {patient_name} has completed step {step_number}: {step_title} and is waiting for your review.',
-        description: 'Notification sent to doctor when patient completes a treatment step',
-        type: 'treatment',
-        category: 'info',
-        default_priority: 'medium',
-        default_channels: ['in_app', 'email'],
-        variables: ['patient_name', 'step_number', 'step_title'],
-        is_active: true
-      },
-      {
-        template_key: 'consultation_completed_by_doctor',
-        title_template: 'Consultation Completed',
-        message_template: 'Dr. {doctor_name} has completed your consultation. {diagnosis}',
-        description: 'Notification sent when doctor completes a consultation',
-        type: 'consultation',
-        category: 'success',
-        default_priority: 'high',
-        default_channels: ['in_app', 'email'],
-        variables: ['doctor_name', 'diagnosis'],
-        is_active: true
-      }
+          template_key: 'patient_completed_step_with_message',
+          title_template: 'Patient Completed Treatment Step',
+          message_template: 'Patient {patient_name} has completed step {step_number}: {step_title} and is waiting for your review.',
+          description: 'Notification sent to doctor when patient completes a treatment step',
+          type: 'treatment',
+          category: 'info',
+          default_priority: 'medium',
+          default_channels: ['in_app', 'email'],
+          variables: ['patient_name', 'step_number', 'step_title'],
+          is_active: true
+        },
+        {
+          template_key: 'consultation_completed_by_doctor',
+          title_template: 'Consultation Completed',
+          message_template: 'Dr. {doctor_name} has completed your consultation. {diagnosis}',
+          description: 'Notification sent when doctor completes a consultation',
+          type: 'consultation',
+          category: 'success',
+          default_priority: 'high',
+          default_channels: ['in_app', 'email'],
+          variables: ['doctor_name', 'diagnosis'],
+          is_active: true
+        }
       ];
 
       for (const template of defaultTemplates) {
@@ -239,7 +258,7 @@ class NotificationService {
       console.log(`Notification sent successfully: ${notification._id}`);
 
       return {
-        id: notification._id.toString(),
+        id: (notification._id as Types.ObjectId).toString(),
         title: finalTitle,
         message: finalMessage,
         type: finalType,
@@ -293,8 +312,7 @@ class NotificationService {
   private replaceTemplateVariables(template: string, variables: Record<string, string>): string {
     let result = template;
     for (const [key, value] of Object.entries(variables)) {
-      const placeholder = `{${key}}`;
-      result = result.replace(new RegExp(placeholder, 'g'), value);
+      result = result.replace(new RegExp(`{${key}}`, 'g'), value);
     }
     return result;
   }
@@ -310,14 +328,17 @@ class NotificationService {
     }
   ): Promise<void> {
     try {
+      // Cast kết quả populate sang PopulatedDoctor
       const doctor = await Doctor.findById(doctorId)
-        .populate('user_id', 'name')
-        .populate('specialty_id', 'name');
+        .populate('user_id', 'name email')
+        .populate('specialty_id', 'name')
+        .lean() as unknown as PopulatedDoctor | null;
 
       if (!doctor || !doctor.user_id) {
         throw new Error('Doctor not found');
       }
 
+      // ✅ dòng 325 — user_id đã populate, có .name
       await this.sendNotification({
         user_id: patientId,
         template_key: 'appointment_booked',
@@ -331,17 +352,18 @@ class NotificationService {
         data: {
           appointment: appointmentData,
           doctor: {
-            name: doctor.user_id.name,
-            specialty: doctor.specialty_id?.name
+            name: doctor.user_id.name,                    // ✅ dòng 334
+            specialty: doctor.specialty_id?.name          // ✅ dòng 335
           }
         }
       });
 
-      const doctorUser = await User.findById(doctor.user_id._id);
+      // Tìm User của doctor để gửi notification
+      const doctorUser = await User.findById(doctor.user_id._id).select('name email');
       if (doctorUser) {
         const patient = await User.findById(patientId).select('name');
         await this.sendNotification({
-          user_id: doctorUser._id.toString(),
+          user_id: (doctorUser._id as Types.ObjectId).toString(), // ✅ dòng 344
           template_key: 'new_appointment_request',
           variables: {
             patient_name: patient?.name || 'Patient',
@@ -373,9 +395,13 @@ class NotificationService {
     }
   ): Promise<void> {
     try {
+      // doctor_id trong MedicalRecord ref tới User, không phải Doctor
+      // Tìm Doctor theo user_id rồi populate user_id để lấy name
       const doctor = await Doctor.findOne({ user_id: doctorId })
-        .populate('user_id', 'name');
+        .populate('user_id', 'name email')
+        .lean() as unknown as PopulatedDoctor | null;
 
+      // ✅ dòng 379
       const doctorName = doctor?.user_id?.name || 'Doctor';
 
       await this.sendNotification({
@@ -442,8 +468,10 @@ class NotificationService {
   ): Promise<void> {
     try {
       const doctor = await Doctor.findOne({ user_id: doctorId })
-        .populate('user_id', 'name');
+        .populate('user_id', 'name email')
+        .lean() as unknown as PopulatedDoctor | null;
 
+      // ✅ dòng 447
       const doctorName = doctor?.user_id?.name || 'Doctor';
 
       await this.sendNotification({
@@ -611,9 +639,7 @@ class NotificationService {
       user_id
     });
 
-    if (!notification) {
-      return null;
-    }
+    if (!notification) return null;
 
     notification.read = true;
     notification.read_at = new Date();
@@ -653,14 +679,10 @@ class NotificationService {
           _id: '$_id.type',
           total: { $sum: '$count' },
           read: {
-            $sum: {
-              $cond: [{ $eq: ['$_id.read', true] }, '$count', 0]
-            }
+            $sum: { $cond: [{ $eq: ['$_id.read', true] }, '$count', 0] }
           },
           unread: {
-            $sum: {
-              $cond: [{ $eq: ['$_id.read', false] }, '$count', 0]
-            }
+            $sum: { $cond: [{ $eq: ['$_id.read', false] }, '$count', 0] }
           }
         }
       }
@@ -675,9 +697,7 @@ class NotificationService {
       },
       {
         $group: {
-          _id: {
-            $dateToString: { format: '%Y-%m-%d', date: '$created_at' }
-          },
+          _id: { $dateToString: { format: '%Y-%m-%d', date: '$created_at' } },
           count: { $sum: 1 },
           read_count: {
             $sum: { $cond: [{ $eq: ['$read', true] }, 1, 0] }

@@ -85,7 +85,7 @@ class AppointmentEvents {
             type: 'APPOINTMENT_UPDATED',
             appointmentId,
             status,
-            patientName: user_id?.name,
+            patientName: (user_id as any)?.name,
             timestamp: new Date()
           }
         );
@@ -149,7 +149,7 @@ class AppointmentEvents {
           'appointment:doctor-cancelled',
           {
             appointmentId,
-            patientName: appointment.user_id?.name,
+            patientName: (appointment.user_id as any)?.name,
             timestamp: new Date()
           }
         );

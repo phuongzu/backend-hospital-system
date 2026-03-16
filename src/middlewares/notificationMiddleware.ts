@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { Types } from 'mongoose';
 import { AuthRequest } from './authmiddleware';
 import { notificationService } from '../utils/notificationService';
 import User from '../models/user';
@@ -94,7 +95,7 @@ export const notificationMiddleware = {
       
       for (const admin of admins) {
         await notificationService.sendNotification({
-          user_id: admin._id.toString(),
+          user_id: (admin._id as Types.ObjectId).toString(),
           title: 'System Error',
           message: `Error in ${context}: ${error.message}`,
           type: 'system',

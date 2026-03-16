@@ -80,8 +80,6 @@ const DoctorRegistrationRequestSchema: Schema = new Schema({
 
 // Index for better query performance
 DoctorRegistrationRequestSchema.index({ status: 1, submitted_at: -1 });
-DoctorRegistrationRequestSchema.index({ email: 1 });
-DoctorRegistrationRequestSchema.index({ license_number: 1 });
 
 export default mongoose.models.DoctorRegistrationRequest
   ? mongoose.model<IDoctorRegistrationRequest>('DoctorRegistrationRequest')

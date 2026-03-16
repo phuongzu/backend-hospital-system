@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
-import mongoose from 'mongoose';
+import mongoose,  { Types } from 'mongoose';
+import Mongoose from 'mongoose';
 import Doctor from '../models/doctor';
 import Appointment from '../models/appointment';
 import User from '../models/user';
@@ -7,9 +8,9 @@ import MedicalRecord from '../models/medicalRecord';
 import { AuthRequest } from '../middlewares/authmiddleware';
 import Review from '../models/review';
 import UserInfo from '../models/UserInfor';
-import { notificationService } from '../utils/notificationService'; // THÊM IMPORT
-import { emailService } from '../utils/emailService'; // THÊM IMPORT
-import { smsService } from '../utils/smsService'; // THÊM IMPORT
+import { notificationService } from '../utils/notificationService';
+import { emailService } from '../utils/emailService';
+import { smsService } from '../utils/smsService';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
@@ -51,7 +52,7 @@ const upload = multer({
 });
 
 
-const handleError = (res, error, message = 'Internal server error') => {
+const handleError = (res : Response,  error : Error, message = 'Internal server error') => {
   console.error(`${message}:`, error);
   res.status(500).json({ 
     success: false,
@@ -212,7 +213,6 @@ export const updateEmergencyContact = async (req: AuthRequest, res: Response): P
         BMI: 0
       });
     } else {
-      // Update emergency contact
       userInfo.emergency_contact = emergencyContactData;
     }
 
@@ -223,7 +223,7 @@ export const updateEmergencyContact = async (req: AuthRequest, res: Response): P
       message: 'Emergency contact updated successfully',
       data: userInfo.getSummary()
     });
-  } catch (error) {
+  } catch (error : any) {
     handleError(res, error, 'Error updating emergency contact');
   }
 };
@@ -273,7 +273,7 @@ export const postEmergencyContact = async (req: AuthRequest, res: Response): Pro
       message: 'Emergency contact added successfully',
       data: userInfo.getSummary()
     });
-  } catch (error) {
+  } catch (error : any) {
     handleError(res, error, 'Error adding emergency contact');
   }
 };
@@ -327,7 +327,7 @@ export const updateMedications = async (req: AuthRequest, res: Response): Promis
 
     // Also update the User model if medications/allergies are provided
     if (medications !== undefined || allergies !== undefined) {
-      const userUpdate = {};
+      const userUpdate : any = {};
       if (medications !== undefined) userUpdate.medications = medications;
       if (allergies !== undefined) userUpdate.allergies = allergies;
       
@@ -339,7 +339,7 @@ export const updateMedications = async (req: AuthRequest, res: Response): Promis
       message: 'Medications and allergies updated successfully',
       data: userInfo.getSummary()
     });
-  } catch (error) {
+  } catch (error: any) {
     handleError(res, error, 'Error updating medications');
   }
 };
@@ -404,7 +404,7 @@ export const addMedication = async (req: AuthRequest, res: Response): Promise<vo
       message: 'Medication added successfully',
       data: userInfo.getSummary()
     });
-  } catch (error) {
+  } catch (error: any) {
     handleError(res, error, 'Error adding medication');
   }
 };
@@ -443,7 +443,7 @@ export const removeMedication = async (req: AuthRequest, res: Response): Promise
     // Remove medication by ID
     const initialLength = userInfo.current_medications.length;
     userInfo.current_medications = userInfo.current_medications.filter(
-      med => med._id.toString() !== medication_id
+      med => (med._id as Types.ObjectId).toString() !== medication_id
     );
 
     if (userInfo.current_medications.length === initialLength) {
@@ -461,7 +461,7 @@ export const removeMedication = async (req: AuthRequest, res: Response): Promise
       message: 'Medication removed successfully',
       data: userInfo.getSummary()
     });
-  } catch (error) {
+  } catch (error: any) {
     handleError(res, error, 'Error removing medication');
   }
 };
@@ -506,7 +506,7 @@ export const getPatientInfo = async (req: AuthRequest, res: Response): Promise<v
       success: true,
       data: userInfo.getSummary()
     });
-  } catch (error) {
+  } catch (error: any) {
     handleError(res, error, 'Error fetching patient info');
   }
 };
@@ -528,7 +528,7 @@ export const updatePatientInfo = async (req: AuthRequest, res: Response): Promis
       'current_medications', 'height', 'weight', 'chronic_diseases'
     ];
 
-    const updateData = {};
+    const updateData: any = {};
     allowedFields.forEach(field => {
       if (newInfo[field] !== undefined) {
         updateData[field] = newInfo[field];
@@ -538,11 +538,9 @@ export const updatePatientInfo = async (req: AuthRequest, res: Response): Promis
     let userInfo = await UserInfo.findOne({ user_id: req.user._id });
     
     if (!userInfo) {
-      // Create new UserInfo if not exists
       userInfo = new UserInfo({ 
         user_id: req.user._id, 
         ...updateData,
-        // Ensure required fields have defaults
         emergency_contact: updateData.emergency_contact || {
           name: '',
           relationship: 'Family',
@@ -560,7 +558,7 @@ export const updatePatientInfo = async (req: AuthRequest, res: Response): Promis
     } else {
       // Update existing UserInfo
       Object.keys(updateData).forEach(key => {
-        userInfo[key] = updateData[key];
+        (userInfo as any)[key] = updateData[key];
       });
     }
 
@@ -572,7 +570,7 @@ export const updatePatientInfo = async (req: AuthRequest, res: Response): Promis
       message: 'User information updated successfully',
       data: userInfo.getSummary()
     });
-  } catch (error) {
+  } catch (error : any) {
     handleError(res, error, 'Error updating patient info');
   }
 };
@@ -639,7 +637,7 @@ export const editInfoPatient = async (req: AuthRequest, res: Response): Promise<
       message: 'User information updated successfully',
       data: userInfo.getSummary()
     });
-  } catch (error) {
+  } catch (error : any) {
     handleError(res, error, 'Error editing patient info');
   }
 };
@@ -661,7 +659,7 @@ export const getAppointmentAvailability = async (req: Request, res: Response) =>
       return res.status(400).json({ message: 'Doctor ID and date are required' });
     }
     
-    if (!mongoose.Types.ObjectId.isValid(doctor_id as string)) {
+    if (!Types.ObjectId.isValid(doctor_id as string)) {
       return res.status(400).json({ message: 'Invalid doctor ID format' });
     }
 
@@ -671,7 +669,6 @@ export const getAppointmentAvailability = async (req: Request, res: Response) =>
     const endOfDay = new Date(appointmentDate);
     endOfDay.setHours(23, 59, 59, 999);
 
-    // FIX: Lấy tất cả appointments trong ngày
     const existingAppointments = await Appointment.find({
       doctor_id,
       appointment_date: { $gte: startOfDay, $lte: endOfDay },
@@ -785,7 +782,7 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
 
     // Check if doctor exists and is available
     const doctor = await Doctor.findById(doctor_id)
-      .populate('user_id', 'name email phoneNumber status')
+      .populate<{ user_id: { _id: Types.ObjectId; name: string; email: string; status: string } }>('user_id', 'name email phoneNumber status')
       .populate('specialty_id', 'name description');
 
     if (!doctor) {
@@ -883,11 +880,11 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
         type: 'appointment',
         category: 'success',
         priority: 'medium',
-        related_record: appointment._id.toString(),
+        related_record: (appointment._id as Types.ObjectId).toString(),
         related_record_type: 'appointment',
         data: {
           appointment: {
-            id: appointment._id.toString(),
+            id: (appointment._id as Types.ObjectId).toString(),
             date: appointmentDate.toISOString(),
             time: time_slot,
             reason: reason,
@@ -929,11 +926,11 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
           type: 'appointment',
           category: 'info',
           priority: 'medium',
-          related_record: appointment._id.toString(),
+          related_record: (appointment._id as Types.ObjectId).toString(),
           related_record_type: 'appointment',
           data: {
             appointment: {
-              id: appointment._id.toString(),
+              id: (appointment._id as Types.ObjectId).toString(),
               date: appointmentDate.toISOString(),
               time: time_slot,
               reason: reason,
@@ -963,16 +960,17 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
         await emailService.sendAppointmentConfirmationEmail(
           user_email,
           user_name || 'Patient',
+          reason || 'null',
           {
-            appointment_id: appointment._id.toString(),
+            appointment_id: (appointment._id as Types.ObjectId).toString(),
             doctor_name: doctor.user_id?.name || 'Doctor',
             doctor_specialty: doctor.specialty_id?.name || 'General Medicine',
             appointment_date: appointmentDate.toLocaleDateString(),
             appointment_time: time_slot,
             appointment_end_time: appointmentEndTime,
-            location: 'Main Hospital - Room 101', // This would come from doctor profile
+            location: 'Main Hospital - Room 101',
             consultation_fee: doctor.consultation_fee,
-            preparation_instructions: getPreparationInstructions(specialty_id), // SỬA: gọi hàm trực tiếp
+            preparation_instructions: getPreparationInstructions(specialty_id),
             cancellation_policy: 'Cancel at least 24 hours in advance to avoid fees.',
             contact_info: 'Call 123-456-7890 for assistance'
           }
@@ -1001,7 +999,7 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
           scheduled_time: reminderDate,
           channels: ['sms', 'push'],
           data: {
-            appointment_id: appointment._id.toString(),
+            appointment_id: (appointment._id as Types.ObjectId).toString(),
             appointment_time: time_slot,
             doctor_name: doctor.user_id?.name
           }
@@ -1024,7 +1022,7 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
         symptoms: symptoms || [],
         reason: reason,
         notes: `Appointment scheduled for ${appointmentDate.toLocaleDateString()} at ${time_slot}`,
-        priority: determinePriority(symptoms, reason), // SỬA: gọi hàm trực tiếp
+        priority: determinePriority(symptoms, reason),
         created_at: new Date()
       });
 
@@ -1032,13 +1030,10 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
       console.log('✅ Medical record placeholder created');
     } catch (recordError) {
       console.error('❌ Error creating medical record:', recordError);
-      // Continue even if medical record creation fails
     }
 
     // ========== UPDATE DOCTOR'S SCHEDULE ==========
     try {
-      // This would update doctor's calendar/schedule
-      // For now, just log the booking
       console.log(`📅 Doctor ${doctor.user_id?.name} now has appointment at ${time_slot} on ${appointmentDate.toLocaleDateString()}`);
     } catch (scheduleError) {
       console.error('❌ Error updating doctor schedule:', scheduleError);
@@ -1046,13 +1041,12 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
 
     // ========== LOG ACTIVITY ==========
     try {
-      // Log booking activity
       const activityLog = {
         action: 'appointment_booked',
         user_id: user_id,
         description: `Appointment booked with Dr. ${doctor.user_id?.name} for ${appointmentDate.toLocaleDateString()} at ${time_slot}`,
         metadata: {
-          appointment_id: appointment._id.toString(),
+          appointment_id: (appointment._id as Types.ObjectId).toString(),
           doctor_id: doctor_id,
           time_slot: time_slot,
           reason: reason
@@ -1075,7 +1069,6 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
           _id: appointment._id,
           appointment_date: appointment.appointment_date,
           time_slot: appointment.time_slot,
-          appointment_end_time: appointment.appointment_end_time,
           reason: appointment.reason,
           status: appointment.status,
           created_at: appointment.created_at
@@ -1114,7 +1107,7 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
     // Send error notification to admin
     try {
       await notificationService.sendNotification({
-        user_id: 'admin', // This would be actual admin ID
+        user_id: 'admin',
         title: 'Error Booking Appointment',
         message: `Error booking appointment: ${error.message}`,
         type: 'system',
@@ -1209,7 +1202,7 @@ export const updateReview = async (req: AuthRequest, res: Response): Promise<voi
       message: 'Review updated successfully',
       review
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error updating review:', error);
     res.status(500).json({ 
       success: false,
@@ -1593,7 +1586,7 @@ export const postDoctorReview = async (req: AuthRequest, res: Response): Promise
       message: 'Review submitted successfully',
       review: populatedReview
     });
-  } catch (error) {
+  } catch (error : any) {
     console.error('Error submitting review:', error);
     res.status(500).json({ 
       success: false,
@@ -1731,12 +1724,10 @@ export const uploadAvatar = [
         deleteAvatarFile(user.avatar);
       }
 
-      // 5. Lưu CHỈ TÊN FILE vào database
       user.avatar = filename;
       user.avatarUpdatedAt = new Date();
       await user.save();
 
-      // 6. Tạo URL để trả về (không lưu vào DB)
       const baseUrl = getBaseUrlFromRequest(req);
       const avatarUrl = `${baseUrl}/uploads/avatars/${filename}?t=${Date.now()}`;
 
@@ -1745,8 +1736,8 @@ export const uploadAvatar = [
         success: true,
         message: 'Avatar uploaded successfully',
         data: {
-          avatar: filename, // Chỉ tên file
-          avatarUrl: avatarUrl, // URL đầy đủ (tạm thời cho response)
+          avatar: filename,
+          avatarUrl: avatarUrl, 
           user: {
             _id: user._id,
             name: user.name,
@@ -2154,10 +2145,10 @@ export const checkInAppointment = async (req: AuthRequest, res: Response): Promi
           type: 'appointment',
           category: 'info',
           priority: 'medium',
-          related_record: appointment._id.toString(),
+          related_record: (appointment._id as Types.ObjectId).toString(),
           related_record_type: 'appointment',
           data: {
-            appointment_id: appointment._id.toString(),
+            appointment_id: (appointment._id as Types.ObjectId).toString(),
             check_in_time: new Date().toISOString(),
             check_in_type: checkInType,
             patient: {
@@ -2191,7 +2182,7 @@ export const checkInAppointment = async (req: AuthRequest, res: Response): Promi
           if (step) {
             step.arrivalConfirmed = true;
             step.arrivalConfirmedAt = new Date();
-            step.arrivalConfirmedEarly = isFuture; // Thêm flag confirm sớm
+            step.arrivalConfirmed = isFuture; // Thêm flag confirm sớm
             
             // Chỉ chuyển status nếu đến ngày hẹn
             if (!isFuture) {

@@ -422,7 +422,7 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
     });
 
     // Generate tokens for patient
-    const accessToken = generateToken(String(newUser._id), newUser.role);
+    const accessToken = generateToken(String(newUser._id), newUser.role, newUser.name, newUser.email);
     const refreshToken = generateRefreshToken(String(newUser._id));
 
     // Update user with refresh token
@@ -671,7 +671,6 @@ export const loginUser = async (req: Request, res: Response): Promise<void> => {
   }
 };
 
-// Upsert doctor profile
 export const upsertDoctorProfile = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -861,10 +860,7 @@ export const refreshToken = async (req: Request, res: Response): Promise<void> =
       });
       return;
     }
-
-    // Generate new tokens
-    // Fix: Use user._id as string by casting in refresh
-    const newAccessToken = generateToken(String(user._id), user.role);
+    const newAccessToken = generateToken(String(user._id), user.role, user.name, user.email);
     const newRefreshToken = generateRefreshToken(String(user._id));
 
     // Update refresh token
@@ -1001,7 +997,7 @@ export const changePassword = async (req: AuthRequest, res: Response): Promise<v
 };
 
 // Unlock doctor account (Admin only)
-export const unlockDoctorAccount = async (req: Request, res: Response): Promise<void> => {
+export const unlockDoctorAccount = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { doctorId } = req.params;
     const adminId = req.user?._id;
@@ -1055,7 +1051,7 @@ export const unlockDoctorAccount = async (req: Request, res: Response): Promise<
 };
 
 // Lock doctor account manually (Admin only)
-export const lockDoctorAccount = async (req: Request, res: Response): Promise<void> => {
+export const lockDoctorAccount = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { doctorId } = req.params;
     const adminId = req.user?._id;
@@ -1105,8 +1101,7 @@ export const lockDoctorAccount = async (req: Request, res: Response): Promise<vo
     });
   }
 };
-export const getLockedDoctors = async (req: Request, res: Response): Promise<void> => {
-  try {
+export const getLockedDoctors = async (req: AuthRequest, res: Response): Promise<void> => {  try {
     if (req.user?.role !== 'admin') {
       res.status(403).json({
         success: false,

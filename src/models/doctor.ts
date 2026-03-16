@@ -20,13 +20,11 @@ export interface IDoctor extends Document {
   languages: string[];
   education: string[];
   certifications: string[];
-  // ✅ FIX #6: Thêm các field bị thiếu mà controller đang query
   qualifications: string[];
   achievements: string[];
   avatar?: string;
   createdAt: Date;
   updatedAt: Date;
-  // Virtuals
   experienceLevel: string;
   fullSchedule: object;
 }

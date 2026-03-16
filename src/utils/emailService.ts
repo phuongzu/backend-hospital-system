@@ -401,6 +401,7 @@ class EmailService {
   async sendAppointmentConfirmationEmail(
     to: string,
     patientName: string,
+    reason: string | null,
     data: {
       appointment_id: string;
       doctor_name: string;
@@ -1185,6 +1186,169 @@ class EmailService {
       return false;
     }
   }
+
+async sendDoctorDecisionEmail(
+  to: string,
+  patientName: string,
+  doctorName: string,
+  decision: string,
+  stepNumber: string | number,
+  doctorNotes?: string,
+  isConsultationCompleted: boolean = false
+): Promise<boolean> {
+  try {
+    const decisionLabels: Record<string, string> = {
+      approve: '✅ Approved',
+      approve_and_add_step: '✅ Approved with Follow-up',
+      approve_and_complete: '🎉 Approved & Consultation Completed',
+      reject: '❌ Returned for Revision',
+    };
+
+    const label = decisionLabels[decision] || decision;
+    const subject = isConsultationCompleted
+      ? `🎉 Your Consultation Has Been Completed - Step ${stepNumber}`
+      : `📋 Doctor Decision on Step ${stepNumber}: ${label}`;
+
+    const isApproved = decision !== 'reject';
+    const headerColor = isConsultationCompleted
+      ? '#4CAF50'
+      : isApproved ? '#2196F3' : '#FF9800';
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { background: ${headerColor}; color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+          .content { background: #f9fafb; padding: 30px; border-radius: 0 0 10px 10px; }
+          .decision-box { background: white; border-left: 5px solid ${headerColor}; padding: 20px; margin: 20px 0; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+          .notes-box { background: #e8f4fd; border: 1px solid #bee3f8; padding: 15px; border-radius: 5px; margin: 20px 0; }
+          .info-row { display: flex; margin: 8px 0; }
+          .info-label { font-weight: bold; width: 130px; color: #555; }
+          .info-value { flex: 1; }
+          .button { display: inline-block; background: ${headerColor}; color: white; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; }
+          .footer { text-align: center; margin-top: 30px; color: #777; font-size: 12px; }
+          .tip-box { background: #fffbeb; border: 1px solid #fde68a; padding: 15px; border-radius: 5px; margin: 20px 0; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>${isConsultationCompleted ? '🎉 Consultation Completed!' : '📋 Treatment Step Update'}</h1>
+            <p>${isConsultationCompleted
+              ? 'Your treatment journey has been completed'
+              : `Dr. ${doctorName} has reviewed your step`}</p>
+          </div>
+
+          <div class="content">
+            <h2>Hello ${patientName},</h2>
+
+            <p>
+              Dr. <strong>${doctorName}</strong> has reviewed your treatment step and made the following decision:
+            </p>
+
+            <div class="decision-box">
+              <h3 style="margin-top: 0; color: ${headerColor};">Decision Summary</h3>
+
+              <div class="info-row">
+                <div class="info-label">Step:</div>
+                <div class="info-value">Step ${stepNumber}</div>
+              </div>
+
+              <div class="info-row">
+                <div class="info-label">Decision:</div>
+                <div class="info-value"><strong>${label}</strong></div>
+              </div>
+
+              <div class="info-row">
+                <div class="info-label">Doctor:</div>
+                <div class="info-value">Dr. ${doctorName}</div>
+              </div>
+
+              <div class="info-row">
+                <div class="info-label">Date:</div>
+                <div class="info-value">${new Date().toLocaleDateString()}</div>
+              </div>
+            </div>
+
+            ${doctorNotes ? `
+              <div class="notes-box">
+                <h4 style="margin-top: 0;">📝 Doctor's Notes:</h4>
+                <p style="margin-bottom: 0;">${doctorNotes}</p>
+              </div>
+            ` : ''}
+
+            ${isConsultationCompleted ? `
+              <div class="tip-box">
+                <h4 style="margin-top: 0;">🎊 What's Next?</h4>
+                <ul style="margin-bottom: 0;">
+                  <li>Review your complete consultation summary</li>
+                  <li>Schedule a follow-up appointment if recommended</li>
+                  <li>Continue any prescribed medications as directed</li>
+                  <li>Contact your doctor with any lingering concerns</li>
+                </ul>
+              </div>
+            ` : decision === 'approve_and_add_step' ? `
+              <div class="tip-box">
+                <h4 style="margin-top: 0;">📌 A New Step Has Been Added</h4>
+                <p style="margin-bottom: 0;">
+                  Dr. ${doctorName} has added a follow-up treatment step to your plan.
+                  Please check your treatment plan for the next steps.
+                </p>
+              </div>
+            ` : decision === 'reject' ? `
+              <div class="tip-box">
+                <h4 style="margin-top: 0;">🔄 Action Required</h4>
+                <p style="margin-bottom: 0;">
+                  Your step has been returned for revision. Please review the doctor's notes above
+                  and resubmit once you have addressed the feedback.
+                </p>
+              </div>
+            ` : ''}
+
+            <div style="text-align: center; margin: 30px 0;">
+              <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/consultations/treatment-plan"
+                 class="button">
+                View Treatment Plan
+              </a>
+            </div>
+
+            <p><strong>Need Help?</strong> Contact our support team:</p>
+            <ul>
+              <li>📞 (123) 456-7890</li>
+              <li>📧 support@medcare.com</li>
+            </ul>
+          </div>
+
+          <div class="footer">
+            <p>This is an automated message from MediCare Healthcare. Please do not reply.</p>
+            <p>© ${new Date().getFullYear()} MediCare Healthcare. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    const mailOptions = {
+      from: { name: 'MediCare Healthcare', address: 'pvu7999@gmail.com' },
+      to,
+      subject,
+      html,
+    };
+
+    const info = await this.transporter.sendMail(mailOptions);
+    logger.info('✅ Doctor decision email sent successfully!', { messageId: info.messageId, recipient: to });
+    return true;
+  } catch (error) {
+    logger.error('Error sending doctor decision email:', {
+      recipient: to,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}  
 
   // Send bulk emails (for notifications, reminders, etc.)
   async sendBulkEmails(recipients: Array<{email: string, name: string}>, subject: string, html: string): Promise<Array<{email: string, success: boolean, error?: string}>> {

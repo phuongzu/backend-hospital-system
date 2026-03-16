@@ -1,6 +1,7 @@
 import cron from 'node-cron';
 import Appointment from '../models/appointment';
 import { notificationService } from '../utils/notificationService';
+import Notification from '../models/notification';
 import User from '../models/user';
 
 class NotificationScheduler {
@@ -38,39 +39,43 @@ class NotificationScheduler {
         status: 'confirmed'
       })
       .populate('user_id', 'name email phoneNumber')
-      .populate('doctor_id', 'name user_id');
+      .populate('doctor_id', 'name user_id')
+      .lean();
 
       console.log(`📅 Found ${appointments.length} appointments for tomorrow`);
 
       for (const appointment of appointments) {
+        // Cast populated fields vì .lean() + .populate() TypeScript không tự infer
+        const appt = appointment as any;
+
         try {
           // Notify patient
           await notificationService.sendNotification({
-            user_id: appointment.user_id._id.toString(),
+            user_id: appt.user_id._id.toString(),
             template_key: 'appointment_reminder',
             variables: {
-              doctor_name: appointment.doctor_id.name,
-              appointment_time: appointment.time_slot
+              doctor_name: appt.doctor_id.name,
+              appointment_time: appt.time_slot
             },
-            related_record: appointment._id.toString(),
+            related_record: appt._id.toString(),
             related_record_type: 'appointment'
           });
 
           // Notify doctor
-          const doctorUser = await User.findById(appointment.doctor_id.user_id);
+          const doctorUser = await User.findById(appt.doctor_id.user_id);
           if (doctorUser) {
             await notificationService.sendNotification({
-              user_id: doctorUser._id.toString(),
+              user_id: (doctorUser._id as any).toString(),
               title: 'Appointment Reminder',
-              message: `You have an appointment with ${appointment.user_id.name} tomorrow at ${appointment.time_slot}.`,
+              message: `You have an appointment with ${appt.user_id.name} tomorrow at ${appt.time_slot}.`,
               type: 'appointment',
               category: 'info',
-              related_record: appointment._id.toString(),
+              related_record: appt._id.toString(),
               related_record_type: 'appointment'
             });
           }
         } catch (error) {
-          console.error(`❌ Error sending reminder for appointment ${appointment._id}:`, error);
+          console.error(`❌ Error sending reminder for appointment ${appt._id}:`, error);
         }
       }
     } catch (error) {
@@ -81,8 +86,6 @@ class NotificationScheduler {
   // Send medication reminders (simplified version)
   private async sendMedicationReminders(): Promise<void> {
     try {
-      // This would query medication schedules and send reminders
-      // Implementation depends on your medication scheduling system
       console.log('💊 Medication reminder check completed');
     } catch (error) {
       console.error('❌ Error in medication reminders:', error);
@@ -90,10 +93,13 @@ class NotificationScheduler {
   }
 
   // Cleanup expired notifications
+  // Gọi trực tiếp static method trên model vì notificationService không có method này
   private async cleanupExpiredNotifications(): Promise<void> {
     try {
-      const count = await notificationService.cleanupExpired();
-      console.log(`🗑️ Cleaned up ${count} expired notifications`);
+      const result = await Notification.deleteMany({
+        expiry_date: { $lt: new Date() }
+      });
+      console.log(`🗑️ Cleaned up ${result.deletedCount} expired notifications`);
     } catch (error) {
       console.error('❌ Error cleaning up expired notifications:', error);
     }
@@ -102,7 +108,6 @@ class NotificationScheduler {
   // Send daily digest
   private async sendDailyDigest(): Promise<void> {
     try {
-      // Get all users with activity today
       const users = await User.find({
         lastLogin: {
           $gte: new Date(new Date().setHours(0, 0, 0, 0))
@@ -112,16 +117,13 @@ class NotificationScheduler {
       console.log(`📊 Sending daily digest to ${users.length} active users`);
 
       for (const user of users) {
+        const userId = (user._id as any).toString();
         try {
-          // Get today's notifications summary
-          const todayStart = new Date();
-          todayStart.setHours(0, 0, 0, 0);
-          
-          const todayStats = await notificationService.getStatistics(user._id.toString(), 1);
+          const todayStats = await notificationService.getStatistics(userId, 1);
           
           if (todayStats.summary.total > 0) {
             await notificationService.sendNotification({
-              user_id: user._id.toString(),
+              user_id: userId,
               title: 'Daily Digest',
               message: `You have ${todayStats.summary.total} notifications today (${todayStats.summary.unread} unread).`,
               type: 'system',
@@ -130,7 +132,7 @@ class NotificationScheduler {
             });
           }
         } catch (error) {
-          console.error(`❌ Error sending digest to user ${user._id}:`, error);
+          console.error(`❌ Error sending digest to user ${userId}:`, error);
         }
       }
     } catch (error) {

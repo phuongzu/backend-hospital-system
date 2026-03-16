@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { Types } from 'mongoose';
 import Doctor from '../models/doctor';
 import User from '../models/user';
 import Appointment from '../models/appointment';
@@ -11,9 +12,6 @@ import { notificationService } from '../utils/notificationService';
 import { emailService } from '../utils/emailService';
 import { socketService } from '../utils/socketService';
 import UserInformation from '../models/UserInfor';
-import doctor from '../models/doctor';
-
-
 
 
 export const getActiveConsultation = async (req: Request, res: Response) => {
@@ -21,12 +19,11 @@ export const getActiveConsultation = async (req: Request, res: Response) => {
     const { doctorId } = req.params;
     console.log('=== GET ACTIVE CONSULTATIONS ===');
     console.log('Doctor ID from params:', doctorId);
-    // FIXED: Use correct field names from your CSV
     const consultations = await MedicalRecord.find({
       doctor_id: doctorId,
       $or: [
-        { consultation_status: 'in-progress' },  // This is the correct field
-        { status: 'active' }  // Keep this as backup
+        { consultation_status: 'in-progress' },
+        { status: 'active' }
       ]
     })
       .populate('user_id', 'name email phoneNumber dateOfBirth gender')
@@ -106,7 +103,6 @@ export const createConsultation = async (req: Request, res: Response) => {
 };
 
 
-// Add treatment step
 export const addTreatmentStep = async (req: Request, res: Response) => {
   try {
     const { consultationId } = req.params;
@@ -122,9 +118,6 @@ export const addTreatmentStep = async (req: Request, res: Response) => {
         message: 'Medical record not found'
       });
     }
-
-
-    // 1. Add the step to Medical Record
     const newStep = {
       stepNumber: medicalRecord.treatment_plan.length + 1,
       title,
@@ -136,25 +129,17 @@ export const addTreatmentStep = async (req: Request, res: Response) => {
       status: 'pending'
     };
 
-    medicalRecord.treatment_plan.push(newStep);
+    medicalRecord.treatment_plan.push(newStep as any);
     await medicalRecord.save();
-
-    // 2. Reduce Stock Logic
-    // We expect a 'prescriptions' array from the frontend containing { medication, dosage, duration } objects
     if (prescriptions && Array.isArray(prescriptions) && prescriptions.length > 0) {
       console.log('Updating stock for prescriptions:', prescriptions);
 
       for (const item of prescriptions) {
         if (!item.medication) continue;
 
-        // Calculate how much to deduct
         const quantityToDeduct = calculateQuantity(item.dosage || '', item.duration || '');
 
         console.log(`Deducting ${quantityToDeduct} from ${item.medication}`);
-
-        // Find the drug by name and reduce stock
-        // We use $inc with a negative number.
-        // FIXED: Used 'stock_quantity' to match the Drug model
         const updatedDrug = await Drug.findOneAndUpdate(
           { name: item.medication },
           { $inc: { stock_quantity: -quantityToDeduct } },
@@ -205,15 +190,13 @@ export const updateTreatmentStep = async (req: Request, res: Response) => {
     step.duration = duration;
     step.instructions = instructions;
 
-    // Validate/Fix severity to avoid save error on legacy data
-    const validSeverities = ['mild', 'moderate', 'severe', 'critical'];
-    if (medicalRecord.severity && !validSeverities.includes(medicalRecord.severity)) {
-      if (medicalRecord.severity === 'low') medicalRecord.severity = 'mild';
-      else if (medicalRecord.severity === 'medium') medicalRecord.severity = 'moderate';
-      else if (medicalRecord.severity === 'high') medicalRecord.severity = 'severe';
-      else medicalRecord.severity = 'mild'; // Fallback
+    const sev = medicalRecord.severity as string;
+    if (sev === 'low') medicalRecord.severity = 'mild';
+    else if (sev === 'medium') medicalRecord.severity = 'moderate';
+    else if (sev === 'high') medicalRecord.severity = 'severe';
+    else if (!['mild', 'moderate', 'severe', 'critical'].includes(sev)) {
+      medicalRecord.severity = 'mild';
     }
-
     // Save
     await medicalRecord.save();
 
@@ -241,16 +224,14 @@ export const approveTreatmentStep = async (req: Request, res: Response) => {
     // Sửa: Chỉ populate đơn giản
     const medicalRecord = await MedicalRecord.findById(consultationId)
       .populate('user_id', 'name email')
-      .populate('doctor_id', 'user_id name'); // Chỉ populate doctor_id
+      .populate('doctor_id', 'user_id name');
 
     if (!medicalRecord) {
       return res.status(404).json({ success: false, message: 'Medical record not found' });
     }
 
-    // Nếu cần thông tin user của doctor, query riêng
     let doctorUserInfo = null;
     if (medicalRecord.doctor_id) {
-      // Cast to any để truy cập thuộc tính
       const doctor = medicalRecord.doctor_id as any;
       if (doctor.user_id) {
         doctorUserInfo = await User.findById(doctor.user_id)
@@ -279,19 +260,16 @@ export const approveTreatmentStep = async (req: Request, res: Response) => {
 
     // ================= NOTIFICATION LOGIC =================
     try {
-      // Get patient info
       const patientUserId = (medicalRecord.user_id as any)._id;
 
-      // Sử dụng doctorUserInfo thay vì medicalRecord.doctor_id.user_id
       if (patientUserId && doctorUserInfo) {
-        // Send notification to patient
         await notificationService.sendNotification({
           user_id: patientUserId.toString(),
           template_key: 'treatment_step_approved',
           variables: {
             step_number: stepNum.toString(),
             step_title: step.title,
-            doctor_name: doctorUserInfo.name // Sử dụng tên từ doctorUserInfo
+            doctor_name: doctorUserInfo.name 
           },
           type: 'treatment',
           category: 'success',
@@ -316,7 +294,7 @@ export const approveTreatmentStep = async (req: Request, res: Response) => {
             patientUser.name,
             step.title,
             stepNum,
-            doctorUserInfo.name, // Sử dụng tên từ doctorUserInfo
+            doctorUserInfo.name,
             doctor_notes,
             isLastStep && allStepsApproved
           );
@@ -395,7 +373,6 @@ export const completeConsultation = async (req: Request, res: Response) => {
     console.log('=== COMPLETE CONSULTATION ===');
     console.log('Consultation ID:', consultationId);
 
-    // Tìm medical record với thông tin liên quan
     const medicalRecord = await MedicalRecord.findById(consultationId)
       .populate('user_id', 'name email')
       .populate({
@@ -413,21 +390,17 @@ export const completeConsultation = async (req: Request, res: Response) => {
     }
 
 
-    // Enforce: all steps must be approved before completing
     const allApproved = medicalRecord.treatment_plan.every((step: any) => step.status === 'approved');
     if (!allApproved) {
       return res.status(400).json({ success: false, message: 'All steps must be approved before completing the consultation.' });
     }
 
-    // Cập nhật consultation sử dụng instance method
     medicalRecord.consultation_status = 'completed';
     medicalRecord.status = 'resolved';
     medicalRecord.updated_at = new Date();
 
-    // Clear next_appointment when completing consultation since no follow-up is needed
     medicalRecord.next_appointment = undefined;
 
-    // Cập nhật các trường thông tin nếu có
     if (diagnosis) medicalRecord.diagnosis = diagnosis;
     if (notes) medicalRecord.notes = notes;
     if (follow_up_instructions) medicalRecord.follow_up_instructions = follow_up_instructions;
@@ -439,14 +412,14 @@ export const completeConsultation = async (req: Request, res: Response) => {
     try {
       // Get patient and doctor info
       const patientUserId = medicalRecord.user_id._id;
-      const doctorUser = medicalRecord.doctor_id.user_id;
+      const doctorPopulated = medicalRecord.doctor_id as any;
+      const doctorUser = doctorPopulated?.user_id;
 
       if (patientUserId && doctorUser) {
-        // Send notification to patient
         await notificationService.sendNotification({
           user_id: patientUserId.toString(),
           title: 'Consultation Completed',
-          message: `Dr. ${medicalRecord.doctor_id.name} has completed your consultation. ${medicalRecord.diagnosis ? `Diagnosis: ${medicalRecord.diagnosis}` : ''}`,
+          message: `Dr. ${doctorPopulated?.name || 'Doctor'} has completed your consultation. ${medicalRecord.diagnosis ? `Diagnosis: ${medicalRecord.diagnosis}` : ''}`,
           type: 'consultation',
           category: 'success',
           priority: 'high',
@@ -472,7 +445,7 @@ export const completeConsultation = async (req: Request, res: Response) => {
             patientUser.name,
             {
               consultation_id: consultationId,
-              doctor_name: medicalRecord.doctor_id.name,
+              doctor_name: doctorPopulated?.name || 'Doctor',
               diagnosis: medicalRecord.diagnosis || 'Completed',
               summary: medicalRecord.notes || '',
               treatment_steps_completed: medicalRecord.treatment_plan.filter((s: any) =>
@@ -492,14 +465,13 @@ export const completeConsultation = async (req: Request, res: Response) => {
         await notificationService.sendNotification({
           user_id: doctorUser._id.toString(),
           title: 'Consultation Recorded',
-          message: `You have completed consultation with ${medicalRecord.user_id.name}. Medical record has been updated.`,
-          type: 'consultation',
+          message: `You have completed consultation with ${(medicalRecord.user_id as any).name}. Medical record has been updated.`,          type: 'consultation',
           category: 'info',
           priority: 'medium',
           related_record: consultationId,
           related_record_type: 'medical_record',
           data: {
-            patient_name: medicalRecord.user_id.name,
+            patient_name: (medicalRecord.user_id as any).name,
             completion_date: new Date().toISOString(),
             diagnosis: medicalRecord.diagnosis
           }
@@ -509,19 +481,17 @@ export const completeConsultation = async (req: Request, res: Response) => {
       console.log('✅ Consultation completion notifications sent');
     } catch (notifError) {
       console.error('❌ Error sending notifications:', notifError);
-      // Don't fail the whole request if notification fails
     }
     // ================= END NOTIFICATION LOGIC =================
 
-    // Send real-time notification via socket
     const patientUser = await User.findById(medicalRecord.user_id._id);
     if (patientUser) {
       socketService.emitToUser(
-        patientUser._id.toString(),
+        (patientUser._id as Types.ObjectId).toString(),
         'consultation_completed',
         {
           consultation_id: consultationId,
-          doctor_name: medicalRecord.doctor_id.name,
+          doctor_name: (medicalRecord.doctor_id as any)?.name || 'Doctor',
           diagnosis: medicalRecord.diagnosis,
           completed_at: new Date(),
           timestamp: new Date()
@@ -1383,23 +1353,19 @@ export const getAllPatients = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: 'Doctor ID is required' });
     }
 
-    // Build query để lấy patients từ medical records
     let matchQuery: any = { doctor_id: doctorId };
 
-    // Lấy tất cả medical records của doctor này để có danh sách patient IDs
     const medicalRecords = await MedicalRecord.find(matchQuery)
       .distinct('user_id')
       .lean();
 
     const patientIds = medicalRecords.map(id => id.toString());
 
-    // Query chính để lấy thông tin bệnh nhân
     let userQuery: any = {
       _id: { $in: patientIds },
       role: 'patient'
     };
 
-    // Thêm search nếu có
     if (search) {
       userQuery.$or = [
         { name: { $regex: search, $options: 'i' } },
@@ -1408,7 +1374,6 @@ export const getAllPatients = async (req: Request, res: Response) => {
       ];
     }
 
-    // Lấy thông tin từ User model
     const users = await User.find(userQuery)
       .select('name email phoneNumber dateOfBirth gender')
       .skip((Number(page) - 1) * Number(limit))
@@ -1425,7 +1390,7 @@ export const getAllPatients = async (req: Request, res: Response) => {
         return {
           ...user,
           blood_type: userInfo?.blood_type || null,
-          allergies: userInfo?.allergies || [],
+          allergies: userInfo?.allergist || [],
           height: userInfo?.height || null,
           weight: userInfo?.weight || null,
           chronic_diseases: userInfo?.chronic_diseases || [],
@@ -1481,13 +1446,12 @@ export const completeTreatmentStep = async (req: Request, res: Response) => {
       });
     }
 
-    // Cập nhật trạng thái: completed (chờ approval), KHÔNG PHẢI approved
     step.status = 'completed';
     step.completedAt = new Date();
     step.approval_requested = true;
 
     if (patientMessage) {
-      step.patient_message = patientMessage;
+      step.patientMessage = patientMessage;
     }
 
     await medicalRecord.save();
@@ -1816,8 +1780,7 @@ export const doctorDecisionOnStep = async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, message: 'Step not found' });
     }
 
-    // Chuẩn bị data cho step mới nếu cần
-    let newStepData = null;
+    let newStepData: any = undefined;
     if (decision === 'approve_and_add_step') {
       newStepData = {
         title: new_step_title || 'Follow-up Treatment',
@@ -1829,7 +1792,6 @@ export const doctorDecisionOnStep = async (req: Request, res: Response) => {
       };
     }
 
-    // Thực hiện quyết định của bác sĩ
     await medicalRecord.doctorDecision(
       parseInt(stepNumber),
       decision as any,
@@ -1837,7 +1799,6 @@ export const doctorDecisionOnStep = async (req: Request, res: Response) => {
       newStepData
     );
 
-    // Gửi notification cho bệnh nhân
     const patient = medicalRecord.user_id as any;
     if (patient) {
       let notificationMessage = '';
@@ -1858,7 +1819,7 @@ export const doctorDecisionOnStep = async (req: Request, res: Response) => {
         user_id: patient._id.toString(),
         template_key: 'doctor_decision_made',
         variables: {
-          doctor_name: medicalRecord.doctor_id?.name || 'Doctor',
+          doctor_name: (medicalRecord.doctor_id as any)?.name || 'Doctor',
           decision: decision.replace(/_/g, ' '),
           step_number: stepNumber
         },
@@ -1882,7 +1843,7 @@ export const doctorDecisionOnStep = async (req: Request, res: Response) => {
         await emailService.sendDoctorDecisionEmail(
           patient.email,
           patient.name,
-          medicalRecord.doctor_id?.name || 'Doctor',
+          (medicalRecord.doctor_id as any)?.name || 'Doctor',
           decision,
           stepNumber,
           doctor_notes,
@@ -1907,7 +1868,6 @@ export const doctorDecisionOnStep = async (req: Request, res: Response) => {
   }
 };
 
-// Trong doctorcontroller.ts
 export const reviewAndDecideStep = async (req: any, res: any): Promise<void> => {
   try {
     const { consultationId, stepNumber } = req.params;
@@ -2123,36 +2083,25 @@ export const reviewAndDecideStep = async (req: any, res: any): Promise<void> => 
                 await appointment.save();
                 console.log('✅ Created appointment for scheduled step');
                 
-                savedStep.reExaminationAppointmentId = appointment._id;
-                
-                // Lưu lại medical record với appointmentId
+                savedStep.reExaminationAppointmentId = appointment._id as Types.ObjectId; 
                 await medicalRecord.save({ validateModifiedOnly: true });
               }
             } catch (err: any) {
               console.error('❌ Error creating appointment:', err);
-              // Không throw error, vẫn giữ step đã tạo
             }
           }
-
-          // Gán newStep để trả về response
           newStep = savedStep;
         }
-
-        // 3. Update next_appointment trong medical record
         if (appointmentDate) {
           medicalRecord.next_appointment = appointmentDate;
         }
-
-        // 4. Send notification (giữ nguyên code hiện tại)
         try {
-          // ... notification code ...
         } catch (err) { 
           console.error('Notification error:', err); 
         }
         break;
 
       case 'approve_and_complete':
-        // Approve step và kết thúc consultation
         step.status = 'approved';
         step.doctorNotes = doctorNotes;
         step.approvedAt = new Date();
@@ -2315,9 +2264,6 @@ export const scheduleReExamination = async (req: any, res: any): Promise<void> =
     }
     
     console.log('Medical record doctor_id (User ID):', medicalRecord.doctor_id);
-    
-    // Authorization check - kiểm tra xem doctor có phải là doctor được assign không
-    // SO SÁNH ĐÚNG: medicalRecord.doctor_id (User ID) với doctor.user_id (User ID)
     if (medicalRecord.doctor_id.toString() !== doctor.user_id.toString()) {
       return res.status(403).json({ 
         success: false,
@@ -2351,7 +2297,8 @@ export const scheduleReExamination = async (req: any, res: any): Promise<void> =
     const appointmentDate = new Date(appointmentDateTime);
     let appointment = null;
     let isExistingAppointment = false;
-    
+    const doctorId = doctor._id as Types.ObjectId;
+
     console.log('🔍 Searching for existing appointment...');
     console.log('Step has appointmentId:', step.reExaminationAppointmentId);
     console.log('Step has _id:', step._id);
@@ -2404,7 +2351,7 @@ export const scheduleReExamination = async (req: any, res: any): Promise<void> =
           console.log(`   Current doctor._id: ${doctor._id}`);
           break;
         }
-      } catch (err) {
+      } catch (err: any) {
         console.warn(`⚠️  Search failed for criteria:`, err.message);
       }
     }
@@ -2421,14 +2368,10 @@ export const scheduleReExamination = async (req: any, res: any): Promise<void> =
         allowed_actions: ['cancel', 'complete']
       });
     }
-    
-    // ========== APPOINTMENT HANDLING ==========
-    if (appointment) {
-      // CẬP NHẬT lịch hẹn hiện có (chỉ cho phép nếu status không phải 'confirmed')
+        if (appointment) {
       console.log('✅ Updating existing appointment:', appointment._id);
       console.log('Current appointment status:', appointment.status);
       
-      // Check for time slot availability
       const startOfDay = new Date(appointmentDate);
       startOfDay.setHours(0, 0, 0, 0);
       
@@ -2436,18 +2379,18 @@ export const scheduleReExamination = async (req: any, res: any): Promise<void> =
       endOfDay.setHours(23, 59, 59, 999);
       
       const existingAppointment = await Appointment.findOne({
-        doctor_id: doctor._id, // Sử dụng doctor._id (Doctor ID)
+        doctor_id: doctor._id,
         appointment_date: { $gte: startOfDay, $lte: endOfDay },
         time_slot: timeSlot || '09:00',
         status: { $in: ['pending', 'confirmed', 'scheduled'] },
-        _id: { $ne: appointment._id } // Không tính chính appointment này
+        _id: { $ne: appointment._id }
       });
       
       if (existingAppointment) {
         return res.status(409).json({
           success: false,
           message: `Doctor already has an appointment at ${timeSlot || '09:00'} on ${appointmentDate.toLocaleDateString()}`,
-          alternative_slots: await getAlternativeTimeSlots(doctor._id.toString(), appointmentDate)
+          alternative_slots: await getAlternativeTimeSlots(doctorId.toString(), appointmentDate)
         });
       }
       
@@ -2458,10 +2401,9 @@ export const scheduleReExamination = async (req: any, res: any): Promise<void> =
       appointment.appointment_date = appointmentDate;
       appointment.time_slot = timeSlot || '09:00';
       appointment.notes = notes || `Re-examination: ${step.title}`;
-      appointment.status = 'scheduled'; // Giữ nguyên status nếu đang là 'pending' hoặc 'scheduled'
+      appointment.status = 'scheduled';
       appointment.updated_at = new Date();
       appointment.is_re_examination = true;
-      appointment.re_examination_step_id = step._id;
       appointment.specialty_id = doctor.specialty_id;
       
       // Update metadata
@@ -2472,10 +2414,10 @@ export const scheduleReExamination = async (req: any, res: any): Promise<void> =
       appointment.metadata.step_number = stepNum;
       appointment.metadata.step_title = step.title;
       appointment.metadata.updated_by = 'doctor';
-      appointment.metadata.updated_at = new Date();
-      appointment.metadata.previous_date = oldDate; // Lưu ngày cũ để tracking
-      appointment.metadata.previous_time = oldTime; // Lưu giờ cũ để tracking
-      appointment.metadata.rescheduled_at = new Date(); // Thời gian reschedule
+      appointment.metadata.completed_at = new Date();
+      appointment.metadata.previous_date = oldDate;
+      appointment.metadata.previous_time = oldTime;
+      appointment.metadata.rescheduled_at = new Date();
       
       await appointment.save();
       console.log('✅ Appointment updated successfully');
@@ -2494,7 +2436,7 @@ export const scheduleReExamination = async (req: any, res: any): Promise<void> =
       endOfDay.setHours(23, 59, 59, 999);
       
       const existingAppointment = await Appointment.findOne({
-        doctor_id: doctor._id, // Sử dụng doctor._id (Doctor ID)
+        doctor_id: doctor._id,
         appointment_date: { $gte: startOfDay, $lte: endOfDay },
         time_slot: timeSlot || '09:00',
         status: { $in: ['pending', 'confirmed', 'scheduled'] }
@@ -2504,15 +2446,15 @@ export const scheduleReExamination = async (req: any, res: any): Promise<void> =
         return res.status(409).json({
           success: false,
           message: `Doctor already has an appointment at ${timeSlot || '09:00'} on ${appointmentDate.toLocaleDateString()}`,
-          alternative_slots: await getAlternativeTimeSlots(doctor._id.toString(), appointmentDate)
+          alternative_slots: await getAlternativeTimeSlots(doctorId.toString(), appointmentDate)
         });
       }
       
       // Create new appointment
       appointment = new Appointment({
         user_id: medicalRecord.user_id,
-        doctor_id: doctor._id, // Sử dụng doctor._id từ Doctor table (Doctor ID)
-        specialty_id: doctor.specialty_id, // Thêm specialty_id từ doctor
+        doctor_id: doctor._id,
+        specialty_id: doctor.specialty_id,
         appointment_date: appointmentDate,
         time_slot: timeSlot || '09:00',
         status: 'pending',
@@ -2537,7 +2479,7 @@ export const scheduleReExamination = async (req: any, res: any): Promise<void> =
     console.log('📝 Updating step information...');
     
     // Cập nhật step với appointmentId
-    step.reExaminationAppointmentId = appointment._id;
+    step.reExaminationAppointmentId = appointment._id as Types.ObjectId;
     step.reExaminationScheduled = true;
     step.reExaminationDate = appointmentDate;
     step.reExaminationTime = timeSlot || '09:00';
@@ -2557,15 +2499,13 @@ export const scheduleReExamination = async (req: any, res: any): Promise<void> =
       console.log('📅 Updated medical_record.next_appointment:', appointmentDate);
     }
     
-    // Lưu medical record
     await medicalRecord.save({ validateModifiedOnly: true });
     console.log('✅ Medical record updated');
     
     // ========== SEND NOTIFICATION ==========
     try {
       const patient = await User.findById(medicalRecord.user_id);
-      const doctorUser = await User.findById(doctor.user_id); // Lấy thông tin user từ doctor
-      
+      const doctorUser = await User.findById(doctor.user_id); 
       if (patient) {
         const isUpdate = isExistingAppointment;
         
@@ -2585,7 +2525,7 @@ export const scheduleReExamination = async (req: any, res: any): Promise<void> =
         }
         
         await notificationService.sendNotification({
-          user_id: patient._id.toString(),
+          user_id: (patient._id as Types.ObjectId).toString(),
           title: notificationTitle,
           message: notificationMessage,
           template_key: 're_examination_scheduled',
@@ -2604,7 +2544,7 @@ export const scheduleReExamination = async (req: any, res: any): Promise<void> =
           type: 'appointment',
           category: 'info',
           priority: 'high',
-          related_record: appointment._id,
+          related_record: (appointment._id as Types.ObjectId).toString(),
           related_record_type: 'appointment',
           data: {
             appointment_id: appointment._id,
@@ -3191,7 +3131,8 @@ export const getReExaminationAppointments = async (req: AuthRequest, res: Respon
 
         let stepDetails = null;
         if (medicalRecord && appointment.re_examination_step_id) {
-          const step = medicalRecord.treatment_plan.id(appointment.re_examination_step_id.toString());
+        const step = (medicalRecord.treatment_plan as any).id(
+            appointment.re_examination_step_id.toString());
           if (step) {
             stepDetails = {
               stepNumber: step.stepNumber,
@@ -3286,8 +3227,9 @@ export const getReExaminationDetail = async (req: AuthRequest, res: Response): P
 
     let stepDetails = null;
     if (medicalRecord && appointment.re_examination_step_id) {
-      const step = medicalRecord.treatment_plan.id(appointment.re_examination_step_id.toString());
-      if (step) {
+    const step = (medicalRecord.treatment_plan as any).id(
+      appointment.re_examination_step_id.toString());      
+        if (step) {
         stepDetails = {
           stepNumber: step.stepNumber,
           title: step.title,
@@ -3312,10 +3254,7 @@ export const getReExaminationDetail = async (req: AuthRequest, res: Response): P
           diagnosis: medicalRecord.diagnosis,
           symptoms: medicalRecord.symptoms
         } : null,
-        doctor: {
-          _id: doctor._id,
-          name: doctor.user_id?.name
-        }
+        doctor: { _id: doctor._id, name: (doctor.user_id as any)?.name }
       }
     });
 
@@ -3329,7 +3268,6 @@ export const getReExaminationDetail = async (req: AuthRequest, res: Response): P
 };
 
 
-// Thêm hàm này vào doctorcontroller.ts
 export const updateAppointmentStatus = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { appointmentId } = req.params;
@@ -3380,8 +3318,6 @@ export const updateAppointmentStatus = async (req: AuthRequest, res: Response): 
       });
       return;
     }
-
-    // Chỉ cho phép chuyển từ 'confirmed' hoặc 'scheduled' sang 'completed'
     if (appointment.status !== 'confirmed' && appointment.status !== 'scheduled') {
       res.status(400).json({
         success: false,
@@ -3390,27 +3326,27 @@ export const updateAppointmentStatus = async (req: AuthRequest, res: Response): 
       return;
     }
 
-    // Cập nhật appointment
     appointment.status = 'completed';
-    appointment.updated_at = new Date();
+    (appointment as any).updated_at = new Date();
     
-    // Thêm metadata nếu cần
     if (!appointment.metadata) {
       appointment.metadata = {};
     }
-    appointment.metadata.status_changed_at = new Date();
-    appointment.metadata.status_changed_by = 'doctor';
+    appointment.metadata = {
+      ...(appointment.metadata || {}),
+      status_changed_at: new Date(),
+      status_changed_by: 'doctor'
+    } as any;
     
     await appointment.save();
 
-    // Gửi notification cho patient
     try {
       const patientUser = await User.findById(appointment.user_id);
       const doctorUser = await User.findById(doctor.user_id);
 
       if (patientUser) {
         await notificationService.sendNotification({
-          user_id: patientUser._id.toString(),
+          user_id: (patientUser._id as Types.ObjectId).toString(),
           title: 'Appointment Status Updated',
           message: `Dr. ${doctorUser?.name || 'Doctor'} has marked your appointment as completed.`,
           template_key: 'appointment_status_updated',
@@ -3460,7 +3396,6 @@ export const updateAppointmentStatus = async (req: AuthRequest, res: Response): 
   }
 };
 
-// Hoặc hàm đơn giản chỉ đổi status
 export const markAppointmentCompleted = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { appointmentId } = req.params;
@@ -3504,8 +3439,7 @@ export const markAppointmentCompleted = async (req: AuthRequest, res: Response):
 
     // Cập nhật appointment
     appointment.status = 'completed';
-    appointment.updated_at = new Date();
-    
+    (appointment as any).updated_at = new Date();
     await appointment.save();
 
     res.status(200).json({
@@ -3605,7 +3539,7 @@ export const completeReExamination = async (req: AuthRequest, res: Response) => 
     if (step.reExaminationAppointmentId) {
       const appointment = await Appointment.findById(step.reExaminationAppointmentId);
       if (appointment) {
-        appointment.status = 'approved';
+        step.status = 'approved';
         appointment.notes = `Physical re-examination completed: ${doctorNotes || 'Patient attended the appointment'}`;
         appointment.metadata = {
           ...appointment.metadata,
@@ -3827,7 +3761,7 @@ export const patientCheckIn = async (
       patient_checked_in_at: new Date(),
       checked_in_by: 'patient',
       patient_user_id: req.user._id,
-    };
+    } as any;
     await appointment.save();
 
     // Notify doctor that patient has arrived
@@ -3868,7 +3802,7 @@ export const patientCheckIn = async (
           status: appointment.status,
           appointment_date: appointment.appointment_date,
           time_slot: appointment.time_slot,
-          checked_in_at: appointment.metadata.patient_checked_in_at,
+          checked_in_at: (appointment.metadata as any)?.patient_checked_in_at,        
         },
       },
     });
@@ -3926,7 +3860,7 @@ export const checkInAppointment = async (req: Request, res: Response) => {
           message: 'The clinic has confirmed your arrival. Please wait — the doctor will see you shortly.',
           template_key: 'patient_checked_in',
           variables: {
-            doctor_name: doctor.name || 'Your doctor',
+            doctor_name: (doctor.user_id as any)?.name || 'Your doctor',
             appointment_time: appointment.time_slot,
           },
           type: 'appointment',
@@ -3997,9 +3931,7 @@ export const getPatientContext = async (req: Request, res: Response) => {
     const userInfo = await UserInformation.findOne({ user_id: patientId })
       .select('allergies chronic_diseases blood_type height weight BMI')
       .lean();
- 
-    // Current medications: collect the last active treatment medication across records
-    const activeMedications: string[] = [];
+     const activeMedications: string[] = [];
     const activeRecords = await MedicalRecord.find({
       user_id: patientId,
       consultation_status: { $in: ['in-progress', 'active'] },
@@ -4014,7 +3946,6 @@ export const getPatientContext = async (req: Request, res: Response) => {
           step.medication &&
           !activeMedications.includes(step.medication)
         ) {
-          // medication field might be "Drug A + Drug B"
           step.medication.split(' + ').forEach((med: string) => {
             const trimmed = med.trim();
             if (trimmed && !activeMedications.includes(trimmed)) {
@@ -4029,7 +3960,7 @@ export const getPatientContext = async (req: Request, res: Response) => {
       success: true,
       data: {
         recentConsultations: shapedConsultations,
-        allergies:           (userInfo as any)?.allergies          ?? [],
+        allergies: (userInfo as any)?.allergist ? [(userInfo as any).allergist] : [],
         currentMedications:  activeMedications,
         bloodType:           (userInfo as any)?.blood_type         ?? null,
         chronicDiseases:     (userInfo as any)?.chronic_diseases   ?? [],
@@ -4138,7 +4069,7 @@ export const scheduleFollowUpAppointment = async (req: Request, res: Response) =
   try {
     const {
       user_id,
-      doctor_id,            // this is the doctor's user_id (from localStorage)
+      doctor_id,          
       appointment_date,
       time_slot,
       reason,
@@ -4196,7 +4127,7 @@ export const scheduleFollowUpAppointment = async (req: Request, res: Response) =
       specialty_id: doctor.specialty_id,
       appointment_date: parsedDate,
       time_slot,
-      status: 'confirmed',  // auto-confirmed since doctor is scheduling it
+      status: 'confirmed',
       reason: reason || 'Follow-up consultation',
       notes: source_consultation_id
         ? `Follow-up from consultation ${source_consultation_id}`
@@ -4219,9 +4150,7 @@ export const scheduleFollowUpAppointment = async (req: Request, res: Response) =
         next_appointment: parsedDate,
       });
     }
- 
-    // Notify patient about the scheduled follow-up
-    try {
+     try {
       const patientUser = await User.findById(user_id).select('name email');
       const doctorUser  = await User.findById(doctor_id).select('name');
  
@@ -4239,22 +4168,28 @@ export const scheduleFollowUpAppointment = async (req: Request, res: Response) =
           type:     'appointment',
           category: 'success',
           priority: 'high',
-          related_record:      followUp._id.toString(),
+          related_record: (followUp._id as Types.ObjectId).toString(),
           related_record_type: 'appointment',
           action_url:   `/appointments/${followUp._id}`,
           action_label: 'View Appointment',
         });
- 
-        // Also send an email notification
-        if (patientUser.email) {
+         if (patientUser.email) {
           await emailService.sendAppointmentConfirmationEmail(
             patientUser.email,
             patientUser.name,
+            reason || 'Follow-up consultation',
             {
+              appointment_id: (followUp._id as Types.ObjectId).toString(),
+              doctor_name: doctorUser?.name || 'Your doctor',
+              doctor_specialty: '',
               appointment_date: parsedDate.toLocaleDateString(),
               appointment_time: time_slot,
-              doctor_name:      doctorUser?.name || 'Your doctor',
-              reason:           reason || 'Follow-up consultation',
+              appointment_end_time: '',
+              location: '',
+              consultation_fee: 0,
+              preparation_instructions: '',
+              cancellation_policy: '',
+              contact_info: '',
             }
           );
         }
