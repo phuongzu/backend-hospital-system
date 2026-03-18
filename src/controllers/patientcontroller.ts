@@ -46,7 +46,7 @@ const upload = multer({
     if (mimetype && extname) {
       cb(null, true);
     } else {
-      cb(new Error('Chỉ chấp nhận file ảnh (jpeg, jpg, png, gif, webp)'));
+      cb(new Error('Just jpeg, jpg, png, gif, webp files are allowed'));
     }
   }
 });
@@ -431,7 +431,6 @@ export const removeMedication = async (req: AuthRequest, res: Response): Promise
     }
 
     const userInfo = await UserInfo.findOne({ user_id: req.user._id });
-    
     if (!userInfo) {
       res.status(404).json({ 
         success: false,
@@ -783,6 +782,7 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
     // Check if doctor exists and is available
     const doctor = await Doctor.findById(doctor_id)
       .populate<{ user_id: { _id: Types.ObjectId; name: string; email: string; status: string } }>('user_id', 'name email phoneNumber status')
+      .populate<{ specialty_id: { _id: Types.ObjectId; name: string; description: string } }>('specialty_id', 'name description')
       .populate('specialty_id', 'name description');
 
     if (!doctor) {
@@ -865,6 +865,7 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
       .populate('doctor_id', 'name email phoneNumber specialty_id consultation_fee')
       .populate('user_id', 'name email phoneNumber dateOfBirth gender')
       .populate('specialty_id', 'name description');
+      
 
     // ========== GỬI THÔNG BÁO CHO BỆNH NHÂN ==========
     try {
@@ -2094,13 +2095,11 @@ export const checkInAppointment = async (req: AuthRequest, res: Response): Promi
     let checkInType = 'on_time';
     
     if (isFuture) {
-      // Nếu chưa đến ngày hẹn, đặt trạng thái "pre-confirmed"
       newStatus = 'confirmed';
       checkInType = 'early_confirmation';
       console.log('✅ Early confirmation for future appointment');
     }
 
-    // Cập nhật status
     appointment.status = newStatus;
     appointment.updated_at = new Date();
     
@@ -2120,7 +2119,6 @@ export const checkInAppointment = async (req: AuthRequest, res: Response): Promi
 
     console.log(`✅ Appointment ${checkInType}:`, appointment_id, 'New status:', newStatus);
 
-    // Gửi thông báo cho bác sĩ
     try {
       const doctorUserId = (appointment.doctor_id as any).user_id?._id;
       if (doctorUserId) {
@@ -2182,9 +2180,8 @@ export const checkInAppointment = async (req: AuthRequest, res: Response): Promi
           if (step) {
             step.arrivalConfirmed = true;
             step.arrivalConfirmedAt = new Date();
-            step.arrivalConfirmed = isFuture; // Thêm flag confirm sớm
+            step.arrivalConfirmed = isFuture;
             
-            // Chỉ chuyển status nếu đến ngày hẹn
             if (!isFuture) {
               step.status = 'in-progress';
             }

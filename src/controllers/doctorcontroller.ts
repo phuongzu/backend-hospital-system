@@ -4127,7 +4127,7 @@ export const scheduleFollowUpAppointment = async (req: Request, res: Response) =
       specialty_id: doctor.specialty_id,
       appointment_date: parsedDate,
       time_slot,
-      status: 'confirmed',
+      status: 'scheduled',
       reason: reason || 'Follow-up consultation',
       notes: source_consultation_id
         ? `Follow-up from consultation ${source_consultation_id}`

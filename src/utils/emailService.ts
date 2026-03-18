@@ -482,7 +482,6 @@ class EmailService {
               
               <div class="instructions">
                 <h4>📋 Preparation Instructions</h4>
-                <p>${data.preparation_instructions}</p>
                 <ul>
                   <li>Arrive 15 minutes before your appointment</li>
                   <li>Bring your ID and insurance card</li>
@@ -498,18 +497,7 @@ class EmailService {
                   </div>
                   <div style="font-size: 10px; color: #666; margin-top: 5px;">Show this code at check-in</div>
                 </div>
-              </div>
-              
-              <div style="text-align: center; margin: 30px 0;">
-                <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/appointments/${data.appointment_id}" class="button">
-                  View Appointment Details
-                </a>
-                &nbsp;&nbsp;
-                <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/appointments/${data.appointment_id}/cancel" style="color: #f44336; text-decoration: none;">
-                  Cancel Appointment
-                </a>
-              </div>
-              
+              </div>              
               <div style="background: #fff3cd; padding: 15px; border-radius: 8px; margin: 20px 0;">
                 <h4>⚠️ Cancellation Policy</h4>
                 <p>${data.cancellation_policy}</p>
