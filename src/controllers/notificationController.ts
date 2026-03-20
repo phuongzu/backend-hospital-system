@@ -122,15 +122,9 @@ export const markAllAsRead = async (req: AuthRequest, res: Response): Promise<vo
     console.log('Sample document keys:', sampleNotif ? Object.keys(sampleNotif) : 'No documents found');
     console.log('Sample document:', JSON.stringify(sampleNotif, null, 2));
     console.log('Current userId:', userId.toString());
-    // ============= END DEBUG =============
-
-    // Tìm doctor profile (nếu có)
     const doctor = await Doctor.findOne({ user_id: userId }).lean();
     console.log('Doctor found:', doctor ? doctor._id.toString() : 'null');
-
-    // Đếm trước khi update để verify
     const beforeCount = await Notification.countDocuments({ read: false });    console.log('Total unread notifications in DB (all users):', beforeCount);
-    // Build filter linh hoạt — bao gồm tất cả các field có thể lưu userId
     const orConditions: any[] = [
       { user_id: userId },
       { recipient_id: userId },

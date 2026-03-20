@@ -4,6 +4,7 @@ import { emailService } from './emailService';
 import User from '../models/user';
 import Doctor from '../models/doctor';
 import { Types } from 'mongoose';
+import NotificationDevice from '../models/notificationDevice';
 
 export interface SendNotificationOptions {
   user_id: string;
@@ -171,6 +172,48 @@ class NotificationService {
       console.error('Error initializing notification templates:', error);
     }
   }
+
+  async registerDevice(
+  userId: string,
+  device_token: string,
+  device_type: string,
+  platform?: string,
+  browser?: string
+): Promise<any> {
+  try {
+    const device = await NotificationDevice.findOneAndUpdate(
+      { device_token },
+      {
+        user_id: userId,
+        device_token,
+        device_type,
+        platform: platform || 'unknown',
+        browser: browser || 'unknown',
+        is_active: true,
+        updated_at: new Date(),
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    console.log(`Device registered for user ${userId}: ${device_token}`);
+    return device;
+  } catch (error) {
+    console.error('Error registering device:', error);
+    throw error;
+  }
+}
+
+async unregisterDevice(device_token: string): Promise<void> {
+  try {
+    await NotificationDevice.findOneAndUpdate(
+      { device_token },
+      { is_active: false, updated_at: new Date() }
+    );
+    console.log(`Device unregistered: ${device_token}`);
+  } catch (error) {
+    console.error('Error unregistering device:', error);
+    throw error;
+  }
+}
 
   async sendNotification(options: SendNotificationOptions): Promise<NotificationResponse> {
     try {

@@ -35,6 +35,7 @@ export interface TreatmentStep {
   reExaminationAppointmentId?: mongoose.Types.ObjectId; // ID appointment
   reExaminationNotes?: string;           // Ghi chú tái khám
   arrivalConfirmed?: boolean;            // Đã xác nhận đến khám
+  isPhysicalVisit?: boolean;              
   arrivalConfirmedAt?: Date;           
   _id?: string;
 }
@@ -93,7 +94,7 @@ export interface IMedicalRecord extends Document {
   treatment_plan: TreatmentStep[];
   current_step: number;
   consultation_status: 'scheduled' | 'in-progress' | 'completed' | 'cancelled';
-  
+
   // Medical Status
   status: 'pending' | 'active' | 'resolved' | 'follow_up' | 'chronic';
   priority: 'low' | 'medium' | 'high' | 'urgent';
@@ -116,13 +117,13 @@ export interface IMedicalRecord extends Document {
   recordType: string;
   progress: number;
   isFollowUpRequired: boolean;
-  hasPendingFeedback: boolean;  // NEW: Kiểm tra feedback đang chờ
+  hasPendingFeedback: boolean;
   
   // Instance Methods
   addTreatmentStep(stepData: Omit<TreatmentStep, 'stepNumber' | 'status'>): Promise<this>;
   approveStep(stepNumber: number, doctorNotes?: string): Promise<this>;
   completeStep(stepNumber: number, patientMessage?: string): Promise<this>;
-  submitPatientFeedback(stepNumber: number, feedback: string): Promise<this>;  // NEW
+  submitPatientFeedback(stepNumber: number, feedback: string): Promise<this>;
   doctorDecision(stepNumber: number, decision: 'approve' | 'approve_and_add_step' | 'approve_and_complete', 
                 doctorNotes?: string, newStepData?: Omit<TreatmentStep, 'stepNumber' | 'status'>): Promise<this>;  // NEW
   updateStepStatus(stepNumber: number, status: TreatmentStep['status']): Promise<this>;
