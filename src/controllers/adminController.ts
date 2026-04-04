@@ -1045,7 +1045,6 @@ export const approveDoctorRegistration = async (req: AuthRequest, res: Response)
 
     console.log(`✅ Request status updated to approved`);
 
-    // Send welcome email with temporary password
     try {
       await emailService.sendDoctorApprovalEmail(
         request.email,

@@ -21,7 +21,10 @@ import {
   getAuditLogs,
   recordConsent,
   cleanupExpiredSessions,
-  getLifestyleAdvice
+  getLifestyleAdvice,
+  rescheduleAppointment,
+  cancelAppointmentByChat,
+  getAvailableSlotsForReschedule
 } from '../controllers/aiMedicalController';
 import { protect } from '../middlewares/authmiddleware';
 import { inputSanitizationMiddleware } from '../middlewares/SecurityMiddleware';
@@ -172,6 +175,14 @@ router.post(
   bookAppointmentFromAI
 );
 router.post('/appointments/create', generalRateLimiter, createAppointmentFromSuggestion);
+
+//   PATCH  /appointments/:id/reschedule
+//   DELETE /appointments/:id/cancel-by-chat
+//   GET    /appointments/:id/available-slots
+
+router.patch('/appoinmet/:id/reschedule', rescheduleAppointment);
+router.delete('/appointments/:id/cancel-by-chat', cancelAppointmentByChat);
+router.get('/appointments/:id/available-slots', getAvailableSlotsForReschedule);
 
 // ==================== MEDICAL INFO ROUTES ====================
 

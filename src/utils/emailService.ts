@@ -755,7 +755,7 @@ class EmailService {
               <p>Please review this request in the admin panel and take appropriate action within 24 hours.</p>
               
               <div style="text-align: center; margin: 25px 0;">
-                <a href="${process.env.ADMIN_PANEL_URL || 'http://localhost:3000/admin'}" 
+                <a href="${process.env.ADMIN_PANEL_URL || 'http://localhost:8080/admin-login'}" 
                    class="button">
                   Go to Admin Panel
                 </a>

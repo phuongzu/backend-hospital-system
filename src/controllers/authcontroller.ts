@@ -9,7 +9,7 @@ import Specialty from '../models/specialty';
 import { AuthRequest } from '../middlewares/authmiddleware';
 import { emailService } from '../utils/emailService';
 import UnlockRequest from '../models/unlockRequest';
-import DoctorRegistrationRequest from '../models/doctorRegistrationRequest'; // Import model mới
+import DoctorRegistrationRequest from '../models/doctorRegistrationRequest';
 
 
 // Verification code storage
