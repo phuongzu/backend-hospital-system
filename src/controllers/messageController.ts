@@ -11,7 +11,7 @@ import User from '../models/user';
 export const getMessagesByRecord = async (req: AuthRequest, res: ExpressResponse) => {
   try {
     const { recordId } = req.params;
-    
+
     if (!recordId) {
       return res.status(400).json({
         success: false,
@@ -61,23 +61,23 @@ export const getMessagesByRecord = async (req: AuthRequest, res: ExpressResponse
 ======================= */
 export const sendMessage = async (req: AuthRequest, res: ExpressResponse) => {
   try {
-    const { 
-      receiver_id, 
-      message, 
-      message_type = 'text', 
-      medical_record_id, 
-      appointment_id 
+    const {
+      receiver_id,
+      message,
+      message_type = 'text',
+      medical_record_id,
+      appointment_id
     } = req.body;
 
     if (!receiver_id || !message) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Receiver ID and message are required' 
+      return res.status(400).json({
+        success: false,
+        message: 'Receiver ID and message are required'
       });
     }
 
     const senderId = req.user?._id;
-    
+
     // Ensure consistent sorting
     const participantIds = [senderId, receiver_id].sort((a, b) => {
       const aStr = a.toString();
@@ -148,21 +148,21 @@ export const sendMessage = async (req: AuthRequest, res: ExpressResponse) => {
 
     res.status(201).json({
       success: true,
-      data: { 
+      data: {
         message: newMessage,
         conversationId: conversation._id
       }
     });
   } catch (error: any) {
     console.error('Error sending message:', error);
-    
+
     if (error.code === 11000) {
       return res.status(409).json({
         success: false,
         message: 'Duplicate conversation error'
       });
     }
-    
+
     res.status(500).json({
       success: false,
       message: 'Error sending message',
@@ -251,7 +251,6 @@ export const getConversationMessages = async (req: AuthRequest, res: ExpressResp
 
     const messages = await Message.find({
       conversation_id: conversationId,
-      deleted: { $ne: true }
     })
       .populate('sender_id', 'name avatar role')
       .populate('receiver_id', 'name avatar role')
@@ -408,9 +407,9 @@ export const sendMessageWithMedia = async (req: AuthRequest, res: ExpressRespons
     });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Send media failed' 
+    res.status(500).json({
+      success: false,
+      message: 'Send media failed'
     });
   }
 };
@@ -425,39 +424,39 @@ export const editMessage = async (req: AuthRequest, res: ExpressResponse) => {
     const userId = req.user?._id;
 
     if (!newMessage) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'New message is required' 
+      return res.status(400).json({
+        success: false,
+        message: 'New message is required'
       });
     }
 
     const message = await Message.findById(messageId);
 
     if (!message) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Message not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Message not found'
       });
     }
 
     if (message.sender_id.toString() !== userId.toString()) {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'You can only edit your own message' 
+      return res.status(403).json({
+        success: false,
+        message: 'You can only edit your own message'
       });
     }
 
     if (message.deleted) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Cannot edit deleted message' 
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot edit deleted message'
       });
     }
 
     if (message.message_type !== 'text') {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Only text messages can be edited' 
+      return res.status(400).json({
+        success: false,
+        message: 'Only text messages can be edited'
       });
     }
 
@@ -480,9 +479,9 @@ export const editMessage = async (req: AuthRequest, res: ExpressResponse) => {
     });
   } catch (error) {
     console.error('Edit message error:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Edit message failed' 
+    res.status(500).json({
+      success: false,
+      message: 'Edit message failed'
     });
   }
 };
@@ -499,9 +498,9 @@ export const deleteMessage = async (req: AuthRequest, res: ExpressResponse) => {
     const message = await Message.findById(messageId);
 
     if (!message) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Message not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Message not found'
       });
     }
 
@@ -534,7 +533,7 @@ export const deleteMessage = async (req: AuthRequest, res: ExpressResponse) => {
     }
 
     if (type === 'me') {
-      return res.status(200).json({ 
+      return res.status(200).json({
         success: true,
         message: 'Message deleted for you only'
       });
@@ -546,9 +545,9 @@ export const deleteMessage = async (req: AuthRequest, res: ExpressResponse) => {
     });
   } catch (error) {
     console.error('Delete message error:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Delete message failed' 
+    res.status(500).json({
+      success: false,
+      message: 'Delete message failed'
     });
   }
 };
@@ -577,7 +576,7 @@ export const addReaction = async (req: AuthRequest, res: ExpressResponse) => {
     }
 
     const message = await Message.findById(messageId);
-    
+
     if (!message) {
       return res.status(404).json({
         success: false,
@@ -622,9 +621,9 @@ export const addReaction = async (req: AuthRequest, res: ExpressResponse) => {
       });
       message.reactions_count = message.reactions.length;
     }
-    
+
     const updatedMessage = await message.save();
-    
+
     // Populate before emitting
     await updatedMessage.populate('reactions.user_id', 'name avatar');
 
@@ -698,18 +697,18 @@ export const getMessageReactions = async (req: AuthRequest, res: ExpressResponse
           isReactedByMe: false
         };
       }
-      
+
       acc[reaction.emoji].count++;
       acc[reaction.emoji].users.push({
         _id: reaction.user_id._id,
         name: reaction.user_id.name,
         avatar: reaction.user_id.avatar
       });
-      
+
       if (reaction.user_id._id.toString() === userId.toString()) {
         acc[reaction.emoji].isReactedByMe = true;
       }
-      
+
       return acc;
     }, {});
 
@@ -744,7 +743,7 @@ export const removeMyReactions = async (req: AuthRequest, res: ExpressResponse) 
     const userId = req.user?._id;
 
     const message = await Message.findById(messageId);
-    
+
     if (!message) {
       return res.status(404).json({
         success: false,
@@ -767,7 +766,7 @@ export const removeMyReactions = async (req: AuthRequest, res: ExpressResponse) 
       (r: any) => r.user_id.toString() !== userId.toString()
     );
     message.reactions_count = message.reactions.length;
-    
+
     const updatedMessage = await message.save();
 
     reactionsToRemove.forEach((reaction: any) => {
@@ -805,27 +804,27 @@ export const removeMyReactions = async (req: AuthRequest, res: ExpressResponse) 
 export const searchUserByPhone = async (req: AuthRequest, res: ExpressResponse) => {
   try {
     const { phone } = req.query;
- 
+
     if (!phone || typeof phone !== 'string') {
       return res.status(400).json({
         success: false,
         message: 'Phone number is required',
       });
     }
- 
+
     // Normalize input: strip whitespace/dashes/dots, convert +84 → 0
     const normalized = phone
       .trim()
       .replace(/[\s\-\.]/g, '')
       .replace(/^\+84/, '0');
- 
+
     if (normalized.length < 9) {
       return res.status(400).json({
         success: false,
         message: 'Phone number too short',
       });
     }
- 
+
     // Accept both stored formats: "0912345678" and "+84912345678"
     const withZero = normalized.startsWith('0')
       ? normalized
@@ -833,7 +832,7 @@ export const searchUserByPhone = async (req: AuthRequest, res: ExpressResponse) 
     const with84 = normalized.startsWith('0')
       ? `+84${normalized.slice(1)}`
       : `+84${normalized}`;
- 
+
     // Query directly on the `phoneNumber` field (IUser schema field name)
     const user = await User.findOne({
       phoneNumber: { $in: [withZero, with84] }, // exact match, both variants
@@ -841,14 +840,14 @@ export const searchUserByPhone = async (req: AuthRequest, res: ExpressResponse) 
       isActive: true,                           // skip deactivated accounts
       _id: { $ne: req.user?._id },              // exclude the caller themselves
     }).select('_id name avatar phoneNumber role');
- 
+
     if (!user) {
       return res.status(404).json({
         success: false,
         message: 'No patient found with this phone number',
       });
     }
- 
+
     return res.status(200).json({
       success: true,
       data: user,
@@ -861,22 +860,83 @@ export const searchUserByPhone = async (req: AuthRequest, res: ExpressResponse) 
     });
   }
 };
- 
+
+
+export const searchDoctorByPhone = async (req: AuthRequest, res: ExpressResponse) => {
+  try {
+    const { phone } = req.query;
+
+    if (!phone || typeof phone !== 'string') {
+      return res.status(400).json({
+        success: false,
+        message: 'Phone number is required',
+      });
+    }
+
+    // Normalize input: strip whitespace/dashes/dots, convert +84 → 0
+    const normalized = phone
+      .trim()
+      .replace(/[\s\-\.]/g, '')
+      .replace(/^\+84/, '0');
+
+    if (normalized.length < 9) {
+      return res.status(400).json({
+        success: false,
+        message: 'Phone number too short',
+      });
+    }
+
+    // Accept both stored formats: "0912345678" and "+84912345678"
+    const withZero = normalized.startsWith('0')
+      ? normalized
+      : `0${normalized}`;
+    const with84 = normalized.startsWith('0')
+      ? `+84${normalized.slice(1)}`
+      : `+84${normalized}`;
+
+    // Query directly on the `phoneNumber` field (IUser schema field name)
+    const user = await User.findOne({
+      phoneNumber: { $in: [withZero, with84] }, // exact match, both variants
+      role: 'doctor',                          // only doctors
+      isActive: true,                           // skip deactivated accounts
+      _id: { $ne: req.user?._id },              // exclude the caller themselves
+    }).select('_id name avatar phoneNumber role');
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'No doctor found with this phone number',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: user,
+    });
+  } catch (error) {
+    console.error('Search doctor by phone error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error searching for doctor',
+    });
+  }
+};
+
 export const findOrCreateConversation = async (req: AuthRequest, res: ExpressResponse) => {
   try {
     const { participantId } = req.body;
     const userId = req.user?._id;
- 
+
     if (!participantId) {
       return res.status(400).json({
         success: false,
         message: 'participantId is required',
       });
     }
- 
+
     // Consistent sort to prevent duplicate conversations
     const participantIds = [userId.toString(), participantId.toString()].sort();
- 
+
     const conversation = await Conversation.findOneAndUpdate(
       { participant_ids: participantIds },
       {
@@ -895,12 +955,12 @@ export const findOrCreateConversation = async (req: AuthRequest, res: ExpressRes
         path: 'last_message',
         populate: { path: 'sender_id receiver_id', select: 'name avatar role' },
       });
- 
+
     // Format response same as getConversations
     const otherParticipant = (conversation.participant_ids as any[]).find(
       (p: any) => p._id.toString() !== userId.toString()
     );
- 
+
     return res.status(200).json({
       success: true,
       data: {

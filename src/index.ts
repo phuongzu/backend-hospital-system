@@ -48,8 +48,8 @@ const server = http.createServer(app);
 // Initialize Socket.io với cấu hình chi tiết
 const io = new SocketIOServer(server, {
   cors: {
-    origin: process.env.NODE_ENV === 'development' 
-      ? ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:8081'] 
+    origin: process.env.NODE_ENV === 'development'
+      ? ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:8081']
       : (process.env.ALLOWED_ORIGINS?.split(',') || []),
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     credentials: true
@@ -68,10 +68,10 @@ const socketUserMap = new Map<string, string>(); // socketId -> userId
    SOCKET.IO AUTHENTICATION MIDDLEWARE
 ===================================================== */
 const socketAuthMiddleware = (socket: Socket, next: (err?: Error) => void) => {
-  let token : string | undefined;
+  let token: string | undefined;
   try {
     const token = socket.handshake.auth.token || socket.handshake.headers.authorization?.replace('Bearer ', '');
-    
+
     logger.debug('🔐 Socket auth attempt:', {
       hasToken: !!token,
       tokenLength: token?.length,
@@ -79,7 +79,7 @@ const socketAuthMiddleware = (socket: Socket, next: (err?: Error) => void) => {
       auth: socket.handshake.auth,
       headers: socket.handshake.headers
     });
-    
+
     if (!token) {
       return next(new Error('Authentication error: No token provided'));
     }
@@ -87,17 +87,17 @@ const socketAuthMiddleware = (socket: Socket, next: (err?: Error) => void) => {
     // Verify token
     const decoded = jwt.verify(token, process.env.JWT_SECRET!) as any;
     logger.debug('🔐 Decoded token:', decoded);
-        const userId = decoded.userId || decoded.id;
+    const userId = decoded.userId || decoded.id;
     if (!userId) {
       logger.error('❌ No userId or id found in token:', decoded);
       return next(new Error('Authentication error: No user ID in token'));
     }
-    
+
     // Attach user info to socket
     socket.data.userId = userId;
     socket.data.userRole = decoded.role || 'user';
     socket.data.userName = decoded.name || decoded.email || 'User';
-    
+
     logger.info(` Socket authenticated: ${socket.data.userName} (${userId})`);
     next();
   } catch (error: any) {
@@ -117,7 +117,7 @@ io.on('connection', (socket: Socket) => {
   const userId = socket.data.userId;
   const userName = socket.data.userName;
   const userRole = socket.data.userRole;
-  
+
   logger.info(`🟢 User connected: ${userName} (${userId}) [${userRole}] - Socket: ${socket.id}`);
 
   // Store user-socket mapping
@@ -126,14 +126,14 @@ io.on('connection', (socket: Socket) => {
 
   // Join user's personal room
   socket.join(`user:${userId}`);
-  
+
   // Join all conversations that user is part of
   socket.join(`conversations:${userId}`);
 
   /* =====================================================
      CHAT-RELATED EVENTS
   ===================================================== */
-  
+
   // Send message event
   socket.on('send_message', async (data, callback) => {
     try {
@@ -215,9 +215,9 @@ io.on('connection', (socket: Socket) => {
 
       // Emit to sender (confirmation)
       callback({
-      success: true,
-      message: messageData
-    });
+        success: true,
+        message: messageData
+      });
 
       // Emit to receiver if online
       const receiverSocketId = userSocketMap.get(receiverId);
@@ -228,7 +228,7 @@ io.on('connection', (socket: Socket) => {
           senderId: userId,
           senderName: userName
         });
-        
+
         // Also emit to receiver's conversation room
         io.to(`user:${receiverId}`).emit('new_message', messageData);
       }
@@ -243,7 +243,7 @@ io.on('connection', (socket: Socket) => {
 
       // Emit to sender's conversation list
       io.to(`user:${userId}`).emit('conversation_updated', conversationUpdate);
-      
+
       // Emit to receiver's conversation list with unread count
       if (receiverSocketId) {
         io.to(`user:${receiverId}`).emit('conversation_updated', {
@@ -255,12 +255,12 @@ io.on('connection', (socket: Socket) => {
       logger.info(`✅ Message sent successfully from ${userId} to ${receiverId}`);
 
     } catch (error: any) {
-    if (callback) {
-      callback({
-        success: false,
-        error: 'Failed to send message'
-      });
-    }
+      if (callback) {
+        callback({
+          success: false,
+          error: 'Failed to send message'
+        });
+      }
     }
   });
 
@@ -268,7 +268,7 @@ io.on('connection', (socket: Socket) => {
   socket.on('typing', (data) => {
     try {
       const { conversationId, receiverId } = data;
-      
+
       if (!conversationId || !receiverId) return;
 
       const receiverSocketId = userSocketMap.get(receiverId);
@@ -293,7 +293,7 @@ io.on('connection', (socket: Socket) => {
   socket.on('stop_typing', (data) => {
     try {
       const { conversationId, receiverId } = data;
-      
+
       if (!conversationId || !receiverId) return;
 
       const receiverSocketId = userSocketMap.get(receiverId);
@@ -336,8 +336,8 @@ io.on('connection', (socket: Socket) => {
 
       // Notify other participant that messages were read
       const otherParticipant = conversation.participant_ids.find(
-  (p: any) => p.toString() !== userId.toString()
-);
+        (p: any) => p.toString() !== userId.toString()
+      );
       if (otherParticipant) {
         const otherSocketId = userSocketMap.get(otherParticipant.toString());
         if (otherSocketId) {
@@ -391,11 +391,11 @@ io.on('connection', (socket: Socket) => {
   /* =====================================================
      NOTIFICATION EVENTS
   ===================================================== */
-  
+
   socket.on('notification:send', (data) => {
     try {
       const { userId: targetUserId, notification } = data;
-      
+
       if (targetUserId) {
         // Send to specific user
         const targetSocketId = userSocketMap.get(targetUserId);
@@ -417,14 +417,14 @@ io.on('connection', (socket: Socket) => {
   /* =====================================================
      DISCONNECTION HANDLER
   ===================================================== */
-  
+
   socket.on('disconnect', (reason) => {
     logger.info(`🔴 User disconnected: ${userName} (${userId}) - Reason: ${reason}`);
-    
+
     // Clean up mappings
     userSocketMap.delete(userId);
     socketUserMap.delete(socket.id);
-    
+
     // Broadcast user offline status to relevant users
     // (You might want to implement this based on your requirements)
   });
@@ -558,7 +558,7 @@ app.use(cors({
       callback(null, true);
       return;
     }
-    
+
     // Production: strict CORS policy
     const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000').split(',').map(o => o.trim());
     if (allowedOrigins.includes(origin)) {
@@ -571,7 +571,7 @@ app.use(cors({
   credentials: true,
   optionsSuccessStatus: 200,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With','Cache-Control'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Cache-Control'],
   maxAge: 600 // Pre-flight response cache time in seconds
 }));
 
@@ -591,7 +591,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 const AVATAR_PUBLIC_ROUTE = '/uploads/avatars';
 const AVATAR_DIR = path.join(__dirname, '..', 'src', 'uploads', 'avatars');
 
-  
+
 app.use('/api/chatting/messages', (req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
@@ -612,13 +612,13 @@ app.use(AVATAR_PUBLIC_ROUTE, (req, res, next) => {
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   res.setHeader('Access-Control-Max-Age', '86400'); // 24 hours
-  
+
   // Cache control
   if (req.path.match(/\.(jpg|jpeg|png|gif|webp)$/)) {
     res.setHeader('Cache-Control', 'public, max-age=31536000'); // 1 year
     res.setHeader('Expires', new Date(Date.now() + 31536000000).toUTCString());
   }
-  
+
   next();
 }, express.static(AVATAR_DIR, {
   setHeaders: (res, filePath) => {
@@ -788,22 +788,22 @@ app.use((err: any, req: Request, res: Response, next: NextFunction) => {
 app.get('/api/avatar/:filename', (req: Request, res: Response) => {
   const { filename } = req.params;
   try {
-        if (!filename || filename.includes('..') || filename.includes('/')) {
+    if (!filename || filename.includes('..') || filename.includes('/')) {
       return res.status(400).json({
         success: false,
         message: 'Invalid filename'
       });
     }
-    
+
     const filePath = path.join(AVATAR_DIR, filename);
-    
+
     logger.debug('🔍 Serving avatar:', {
       requestedFilename: filename,
       filePath: filePath,
       exists: fs.existsSync(filePath),
       serverUrl: SERVER_URL
     });
-    
+
     if (!fs.existsSync(filePath)) {
       const defaultAvatarPath = path.join(__dirname, '..', 'public', 'default-avatar.jpg');
       if (fs.existsSync(defaultAvatarPath)) {
@@ -811,7 +811,7 @@ app.get('/api/avatar/:filename', (req: Request, res: Response) => {
         res.setHeader('Cache-Control', 'public, max-age=3600');
         return res.sendFile(defaultAvatarPath);
       }
-      
+
       return res.status(404).json({
         success: false,
         message: 'Avatar not found',
@@ -819,10 +819,10 @@ app.get('/api/avatar/:filename', (req: Request, res: Response) => {
         requestedFile: filename
       });
     }
-    
+
     const ext = path.extname(filename).toLowerCase();
     let contentType = 'image/jpeg';
-    
+
     switch (ext) {
       case '.png':
         contentType = 'image/png';
@@ -839,16 +839,16 @@ app.get('/api/avatar/:filename', (req: Request, res: Response) => {
       default:
         contentType = 'image/jpeg';
     }
-    
+
     // Set headers
     res.setHeader('Content-Type', contentType);
     res.setHeader('Cache-Control', 'public, max-age=31536000');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('X-Server-URL', SERVER_URL);
-    
+
     // Send file
     res.sendFile(filePath);
-    
+
   } catch (error: any) {
     logger.error('❌ Error serving avatar:', {
       filename,
@@ -922,11 +922,11 @@ const startServer = async () => {
 // Handle graceful shutdown
 const gracefulShutdown = async (signal: string) => {
   logger.info(`✋ ${signal} received, starting graceful shutdown...`);
-  
+
   // Disconnect all sockets
   io.disconnectSockets(true);
   logger.info('🔌 All socket connections closed');
-  
+
   // Close database connection
   server.close(async () => {
     logger.info('🛑 HTTP server closed');

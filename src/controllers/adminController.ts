@@ -204,7 +204,6 @@ export const getAllDoctors = async (req: AuthRequest, res: Response): Promise<vo
 
     const query: any = { role: 'doctor' };
     
-    // Search by name or email
     if (search) {
       query.$or = [
         { name: { $regex: search, $options: 'i' } },
@@ -212,7 +211,6 @@ export const getAllDoctors = async (req: AuthRequest, res: Response): Promise<vo
       ];
     }
 
-    // Filter by status
     if (status === 'locked') {
       query.isLocked = true;
     } else if (status === 'active') {
@@ -220,7 +218,6 @@ export const getAllDoctors = async (req: AuthRequest, res: Response): Promise<vo
       query.isActive = true;
     }
 
-    // Lấy tất cả doctors không phân trang
     const doctors = await User.find(query)
       .select('name email phoneNumber isLocked lockedAt lastLogin createdAt isActive status')
       .sort({ createdAt: -1 });

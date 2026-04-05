@@ -20,6 +20,7 @@ import {
   removeMyReactions,
   searchUserByPhone,
   findOrCreateConversation,
+  searchDoctorByPhone
 } from '../controllers/messageController';
 
 
@@ -45,7 +46,7 @@ const storage = multer.diskStorage({
       .replace(ext, '')
       .replace(/[^a-zA-Z0-9]/g, '-')
       .substring(0, 50);
-    
+
     cb(null, `${timestamp}-${uniqueId}-${sanitizedName}${ext}`);
   }
 });
@@ -101,6 +102,7 @@ router.get('/:messageId/reactions', protect, getMessageReactions);
 router.delete('/:messageId/reactions/me', protect, removeMyReactions);
 router.get('/search-user', searchUserByPhone);
 router.post('/conversations/find-or-create', findOrCreateConversation);
+router.get('/search-doctor', searchDoctorByPhone);
 // ✅ File upload with error handling
 router.post(
   '/send-with-media',

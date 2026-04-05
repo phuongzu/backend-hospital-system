@@ -15,10 +15,10 @@ export interface IMessage extends Document {
   edited: boolean;
   edited_at?: Date;
 
-  media_url?: string;   
-  media_name?: string;   
-  media_size?: number;   
-  media_mime?: string;     
+  media_url?: string;
+  media_name?: string;
+  media_size?: number;
+  media_mime?: string;
 
   medical_record_id?: mongoose.Types.ObjectId;
   appointment_id?: mongoose.Types.ObjectId;
@@ -32,7 +32,8 @@ export interface IMessage extends Document {
   deleted: boolean;
   deleted_at?: Date;
   deleted_by?: mongoose.Types.ObjectId;
-  
+  deleted_for: mongoose.Types.ObjectId[];
+
   // ✅ THÊM PHẦN NÀY CHO REACTION
   reactions: IReaction[];
   reactions_count: number;
@@ -122,7 +123,11 @@ const messageSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
   },
-  
+  deleted_for: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }],
+
   // ✅ THÊM PHẦN NÀY CHO REACTION
   reactions: [reactionSchema],
   reactions_count: {

@@ -93,7 +93,7 @@ class SocketService {
       }
 
       socket.data.user = {
-      _id: (user._id as Types.ObjectId).toString(),
+        _id: (user._id as Types.ObjectId).toString(),
         role: user.role,
       };
 
@@ -133,22 +133,14 @@ class SocketService {
     // Emit online status to others
     this.broadcastUserOnlineStatus(userId, true);
 
-    /* ==========================================
-       CHAT EVENTS - NO MESSAGE CREATION HERE!
-       Messages are created via REST API only
-    ========================================== */
 
-    /**
-     * Join a conversation room
-     * Client should join conversation room when opening a chat
-     */
     socket.on('join_conversation', (conversationId: string) => {
       socket.join(`conversation:${conversationId}`);
       console.log(`💬 User ${userId} joined conversation: ${conversationId}`);
-      
-      socket.emit('conversation_joined', { 
+
+      socket.emit('conversation_joined', {
         conversationId,
-        success: true 
+        success: true
       });
     });
 
@@ -159,104 +151,104 @@ class SocketService {
     socket.on('leave_conversation', (conversationId: string) => {
       socket.leave(`conversation:${conversationId}`);
       console.log(`💬 User ${userId} left conversation: ${conversationId}`);
-      
+
       // Stop typing when leaving
       this.handleUserStopTyping(conversationId, userId);
     });
 
     socket.on('send_message', (data: any) => {
-  this.handleSendMessage(socket, data);
-});
-
-
-socket.on('react_to_message', async (data: {
-  messageId: string;
-  reaction: string;
-  conversationId: string;
-}) => {
-  try {
-    const { messageId, reaction, conversationId } = data;
-    
-    // Validate user is in conversation
-    const conversation = await Conversation.findOne({
-      _id: conversationId,
-      participant_ids: userId
+      this.handleSendMessage(socket, data);
     });
 
-    if (!conversation) {
-      socket.emit('reaction_error', {
-        messageId,
-        error: 'Not in conversation'
-      });
-      return;
-    }
 
-    // Check if user already reacted with this emoji
-    const message = await Message.findById(messageId);
-    if (!message) {
-      socket.emit('reaction_error', {
-        messageId,
-        error: 'Message not found'
-      });
-      return;
-    }
+    socket.on('react_to_message', async (data: {
+      messageId: string;
+      reaction: string;
+      conversationId: string;
+    }) => {
+      try {
+        const { messageId, reaction, conversationId } = data;
 
-    const existingReactionIndex = message.reactions.findIndex(
+        // Validate user is in conversation
+        const conversation = await Conversation.findOne({
+          _id: conversationId,
+          participant_ids: userId
+        });
+
+        if (!conversation) {
+          socket.emit('reaction_error', {
+            messageId,
+            error: 'Not in conversation'
+          });
+          return;
+        }
+
+        // Check if user already reacted with this emoji
+        const message = await Message.findById(messageId);
+        if (!message) {
+          socket.emit('reaction_error', {
+            messageId,
+            error: 'Message not found'
+          });
+          return;
+        }
+
+        const existingReactionIndex = message.reactions.findIndex(
           (r: { user_id: Types.ObjectId; emoji: string }) =>
             r.user_id.toString() === userId.toString() && r.emoji === reaction
         );
 
-    if (existingReactionIndex !== -1) {
-      // Remove reaction
-      message.reactions.splice(existingReactionIndex, 1);
-    } else {
-      // Add reaction
-      message.reactions.push({
-        user_id: userId,
-        emoji: reaction,
-        createdAt: new Date()
-      });
-    }
+        if (existingReactionIndex !== -1) {
+          // Remove reaction
+          message.reactions.splice(existingReactionIndex, 1);
+        } else {
+          // Add reaction
+          message.reactions.push({
+            user_id: userId,
+            emoji: reaction,
+            createdAt: new Date()
+          });
+        }
 
-    message.reactions_count = message.reactions.length;
-    await message.save();
+        message.reactions_count = message.reactions.length;
+        await message.save();
 
-    // Populate reactions with user data
-    await message.populate('reactions.user_id', 'name avatar role');
+        // Populate reactions with user data
+        await message.populate('reactions.user_id', 'name avatar role');
 
-    // Emit to conversation with full message object to prevent duplicates
-    this.io?.to(`conversation:${conversationId}`).emit(
-      existingReactionIndex !== -1 ? 'reaction_removed' : 'reaction_added',
-      {
-        messageId,
-        conversationId,
-        userId,
-        reaction,
-        message: message.toObject(),
-        timestamp: new Date()
+        // Emit to conversation with full message object to prevent duplicates
+        this.io?.to(`conversation:${conversationId}`).emit(
+          existingReactionIndex !== -1 ? 'reaction_removed' : 'reaction_added',
+          {
+            messageId,
+            conversationId,
+            userId,
+            reaction,
+            message: message.toObject(),
+            timestamp: new Date()
+          }
+        );
+
+      } catch (error) {
+        console.error('Error handling reaction:', error);
+        socket.emit('reaction_error', {
+          error: 'Failed to process reaction'
+        });
       }
-    );
-
-  } catch (error) {
-    console.error('Error handling reaction:', error);
-    socket.emit('reaction_error', {
-      error: 'Failed to process reaction'
     });
-  }
-});
 
     /**
      * Typing indicator - user is typing
      */
     socket.on('typing_start', (data: { conversationId: string }) => {
       const { conversationId } = data;
-      
+
       if (!this.typingUsers.has(conversationId)) {
         this.typingUsers.set(conversationId, new Set());
       }
-      
+
       this.typingUsers.get(conversationId)!.add(userId);
-      
+
       // Broadcast to others in conversation (not to sender)
       socket.to(`conversation:${conversationId}`).emit('user_typing', {
         conversationId,
@@ -279,7 +271,7 @@ socket.on('react_to_message', async (data: {
      */
     socket.on('messages_read', (data: { conversationId: string }) => {
       const { conversationId } = data;
-      
+
       // Notify other participants that messages were read
       socket.to(`conversation:${conversationId}`).emit('messages_read_by_user', {
         conversationId,
@@ -339,7 +331,7 @@ socket.on('react_to_message', async (data: {
       if (sockets.length === 0) {
         this.userSockets.delete(userId);
         this.broadcastUserOnlineStatus(userId, false);
-        
+
         // Clear typing indicators for this user
         this.clearAllTypingForUser(userId);
       }
@@ -354,7 +346,7 @@ socket.on('react_to_message', async (data: {
     const typingSet = this.typingUsers.get(conversationId);
     if (typingSet) {
       typingSet.delete(userId);
-      
+
       // Broadcast to conversation
       this.io?.to(`conversation:${conversationId}`).emit('user_typing', {
         conversationId,
@@ -381,7 +373,7 @@ socket.on('react_to_message', async (data: {
 
   private broadcastUserOnlineStatus(userId: string, isOnline: boolean): void {
     if (!this.io) return;
-    
+
     this.io.emit('user_status_changed', {
       userId,
       isOnline,
@@ -390,85 +382,85 @@ socket.on('react_to_message', async (data: {
   }
 
   private async handleSendMessage(socket: Socket, data: any): Promise<void> {
-  try {
-    const userId = socket.data.user._id;
-    const { 
-      conversationId, 
-      receiverId, 
-      message, 
-      messageType = 'text' 
-    } = data;
+    try {
+      const userId = socket.data.user._id;
+      const {
+        conversationId,
+        receiverId,
+        message,
+        messageType = 'text'
+      } = data;
 
-    // Validate required fields
-    if (!conversationId || !receiverId || !message) {
-      socket.emit('message_error', {
-        error: 'Missing required fields',
-        data
+      // Validate required fields
+      if (!conversationId || !receiverId || !message) {
+        socket.emit('message_error', {
+          error: 'Missing required fields',
+          data
+        });
+        return;
+      }
+
+      // Import models (or pass via dependency injection)
+      const Message = require('../models/message').default;
+      const Conversation = require('../models/conversation').default;
+
+      // Find conversation
+      const conversation = await Conversation.findOne({
+        _id: conversationId,
+        participant_ids: userId
       });
-      return;
-    }
 
-    // Import models (or pass via dependency injection)
-    const Message = require('../models/message').default;
-    const Conversation = require('../models/conversation').default;
+      if (!conversation) {
+        socket.emit('message_error', {
+          error: 'Conversation not found or access denied',
+          conversationId
+        });
+        return;
+      }
 
-    // Find conversation
-    const conversation = await Conversation.findOne({
-      _id: conversationId,
-      participant_ids: userId
-    });
-
-    if (!conversation) {
-      socket.emit('message_error', {
-        error: 'Conversation not found or access denied',
-        conversationId
+      // Create message
+      const newMessage = new Message({
+        sender_id: userId,
+        receiver_id: receiverId,
+        message,
+        message_type: messageType,
+        conversation_id: conversationId,
+        timestamp: new Date(),
+        read: false
       });
-      return;
+
+      await newMessage.save();
+
+      // Update conversation
+      conversation.last_message = newMessage._id;
+      conversation.last_message_at = new Date();
+      if (receiverId !== userId.toString()) {
+        conversation.unread_count += 1;
+      }
+      await conversation.save();
+
+      // Populate sender info
+      await newMessage.populate('sender_id', 'name avatar role');
+      await newMessage.populate('receiver_id', 'name avatar role');
+
+      // Emit to conversation participants
+      this.emitNewMessage(conversationId, newMessage);
+
+      // Send success back to sender
+      socket.emit('message_sent_success', {
+        messageId: newMessage._id,
+        conversationId,
+        timestamp: new Date()
+      });
+
+    } catch (error: any) {
+      console.error('Error handling send_message:', error);
+      socket.emit('message_error', {
+        error: 'Failed to send message',
+        message: error.message
+      });
     }
-
-    // Create message
-    const newMessage = new Message({
-      sender_id: userId,
-      receiver_id: receiverId,
-      message,
-      message_type: messageType,
-      conversation_id: conversationId,
-      timestamp: new Date(),
-      read: false
-    });
-
-    await newMessage.save();
-
-    // Update conversation
-    conversation.last_message = newMessage._id;
-    conversation.last_message_at = new Date();
-    if (receiverId !== userId.toString()) {
-      conversation.unread_count += 1;
-    }
-    await conversation.save();
-
-    // Populate sender info
-    await newMessage.populate('sender_id', 'name avatar role');
-    await newMessage.populate('receiver_id', 'name avatar role');
-
-    // Emit to conversation participants
-    this.emitNewMessage(conversationId, newMessage);
-
-    // Send success back to sender
-    socket.emit('message_sent_success', {
-      messageId: newMessage._id,
-      conversationId,
-      timestamp: new Date()
-    });
-
-  } catch (error: any) {
-    console.error('Error handling send_message:', error);
-    socket.emit('message_error', {
-      error: 'Failed to send message',
-      message: error.message
-    });
   }
-}
 
 
   /* =======================
@@ -484,7 +476,7 @@ socket.on('react_to_message', async (data: {
     if (!this.io) return;
 
     console.log(`📤 Emitting new_message to conversation:${conversationId}`);
-    
+
     this.io.to(`conversation:${conversationId}`).emit('new_message', {
       ...message,
       conversationId,
