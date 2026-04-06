@@ -204,10 +204,27 @@ export const getConversations = async (req: AuthRequest, res: ExpressResponse) =
           read: false
         });
 
+        let lastMessage = conversation.last_message;
+        if (lastMessage) {
+          const lastMsgObj = lastMessage.toObject ? lastMessage.toObject() : lastMessage;
+          const isDeletedForMe = lastMsgObj.deleted_for?.some(
+            (id: any) => id.toString() === userId.toString()
+          );
+
+          if (isDeletedForMe && !lastMsgObj.deleted) {
+            lastMessage = {
+              ...lastMsgObj,
+              message: 'This message was deleted',
+              message_type: 'text',
+              deleted_for_me: true,
+            } as any;
+          }
+        }
+
         return {
           _id: conversation._id,
           participant: otherParticipant,
-          last_message: conversation.last_message,
+          last_message: lastMessage,
           last_message_at: conversation.last_message_at,
           unread_count: unreadCount,
           medical_record_id: conversation.medical_record_id,
@@ -249,13 +266,39 @@ export const getConversationMessages = async (req: AuthRequest, res: ExpressResp
       });
     }
 
+    // THAY ĐỔI: Lấy cả messages đã bị delete_for, nhưng transform nội dung
     const messages = await Message.find({
       conversation_id: conversationId,
+      // BỎ filter deleted_for ở đây
     })
       .populate('sender_id', 'name avatar role')
       .populate('receiver_id', 'name avatar role')
       .sort({ timestamp: 1 });
 
+    // Transform messages: nếu user nằm trong deleted_for, thay đổi nội dung
+    const transformedMessages = messages.map(msg => {
+      const msgObj = msg.toObject();
+      const isDeletedForMe = msgObj.deleted_for?.some(
+        (id: any) => id.toString() === userId?.toString()
+      );
+
+      if (isDeletedForMe && !msgObj.deleted) {
+        // User đã xóa message này cho mình, hiển thị thông báo
+        return {
+          ...msgObj,
+          deleted_for_me: true, // Thêm flag mới
+          message: 'This message was deleted',
+          message_type: 'text',
+          media_url: undefined,
+          media_name: undefined,
+          reactions: [], // Xóa reactions khi đã xóa
+        };
+      }
+
+      return msgObj;
+    });
+
+    // Mark as read (giữ nguyên)
     await Message.updateMany(
       {
         conversation_id: conversationId,
@@ -274,7 +317,7 @@ export const getConversationMessages = async (req: AuthRequest, res: ExpressResp
 
     res.status(200).json({
       success: true,
-      data: messages
+      data: transformedMessages
     });
   } catch (error) {
     console.error('Error fetching conversation messages:', error);
@@ -533,9 +576,16 @@ export const deleteMessage = async (req: AuthRequest, res: ExpressResponse) => {
     }
 
     if (type === 'me') {
+      const updatedMessage = await Message.findByIdAndUpdate(
+        messageId,
+        { $addToSet: { deleted_for: userId } },
+        { new: true }
+      );
+
       return res.status(200).json({
         success: true,
-        message: 'Message deleted for you only'
+        message: 'Message deleted for you only',
+        data: updatedMessage
       });
     }
 
@@ -873,11 +923,9 @@ export const searchDoctorByPhone = async (req: AuthRequest, res: ExpressResponse
       });
     }
 
-    // Normalize input: strip whitespace/dashes/dots, convert +84 → 0
     const normalized = phone
       .trim()
-      .replace(/[\s\-\.]/g, '')
-      .replace(/^\+84/, '0');
+      .replace(/[\s\-\.]/g, '');
 
     if (normalized.length < 9) {
       return res.status(400).json({
@@ -886,20 +934,11 @@ export const searchDoctorByPhone = async (req: AuthRequest, res: ExpressResponse
       });
     }
 
-    // Accept both stored formats: "0912345678" and "+84912345678"
-    const withZero = normalized.startsWith('0')
-      ? normalized
-      : `0${normalized}`;
-    const with84 = normalized.startsWith('0')
-      ? `+84${normalized.slice(1)}`
-      : `+84${normalized}`;
-
-    // Query directly on the `phoneNumber` field (IUser schema field name)
     const user = await User.findOne({
-      phoneNumber: { $in: [withZero, with84] }, // exact match, both variants
-      role: 'doctor',                          // only doctors
-      isActive: true,                           // skip deactivated accounts
-      _id: { $ne: req.user?._id },              // exclude the caller themselves
+      phoneNumber: normalized,
+      role: 'doctor',
+      isActive: true,
+      _id: { $ne: req.user?._id }
     }).select('_id name avatar phoneNumber role');
 
     if (!user) {

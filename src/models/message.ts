@@ -125,7 +125,8 @@ const messageSchema = new mongoose.Schema({
   },
   deleted_for: [{
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
+    ref: 'User',
+    default: []
   }],
 
   // ✅ THÊM PHẦN NÀY CHO REACTION

@@ -160,6 +160,10 @@ class SocketService {
       this.handleSendMessage(socket, data);
     });
 
+    socket.on('delete_message', (data: any, ack?: Function) => {
+      this.handleDeleteMessage(socket, data, ack);
+    });
+
 
     socket.on('react_to_message', async (data: {
       messageId: string;
@@ -381,6 +385,8 @@ class SocketService {
     });
   }
 
+
+
   private async handleSendMessage(socket: Socket, data: any): Promise<void> {
     try {
       const userId = socket.data.user._id;
@@ -462,6 +468,88 @@ class SocketService {
     }
   }
 
+  /* =======================
+     DELETE MESSAGE HANDLER
+  ======================= */
+  private async handleDeleteMessage(
+    socket: Socket,
+    data: any,
+    ack?: Function
+  ): Promise<void> {
+    try {
+      const userId = socket.data.user._id;
+      const { messageId, conversationId, type } = data;
+
+      if (!messageId || !conversationId || !type) {
+        ack?.({ success: false, error: 'Missing required fields' });  // ✅
+        socket.emit('delete_message_error', { error: 'Missing required fields', messageId });
+        return;
+      }
+
+      const Message = require('../models/message').default;
+      const message = await Message.findById(messageId);
+
+      if (!message) {
+        ack?.({ success: false, error: 'Message not found' });  // ✅
+        socket.emit('delete_message_error', { error: 'Message not found', messageId });
+        return;
+      }
+
+      if (type === 'everyone' && message.sender_id.toString() !== userId) {
+        ack?.({ success: false, error: 'Only sender can delete for everyone' });  // ✅
+        socket.emit('delete_message_error', {
+          error: 'Only sender can delete for everyone',
+          messageId
+        });
+        return;
+      }
+
+      if (type === 'everyone') {
+        message.deleted = true;
+        message.deleted_at = new Date();
+        message.deleted_by = userId;
+        message.message = 'This message was deleted';
+        await message.save();
+
+        // Broadcast tới tất cả participants
+        this.emitMessageDeleted(conversationId, message);
+
+        // ✅ Gọi ack để client resolve Promise
+        ack?.({ success: true, messageId, conversationId, type });
+
+      } else {
+        // type === 'me'
+        await Message.findByIdAndUpdate(
+          messageId,
+          { $addToSet: { deleted_for: userId } },
+          { new: true }
+        );
+
+        // Chỉ emit cho socket của người gọi
+        socket.emit('message_deleted', {
+          messageId,
+          conversationId,
+          type: 'me',
+          message: { _id: messageId },
+          success: true
+        });
+
+        // ✅ Gọi ack để client resolve Promise
+        ack?.({ success: true, messageId, conversationId, type });
+      }
+
+      socket.emit('delete_message_success', { messageId, conversationId, type });
+
+    } catch (error: any) {
+      console.error('Error handling delete_message:', error);
+      ack?.({ success: false, error: 'Failed to delete message' });  // ✅
+      socket.emit('delete_message_error', {
+        error: 'Failed to delete message',
+        message: error.message,
+        messageId: data.messageId
+      });
+    }
+  }
 
   /* =======================
      MESSAGE EMIT METHODS
@@ -513,6 +601,7 @@ class SocketService {
       messageId: message._id,
       message,
       conversationId,
+      type: 'everyone',
       timestamp: new Date(),
     });
   }
