@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import mongoose,  { Types } from 'mongoose';
+import mongoose, { Types } from 'mongoose';
 import Mongoose from 'mongoose';
 import Doctor from '../models/doctor';
 import Appointment from '../models/appointment';
@@ -28,21 +28,21 @@ const storage = multer.diskStorage({
     const userId = (req as any).user?._id;
     const timestamp = Date.now();
     const originalExt = path.extname(file.originalname);
-    
+
     const simpleFilename = `avatar_${userId}_${timestamp}${originalExt}`;
     cb(null, simpleFilename);
   }
 });
 
 
-const upload = multer({ 
+const upload = multer({
   storage,
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
   fileFilter: (req, file, cb) => {
     const allowedTypes = /jpeg|jpg|png|gif|webp/;
     const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
     const mimetype = allowedTypes.test(file.mimetype);
-    
+
     if (mimetype && extname) {
       cb(null, true);
     } else {
@@ -52,9 +52,9 @@ const upload = multer({
 });
 
 
-const handleError = (res : Response,  error : Error, message = 'Internal server error') => {
+const handleError = (res: Response, error: Error, message = 'Internal server error') => {
   console.error(`${message}:`, error);
-  res.status(500).json({ 
+  res.status(500).json({
     success: false,
     message,
     error: process.env.NODE_ENV === 'development' ? error.message : undefined
@@ -68,7 +68,7 @@ const getAlternativeTimeSlots = async (doctorId: string, date: Date): Promise<st
   try {
     const startOfDay = new Date(date);
     startOfDay.setHours(0, 0, 0, 0);
-    
+
     const endOfDay = new Date(date);
     endOfDay.setHours(23, 59, 59, 999);
 
@@ -80,7 +80,7 @@ const getAlternativeTimeSlots = async (doctorId: string, date: Date): Promise<st
     }).select('time_slot');
 
     const bookedSlots = bookedAppointments.map(app => app.time_slot);
-    
+
     // Tất cả các time slot có sẵn
     const allTimeSlots = [
       '09:00', '09:30', '10:00', '10:30', '11:00', '11:30',
@@ -99,12 +99,12 @@ const calculateEndTime = (startTime: string, durationMinutes: number): string =>
   const [hours, minutes] = startTime.split(':').map(Number);
   const startDate = new Date();
   startDate.setHours(hours, minutes, 0, 0);
-  
+
   const endDate = new Date(startDate.getTime() + durationMinutes * 60000);
-  
+
   const endHours = endDate.getHours().toString().padStart(2, '0');
   const endMinutes = endDate.getMinutes().toString().padStart(2, '0');
-  
+
   return `${endHours}:${endMinutes}`;
 };
 
@@ -112,25 +112,25 @@ const calculateEndTime = (startTime: string, durationMinutes: number): string =>
 const determineUrgency = (symptoms: string[], reason: string): string => {
   const urgentKeywords = ['emergency', 'severe', 'pain', 'bleeding', 'fever', 'chest pain', 'shortness of breath'];
   const reasonLower = reason.toLowerCase();
-  
+
   if (urgentKeywords.some(keyword => reasonLower.includes(keyword))) {
     return 'high';
   }
-  
+
   if (symptoms && symptoms.length > 0) {
     const symptomText = symptoms.join(' ').toLowerCase();
     if (urgentKeywords.some(keyword => symptomText.includes(keyword))) {
       return 'medium';
     }
   }
-  
+
   return 'low';
 };
 
 // Determine priority for medical record
 const determinePriority = (symptoms: string[], reason: string): string => {
   const urgency = determineUrgency(symptoms, reason);
-  
+
   switch (urgency) {
     case 'high':
       return 'urgent';
@@ -162,9 +162,9 @@ const getPreparationInstructions = (specialtyId?: string): string => {
 export const updateEmergencyContact = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
-      res.status(401).json({ 
+      res.status(401).json({
         success: false,
-        message: 'Authentication required' 
+        message: 'Authentication required'
       });
       return;
     }
@@ -173,9 +173,9 @@ export const updateEmergencyContact = async (req: AuthRequest, res: Response): P
 
     // Validate required fields
     if (!name || !phone) {
-      res.status(400).json({ 
+      res.status(400).json({
         success: false,
-        message: 'Emergency contact name and phone are required' 
+        message: 'Emergency contact name and phone are required'
       });
       return;
     }
@@ -191,7 +191,7 @@ export const updateEmergencyContact = async (req: AuthRequest, res: Response): P
     }
 
     let userInfo = await UserInfo.findOne({ user_id: req.user._id });
-    
+
     const emergencyContactData = {
       name: name.trim(),
       relationship: relationship?.trim() || 'Family',
@@ -201,7 +201,7 @@ export const updateEmergencyContact = async (req: AuthRequest, res: Response): P
 
     if (!userInfo) {
       // Create new UserInfo if not exists
-      userInfo = new UserInfo({ 
+      userInfo = new UserInfo({
         user_id: req.user._id,
         emergency_contact: emergencyContactData,
         blood_type: '',
@@ -223,7 +223,7 @@ export const updateEmergencyContact = async (req: AuthRequest, res: Response): P
       message: 'Emergency contact updated successfully',
       data: userInfo.getSummary()
     });
-  } catch (error : any) {
+  } catch (error: any) {
     handleError(res, error, 'Error updating emergency contact');
   }
 };
@@ -273,7 +273,7 @@ export const postEmergencyContact = async (req: AuthRequest, res: Response): Pro
       message: 'Emergency contact added successfully',
       data: userInfo.getSummary()
     });
-  } catch (error : any) {
+  } catch (error: any) {
     handleError(res, error, 'Error adding emergency contact');
   }
 };
@@ -282,9 +282,9 @@ export const postEmergencyContact = async (req: AuthRequest, res: Response): Pro
 export const updateMedications = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
-      res.status(401).json({ 
+      res.status(401).json({
         success: false,
-        message: 'Authentication required' 
+        message: 'Authentication required'
       });
       return;
     }
@@ -292,10 +292,10 @@ export const updateMedications = async (req: AuthRequest, res: Response): Promis
     const { medications, allergies, current_medications } = req.body;
 
     let userInfo = await UserInfo.findOne({ user_id: req.user._id });
-    
+
     if (!userInfo) {
       // Create new UserInfo if not exists
-      userInfo = new UserInfo({ 
+      userInfo = new UserInfo({
         user_id: req.user._id,
         current_medications: current_medications || [],
         allergist: allergies || '',
@@ -314,8 +314,8 @@ export const updateMedications = async (req: AuthRequest, res: Response): Promis
     } else {
       // Update medications and allergies
       if (current_medications !== undefined) {
-        userInfo.current_medications = Array.isArray(current_medications) 
-          ? current_medications 
+        userInfo.current_medications = Array.isArray(current_medications)
+          ? current_medications
           : [];
       }
       if (allergies !== undefined) {
@@ -327,10 +327,10 @@ export const updateMedications = async (req: AuthRequest, res: Response): Promis
 
     // Also update the User model if medications/allergies are provided
     if (medications !== undefined || allergies !== undefined) {
-      const userUpdate : any = {};
+      const userUpdate: any = {};
       if (medications !== undefined) userUpdate.medications = medications;
       if (allergies !== undefined) userUpdate.allergies = allergies;
-      
+
       await User.findByIdAndUpdate(req.user._id, userUpdate);
     }
 
@@ -348,9 +348,9 @@ export const updateMedications = async (req: AuthRequest, res: Response): Promis
 export const addMedication = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
-      res.status(401).json({ 
+      res.status(401).json({
         success: false,
-        message: 'Authentication required' 
+        message: 'Authentication required'
       });
       return;
     }
@@ -358,17 +358,17 @@ export const addMedication = async (req: AuthRequest, res: Response): Promise<vo
     const { name, dosage, frequency, start_date, reason, prescribed_by } = req.body;
 
     if (!name) {
-      res.status(400).json({ 
+      res.status(400).json({
         success: false,
-        message: 'Medication name is required' 
+        message: 'Medication name is required'
       });
       return;
     }
 
     let userInfo = await UserInfo.findOne({ user_id: req.user._id });
-    
+
     if (!userInfo) {
-      userInfo = new UserInfo({ 
+      userInfo = new UserInfo({
         user_id: req.user._id,
         current_medications: [],
         blood_type: '',
@@ -413,9 +413,9 @@ export const addMedication = async (req: AuthRequest, res: Response): Promise<vo
 export const removeMedication = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
-      res.status(401).json({ 
+      res.status(401).json({
         success: false,
-        message: 'Authentication required' 
+        message: 'Authentication required'
       });
       return;
     }
@@ -423,18 +423,18 @@ export const removeMedication = async (req: AuthRequest, res: Response): Promise
     const { medication_id } = req.body;
 
     if (!medication_id) {
-      res.status(400).json({ 
+      res.status(400).json({
         success: false,
-        message: 'Medication ID is required' 
+        message: 'Medication ID is required'
       });
       return;
     }
 
     const userInfo = await UserInfo.findOne({ user_id: req.user._id });
     if (!userInfo) {
-      res.status(404).json({ 
+      res.status(404).json({
         success: false,
-        message: 'User information not found' 
+        message: 'User information not found'
       });
       return;
     }
@@ -446,9 +446,9 @@ export const removeMedication = async (req: AuthRequest, res: Response): Promise
     );
 
     if (userInfo.current_medications.length === initialLength) {
-      res.status(404).json({ 
+      res.status(404).json({
         success: false,
-        message: 'Medication not found' 
+        message: 'Medication not found'
       });
       return;
     }
@@ -469,15 +469,15 @@ export const removeMedication = async (req: AuthRequest, res: Response): Promise
 export const getPatientInfo = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
-      res.status(401).json({ 
+      res.status(401).json({
         success: false,
-        message: 'Authentication required' 
+        message: 'Authentication required'
       });
       return;
     }
 
     const userInfo = await UserInfo.findOne({ user_id: req.user._id });
-    
+
     if (!userInfo) {
       // Return default structure if no user info found
       res.status(200).json({
@@ -514,9 +514,9 @@ export const getPatientInfo = async (req: AuthRequest, res: Response): Promise<v
 export const updatePatientInfo = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
-      res.status(401).json({ 
+      res.status(401).json({
         success: false,
-        message: 'Authentication required' 
+        message: 'Authentication required'
       });
       return;
     }
@@ -535,10 +535,10 @@ export const updatePatientInfo = async (req: AuthRequest, res: Response): Promis
     });
 
     let userInfo = await UserInfo.findOne({ user_id: req.user._id });
-    
+
     if (!userInfo) {
-      userInfo = new UserInfo({ 
-        user_id: req.user._id, 
+      userInfo = new UserInfo({
+        user_id: req.user._id,
         ...updateData,
         emergency_contact: updateData.emergency_contact || {
           name: '',
@@ -569,7 +569,7 @@ export const updatePatientInfo = async (req: AuthRequest, res: Response): Promis
       message: 'User information updated successfully',
       data: userInfo.getSummary()
     });
-  } catch (error : any) {
+  } catch (error: any) {
     handleError(res, error, 'Error updating patient info');
   }
 };
@@ -578,9 +578,9 @@ export const updatePatientInfo = async (req: AuthRequest, res: Response): Promis
 export const editInfoPatient = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
-      res.status(401).json({ 
+      res.status(401).json({
         success: false,
-        message: 'Authentication required' 
+        message: 'Authentication required'
       });
       return;
     }
@@ -588,7 +588,7 @@ export const editInfoPatient = async (req: AuthRequest, res: Response): Promise<
     const { emergency_contact, blood_type, allergist, current_medications, height, weight, chronic_diseases } = req.body;
 
     const userInfo = await UserInfo.findOne({ user_id: req.user._id });
-    
+
     if (!userInfo) {
       // Create new if not exists
       const newUserInfo = new UserInfo({
@@ -607,7 +607,7 @@ export const editInfoPatient = async (req: AuthRequest, res: Response): Promise<
         chronic_diseases: chronic_diseases || [],
         BMI: 0
       });
-      
+
       newUserInfo.calculateBMI();
       await newUserInfo.save();
 
@@ -636,7 +636,7 @@ export const editInfoPatient = async (req: AuthRequest, res: Response): Promise<
       message: 'User information updated successfully',
       data: userInfo.getSummary()
     });
-  } catch (error : any) {
+  } catch (error: any) {
     handleError(res, error, 'Error editing patient info');
   }
 };
@@ -653,11 +653,11 @@ export const calculateBMI = (height: number, weight: number): number => {
 export const getAppointmentAvailability = async (req: Request, res: Response) => {
   try {
     const { doctor_id, date } = req.query;
-    
+
     if (!doctor_id || !date) {
       return res.status(400).json({ message: 'Doctor ID and date are required' });
     }
-    
+
     if (!Types.ObjectId.isValid(doctor_id as string)) {
       return res.status(400).json({ message: 'Invalid doctor ID format' });
     }
@@ -680,12 +680,12 @@ export const getAppointmentAvailability = async (req: Request, res: Response) =>
     ];
 
     const bookedSlots = existingAppointments.map(app => app.time_slot);
-    
+
     // Tạo response chi tiết
     const availableSlots = allTimeSlots.map(slot => {
       const isBooked = bookedSlots.includes(slot);
       const bookedAppointment = existingAppointments.find(app => app.time_slot === slot);
-      
+
       return {
         time: slot,
         isAvailable: !isBooked,
@@ -700,8 +700,8 @@ export const getAppointmentAvailability = async (req: Request, res: Response) =>
 
     // Kiểm tra số lượng slot còn trống
     const availableCount = availableSlots.filter(slot => slot.isAvailable).length;
-    
-    res.json({ 
+
+    res.json({
       date: appointmentDate.toISOString().split('T')[0],
       availableSlots,
       summary: {
@@ -722,19 +722,19 @@ export const getAppointmentAvailability = async (req: Request, res: Response) =>
 
 export const bookAppointment = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { 
-      doctor_id, 
-      specialty_id, 
-      appointment_date, 
-      time_slot, 
-      reason, 
+    const {
+      doctor_id,
+      specialty_id,
+      appointment_date,
+      time_slot,
+      reason,
       notes,
       symptoms,
       preferred_language,
       insurance_info,
-      emergency_contact_required 
+      emergency_contact_required
     } = req.body;
-    
+
     const user_id = req.user?._id;
     const user_name = req.user?.name;
     const user_email = req.user?.email;
@@ -742,16 +742,16 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
 
     console.log('=== BOOK APPOINTMENT ===');
     console.log('Request from user:', { user_id, user_name, user_email });
-    console.log('Appointment details:', { 
-      doctor_id, 
-      appointment_date, 
-      time_slot, 
-      reason 
+    console.log('Appointment details:', {
+      doctor_id,
+      appointment_date,
+      time_slot,
+      reason
     });
 
     // Validate required fields
     if (!doctor_id || !appointment_date || !time_slot) {
-      res.status(400).json({ 
+      res.status(400).json({
         success: false,
         message: 'Doctor ID, appointment date, and time slot are required',
         required_fields: ['doctor_id', 'appointment_date', 'time_slot']
@@ -762,7 +762,7 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
     // Validate date format
     const appointmentDate = new Date(appointment_date);
     if (isNaN(appointmentDate.getTime())) {
-      res.status(400).json({ 
+      res.status(400).json({
         success: false,
         message: 'Invalid appointment date format'
       });
@@ -772,7 +772,7 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
     // Check if appointment date is in the future
     const now = new Date();
     if (appointmentDate <= now) {
-      res.status(400).json({ 
+      res.status(400).json({
         success: false,
         message: 'Appointment date must be in the future'
       });
@@ -786,16 +786,16 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
       .populate('specialty_id', 'name description');
 
     if (!doctor) {
-      res.status(404).json({ 
+      res.status(404).json({
         success: false,
-        message: 'Doctor not found' 
+        message: 'Doctor not found'
       });
       return;
     }
 
     // Check if doctor is available (status working)
     if (doctor.user_id?.status !== 'working') {
-      res.status(400).json({ 
+      res.status(400).json({
         success: false,
         message: `Doctor is currently ${doctor.user_id?.status}. Please choose another doctor.`
       });
@@ -804,7 +804,7 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
 
     // Check if doctor is available for appointments
     if (doctor.isAvailable === false) {
-      res.status(400).json({ 
+      res.status(400).json({
         success: false,
         message: 'Doctor is not accepting new appointments at this time'
       });
@@ -818,7 +818,7 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
     });
 
     if (existingAppointment) {
-      res.status(409).json({ 
+      res.status(409).json({
         success: false,
         message: 'Time slot not available',
         data: {
@@ -865,7 +865,7 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
       .populate('doctor_id', 'name email phoneNumber specialty_id consultation_fee')
       .populate('user_id', 'name email phoneNumber dateOfBirth gender')
       .populate('specialty_id', 'name description');
-      
+
 
     // ========== GỬI THÔNG BÁO CHO BỆNH NHÂN ==========
     try {
@@ -1104,7 +1104,7 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
 
   } catch (error: any) {
     console.error('❌ Error booking appointment:', error);
-    
+
     // Send error notification to admin
     try {
       await notificationService.sendNotification({
@@ -1126,23 +1126,23 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
 
     // Handle specific error types
     if (error instanceof mongoose.Error.ValidationError) {
-      res.status(400).json({ 
+      res.status(400).json({
         success: false,
         message: 'Validation error',
-        errors: error.errors 
+        errors: error.errors
       });
       return;
     }
-    
+
     if (error.code === 11000) {
-      res.status(409).json({ 
+      res.status(409).json({
         success: false,
         message: 'Duplicate appointment detected'
       });
       return;
     }
-    
-    res.status(500).json({ 
+
+    res.status(500).json({
       success: false,
       message: 'Error booking appointment',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
@@ -1157,43 +1157,43 @@ export const updateReview = async (req: AuthRequest, res: Response): Promise<voi
     const { rating, comment } = req.body;
 
     if (!reviewId || !rating) {
-      res.status(400).json({ 
+      res.status(400).json({
         success: false,
-        message: 'Review ID and rating are required' 
+        message: 'Review ID and rating are required'
       });
       return;
     }
 
     if (rating < 1 || rating > 5) {
-      res.status(400).json({ 
+      res.status(400).json({
         success: false,
-        message: 'Rating must be between 1 and 5' 
+        message: 'Rating must be between 1 and 5'
       });
       return;
     }
 
     // Find and update review, ensuring it belongs to the user
     const review = await Review.findOneAndUpdate(
-      { 
-        _id: reviewId, 
-        user_id: req.user?._id 
+      {
+        _id: reviewId,
+        user_id: req.user?._id
       },
-      { 
-        rating, 
+      {
+        rating,
         comment: comment || '',
-        updated_at: new Date() 
+        updated_at: new Date()
       },
-      { 
-        new: true, 
-        runValidators: true 
+      {
+        new: true,
+        runValidators: true
       }
     ).populate('user_id', 'name avatar')
-     .populate('doctor_id', 'name specialty_id');
+      .populate('doctor_id', 'name specialty_id');
 
     if (!review) {
-      res.status(404).json({ 
+      res.status(404).json({
         success: false,
-        message: 'Review not found or you do not have permission to edit this review' 
+        message: 'Review not found or you do not have permission to edit this review'
       });
       return;
     }
@@ -1205,9 +1205,9 @@ export const updateReview = async (req: AuthRequest, res: Response): Promise<voi
     });
   } catch (error: any) {
     console.error('Error updating review:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      message: 'Error updating review', 
+      message: 'Error updating review',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
@@ -1218,7 +1218,7 @@ export const getAllDoctors = async (req: Request, res: Response) => {
     const doctors = await Doctor.find()
       .populate('user_id', 'name email phoneNumber')
       .populate('specialty_id', 'name description');
-    
+
     res.json(doctors);
   } catch (error) {
     console.error('Error fetching doctors:', error);
@@ -1240,7 +1240,7 @@ export const getAllMedicalRecordsForPatient = async (req: Request, res: Response
     const records = await MedicalRecord.find({ user_id: userId })
       .populate('doctor_id', 'name specialty_id')
       .sort({ date: -1 });
-    
+
     res.json(records);
   } catch (error) {
     res.status(500).json({ message: 'Error fetching medical records', error });
@@ -1255,9 +1255,9 @@ export const getAllAppointmentsForPatient = async (req: AuthRequest, res: Respon
     }
 
     const appointments = await Appointment.find({ user_id: req.user._id })
-      .populate({ 
-        path: 'doctor_id', 
-        populate: { path: 'user_id', select: 'name email' } 
+      .populate({
+        path: 'doctor_id',
+        populate: { path: 'user_id', select: 'name email' }
       })
       .populate('specialty_id', 'name')
       .sort({ appointment_date: -1, time_slot: -1 });
@@ -1266,7 +1266,7 @@ export const getAllAppointmentsForPatient = async (req: AuthRequest, res: Respon
       res.status(404).json({ message: 'You don\'t have any appointments yet. Tap here to schedule one.' });
       return;
     }
-    
+
     res.json(appointments);
   } catch (error) {
     console.error('Error fetching appointments:', error);
@@ -1278,14 +1278,14 @@ export const editAppointment = async (req: Request, res: Response) => {
   try {
     const appointmentId = req.params.appointment_id;
     const userId = req.body.user_id;
-    
+
     if (!appointmentId || !userId) {
       return res.status(400).json({ message: 'Missing appointment_id or user_id' });
     }
 
     const updateFields: any = {};
     const allowedFields = ['appointment_date', 'time_slot', 'reason', 'notes'];
-    
+
     allowedFields.forEach(field => {
       if (req.body[field] !== undefined) {
         updateFields[field] = req.body[field];
@@ -1299,8 +1299,8 @@ export const editAppointment = async (req: Request, res: Response) => {
     );
 
     if (!appointment) {
-      return res.status(404).json({ 
-        message: 'Appointment not found, not owned by user, or cannot be modified' 
+      return res.status(404).json({
+        message: 'Appointment not found, not owned by user, or cannot be modified'
       });
     }
 
@@ -1315,7 +1315,7 @@ export const cancelAppointment = async (req: Request, res: Response) => {
   try {
     const appointmentId = req.params.appointment_id;
     const userId = req.body.user_id;
-    
+
     if (!appointmentId || !userId) {
       return res.status(400).json({ message: 'Missing appointment_id or user_id' });
     }
@@ -1327,8 +1327,8 @@ export const cancelAppointment = async (req: Request, res: Response) => {
     );
 
     if (!appointment) {
-      return res.status(404).json({ 
-        message: 'Appointment not found or cannot be cancelled' 
+      return res.status(404).json({
+        message: 'Appointment not found or cannot be cancelled'
       });
     }
 
@@ -1376,9 +1376,9 @@ export const getMyMedicalRecords = async (req: AuthRequest, res: Response) => {
 export const getUser = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
-      res.status(401).json({ 
-        success: false, 
-        message: 'Authentication required' 
+      res.status(401).json({
+        success: false,
+        message: 'Authentication required'
       });
       return;
     }
@@ -1419,9 +1419,9 @@ export const getUser = async (req: AuthRequest, res: Response): Promise<void> =>
     });
   } catch (error) {
     console.error('Error in getUser:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Internal server error' 
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
     });
   }
 };
@@ -1429,16 +1429,16 @@ export const getUser = async (req: AuthRequest, res: Response): Promise<void> =>
 export const updateUser = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
-      res.status(401).json({ 
-        success: false, 
-        message: 'Authentication required' 
+      res.status(401).json({
+        success: false,
+        message: 'Authentication required'
       });
       return;
     }
 
     const body = req.body || {};
     const updates: any = {};
-    
+
     const allowedFields = [
       'name', 'phoneNumber', 'dateOfBirth', 'gender', 'address',
       'emergencyContact', 'bloodType', 'allergies', 'medications', 'avatar'
@@ -1451,8 +1451,8 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
     });
 
     const updatedUser = await User.findByIdAndUpdate(
-      req.user._id, 
-      updates, 
+      req.user._id,
+      updates,
       { new: true, runValidators: true }
     );
 
@@ -1477,9 +1477,9 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
     });
   } catch (error) {
     console.error('Error in updateUser:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Internal server error' 
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
     });
   }
 };
@@ -1492,35 +1492,35 @@ export const postDoctorReview = async (req: AuthRequest, res: Response): Promise
 
     // Validate required fields
     if (!doctor_id || !user_id || !rating || !appointment_id) {
-      res.status(400).json({ 
+      res.status(400).json({
         success: false,
-        message: 'Missing required fields: doctor_id, user_id, rating, and appointment_id are required' 
+        message: 'Missing required fields: doctor_id, user_id, rating, and appointment_id are required'
       });
       return;
     }
 
     // Validate rating range
     if (rating < 1 || rating > 5) {
-      res.status(400).json({ 
+      res.status(400).json({
         success: false,
-        message: 'Rating must be between 1 and 5' 
+        message: 'Rating must be between 1 and 5'
       });
       return;
     }
 
     // Validate ObjectId formats
     if (!mongoose.Types.ObjectId.isValid(doctor_id)) {
-      res.status(400).json({ 
+      res.status(400).json({
         success: false,
-        message: 'Invalid doctor ID format' 
+        message: 'Invalid doctor ID format'
       });
       return;
     }
 
     if (!mongoose.Types.ObjectId.isValid(appointment_id)) {
-      res.status(400).json({ 
+      res.status(400).json({
         success: false,
-        message: 'Invalid appointment ID format' 
+        message: 'Invalid appointment ID format'
       });
       return;
     }
@@ -1528,9 +1528,9 @@ export const postDoctorReview = async (req: AuthRequest, res: Response): Promise
     // Check if doctor exists
     const doctor = await Doctor.findById(doctor_id);
     if (!doctor) {
-      res.status(404).json({ 
+      res.status(404).json({
         success: false,
-        message: 'Doctor not found' 
+        message: 'Doctor not found'
       });
       return;
     }
@@ -1544,23 +1544,23 @@ export const postDoctorReview = async (req: AuthRequest, res: Response): Promise
     });
 
     if (!appointment) {
-      res.status(400).json({ 
+      res.status(400).json({
         success: false,
-        message: 'Cannot review without a completed appointment that belongs to you' 
+        message: 'Cannot review without a completed appointment that belongs to you'
       });
       return;
     }
 
     // Check if user has already reviewed this appointment
-    const existingReview = await Review.findOne({ 
-      appointment_id, 
-      user_id 
+    const existingReview = await Review.findOne({
+      appointment_id,
+      user_id
     });
 
     if (existingReview) {
-      res.status(400).json({ 
+      res.status(400).json({
         success: false,
-        message: 'You have already reviewed this appointment. Please edit your existing review instead.' 
+        message: 'You have already reviewed this appointment. Please edit your existing review instead.'
       });
       return;
     }
@@ -1587,11 +1587,11 @@ export const postDoctorReview = async (req: AuthRequest, res: Response): Promise
       message: 'Review submitted successfully',
       review: populatedReview
     });
-  } catch (error : any) {
+  } catch (error: any) {
     console.error('Error submitting review:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      message: 'Error submitting review', 
+      message: 'Error submitting review',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
@@ -1600,7 +1600,7 @@ export const postDoctorReview = async (req: AuthRequest, res: Response): Promise
 export const getDoctorReviews = async (req: Request, res: Response): Promise<void> => {
   try {
     const doctor_id = req.params.doctor_id;
-    
+
     if (!doctor_id || !mongoose.Types.ObjectId.isValid(doctor_id)) {
       res.status(400).json({ message: 'Invalid or missing doctor_id parameter' });
       return;
@@ -1620,13 +1620,13 @@ export const getDoctorReviews = async (req: Request, res: Response): Promise<voi
 export const getUserReviews = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
-      res.status(401).json({ 
+      res.status(401).json({
         success: false,
-        message: 'Authentication required' 
+        message: 'Authentication required'
       });
       return;
     }
-    
+
     const reviews = await Review.find({ user_id: req.user._id })
       .populate('doctor_id', 'name specialty_id')
       .populate('appointment_id', '_id appointment_date time_slot') // Đảm bảo chỉ lấy _id
@@ -1644,9 +1644,9 @@ export const getUserReviews = async (req: AuthRequest, res: Response): Promise<v
     });
   } catch (error) {
     console.error('Error fetching user reviews:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      message: 'Error fetching user reviews' 
+      message: 'Error fetching user reviews'
     });
   }
 };
@@ -1654,15 +1654,15 @@ export const getUserReviews = async (req: AuthRequest, res: Response): Promise<v
 export const deleteReview = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const reviewId = req.params.review_id;
-    
+
     if (!reviewId) {
       res.status(400).json({ message: 'Review ID is required' });
       return;
     }
 
-    const review = await Review.findOneAndDelete({ 
-      _id: reviewId, 
-      user_id: req.user?._id 
+    const review = await Review.findOneAndDelete({
+      _id: reviewId,
+      user_id: req.user?._id
     });
 
     if (!review) {
@@ -1679,30 +1679,30 @@ export const deleteReview = async (req: AuthRequest, res: Response): Promise<voi
 
 export const uploadAvatar = [
   upload.single('avatar'),
-  
+
   async (req: AuthRequest, res: Response): Promise<void> => {
     try {
       // 1. Authentication check
       if (!req.user) {
-        res.status(401).json({ 
-          success: false, 
-          message: 'Authentication required' 
+        res.status(401).json({
+          success: false,
+          message: 'Authentication required'
         });
         return;
       }
 
       // 2. File check
       if (!req.file) {
-        res.status(400).json({ 
-          success: false, 
-          message: 'No image file provided' 
+        res.status(400).json({
+          success: false,
+          message: 'No image file provided'
         });
         return;
       }
 
       const userId = req.user._id;
       const filename = req.file.filename; // Đã là avatar_userId_timestamp.ext
-      
+
       console.log('📤 Uploading avatar:', {
         userId,
         filename,
@@ -1713,9 +1713,9 @@ export const uploadAvatar = [
       const user = await User.findById(userId);
       if (!user) {
         deleteAvatarFile(filename);
-        res.status(404).json({ 
-          success: false, 
-          message: 'User not found' 
+        res.status(404).json({
+          success: false,
+          message: 'User not found'
         });
         return;
       }
@@ -1738,7 +1738,7 @@ export const uploadAvatar = [
         message: 'Avatar uploaded successfully',
         data: {
           avatar: filename,
-          avatarUrl: avatarUrl, 
+          avatarUrl: avatarUrl,
           user: {
             _id: user._id,
             name: user.name,
@@ -1749,13 +1749,13 @@ export const uploadAvatar = [
 
     } catch (error: any) {
       console.error('Avatar upload error:', error);
-      
+
       if (req.file) {
         deleteAvatarFile(req.file.filename);
       }
-      
-      res.status(500).json({ 
-        success: false, 
+
+      res.status(500).json({
+        success: false,
         message: 'Error uploading avatar',
         error: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
@@ -1766,7 +1766,7 @@ export const uploadAvatar = [
 const deleteAvatarFile = (filename: string): void => {
   try {
     if (!filename) return;
-    
+
     const filePath = path.join(uploadDir, filename);
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
@@ -1782,18 +1782,18 @@ const deleteAvatarFile = (filename: string): void => {
 export const deleteAvatar = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
-      res.status(401).json({ 
-        success: false, 
-        message: 'Authentication required' 
+      res.status(401).json({
+        success: false,
+        message: 'Authentication required'
       });
       return;
     }
 
     const user = await User.findById(req.user._id);
     if (!user) {
-      res.status(404).json({ 
-        success: false, 
-        message: 'User not found' 
+      res.status(404).json({
+        success: false,
+        message: 'User not found'
       });
       return;
     }
@@ -1826,8 +1826,8 @@ export const deleteAvatar = async (req: AuthRequest, res: Response): Promise<voi
     });
   } catch (error: any) {
     console.error('Delete avatar error:', error);
-    res.status(500).json({ 
-      success: false, 
+    res.status(500).json({
+      success: false,
       message: 'Error deleting avatar',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
@@ -1838,7 +1838,7 @@ const getBaseUrlFromRequest = (req: Request): string => {
   if (process.env.SERVER_URL) {
     return process.env.SERVER_URL;
   }
-  
+
   const protocol = req.protocol || 'http';
   let host = req.get('host');
   if (!host) {
@@ -1846,7 +1846,7 @@ const getBaseUrlFromRequest = (req: Request): string => {
     const serverPort = process.env.PORT || '3000';
     host = `${serverIP}:${serverPort}`;
   }
-  
+
   return `${protocol}://${host}`;
 };
 
@@ -1854,18 +1854,18 @@ const getBaseUrlFromRequest = (req: Request): string => {
 export const getAvatar = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
-      res.status(401).json({ 
-        success: false, 
-        message: 'Authentication required' 
+      res.status(401).json({
+        success: false,
+        message: 'Authentication required'
       });
       return;
     }
 
     const user = await User.findById(req.user._id).select('avatar avatarUpdatedAt name email');
     if (!user) {
-      res.status(404).json({ 
-        success: false, 
-        message: 'User not found' 
+      res.status(404).json({
+        success: false,
+        message: 'User not found'
       });
       return;
     }
@@ -1888,7 +1888,7 @@ export const getAvatar = async (req: AuthRequest, res: Response): Promise<void> 
     if (req.query.includeUrl === 'true') {
       const baseUrl = getBaseUrlFromRequest(req);
       const timestamp = user.avatarUpdatedAt ? user.avatarUpdatedAt.getTime() : Date.now();
-      response.data['avatarUrl'] = user.avatar 
+      response.data['avatarUrl'] = user.avatar
         ? `${baseUrl}/uploads/avatars/${user.avatar}?t=${timestamp}`
         : '';
     }
@@ -1896,8 +1896,8 @@ export const getAvatar = async (req: AuthRequest, res: Response): Promise<void> 
     res.status(200).json(response);
   } catch (error: any) {
     console.error('Get avatar error:', error);
-    res.status(500).json({ 
-      success: false, 
+    res.status(500).json({
+      success: false,
       message: 'Error getting avatar',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
@@ -1910,7 +1910,7 @@ export const debugAvatar = async (req: Request, res: Response): Promise<void> =>
   try {
     const avatarsDir = uploadDir;
     const files = fs.readdirSync(avatarsDir);
-    
+
     const avatarFiles = files
       .filter(file => file.match(/\.(jpg|jpeg|png|gif|webp)$/i))
       .map(file => {
@@ -1964,11 +1964,11 @@ export const debugAvatar = async (req: Request, res: Response): Promise<void> =>
 const getNextAvailableDates = async (doctorId: string, days: number = 7): Promise<any[]> => {
   const availableDates = [];
   const today = new Date();
-  
+
   for (let i = 1; i <= days; i++) {
     const date = new Date(today);
     date.setDate(today.getDate() + i);
-    
+
     // Kiểm tra xem ngày này có slot nào trống không
     const slots = await getAlternativeTimeSlots(doctorId, date);
     if (slots.length > 0) {
@@ -1979,18 +1979,18 @@ const getNextAvailableDates = async (doctorId: string, days: number = 7): Promis
       });
     }
   }
-  
+
   return availableDates;
 };
 
 export const checkRealTimeAvailability = async (req: Request, res: Response): Promise<void> => {
   try {
     const { doctor_id, date, time_slot } = req.query;
-    
+
     if (!doctor_id || !date || !time_slot) {
-      res.status(400).json({ 
+      res.status(400).json({
         success: false,
-        message: 'doctor_id, date, and time_slot are required' 
+        message: 'doctor_id, date, and time_slot are required'
       });
       return;
     }
@@ -2025,9 +2025,9 @@ export const checkRealTimeAvailability = async (req: Request, res: Response): Pr
     });
   } catch (error) {
     console.error('Error checking real-time availability:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      message: 'Error checking availability' 
+      message: 'Error checking availability'
     });
   }
 };
@@ -2042,9 +2042,9 @@ export const checkInAppointment = async (req: AuthRequest, res: Response): Promi
     console.log('User ID:', user_id);
 
     if (!appointment_id || !user_id) {
-      res.status(400).json({ 
+      res.status(400).json({
         success: false,
-        message: 'Appointment ID and user authentication required' 
+        message: 'Appointment ID and user authentication required'
       });
       return;
     }
@@ -2055,18 +2055,18 @@ export const checkInAppointment = async (req: AuthRequest, res: Response): Promi
       .populate('doctor_id', 'user_id');
 
     if (!appointment) {
-      res.status(404).json({ 
+      res.status(404).json({
         success: false,
-        message: 'Appointment not found' 
+        message: 'Appointment not found'
       });
       return;
     }
 
     // Kiểm tra quyền sở hữu
     if (appointment.user_id._id.toString() !== user_id.toString()) {
-      res.status(403).json({ 
+      res.status(403).json({
         success: false,
-        message: 'You can only check in to your own appointments' 
+        message: 'You can only check in to your own appointments'
       });
       return;
     }
@@ -2074,7 +2074,7 @@ export const checkInAppointment = async (req: AuthRequest, res: Response): Promi
     // Kiểm tra trạng thái - MỞ RỘNG cho phép confirm sớm
     const validStatuses = ['scheduled', 'pending'];
     if (!validStatuses.includes(appointment.status)) {
-      res.status(400).json({ 
+      res.status(400).json({
         success: false,
         message: `Cannot check in. Current status: ${appointment.status}`,
         valid_statuses: validStatuses
@@ -2086,14 +2086,14 @@ export const checkInAppointment = async (req: AuthRequest, res: Response): Promi
     const appointmentDate = new Date(appointment.appointment_date);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    
+
     const isToday = appointmentDate.toDateString() === today.toDateString();
     const isFuture = appointmentDate > today;
-    
+
     // Cho phép confirm sớm (trước ngày hẹn)
     let newStatus = 'confirmed';
     let checkInType = 'on_time';
-    
+
     if (isFuture) {
       newStatus = 'confirmed';
       checkInType = 'early_confirmation';
@@ -2102,7 +2102,7 @@ export const checkInAppointment = async (req: AuthRequest, res: Response): Promi
 
     appointment.status = newStatus;
     appointment.updated_at = new Date();
-    
+
     // Thêm metadata check-in
     appointment.metadata = {
       ...appointment.metadata,
@@ -2111,7 +2111,7 @@ export const checkInAppointment = async (req: AuthRequest, res: Response): Promi
       check_in_type: checkInType,
       check_in_time: new Date(),
       appointment_date_original: appointmentDate,
-      check_in_before_appointment_days: isFuture ? 
+      check_in_before_appointment_days: isFuture ?
         Math.ceil((appointmentDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)) : 0
     };
 
@@ -2122,12 +2122,12 @@ export const checkInAppointment = async (req: AuthRequest, res: Response): Promi
     try {
       const doctorUserId = (appointment.doctor_id as any).user_id?._id;
       if (doctorUserId) {
-        const message = isFuture 
+        const message = isFuture
           ? `Patient ${(appointment.user_id as any).name} has confirmed they will attend their appointment on ${appointmentDate.toLocaleDateString()} at ${appointment.time_slot}.`
           : `Patient ${(appointment.user_id as any).name} has checked in for their appointment at ${appointment.time_slot}.`;
-        
+
         const templateKey = isFuture ? 'patient_pre_confirmed' : 'patient_checked_in';
-        
+
         await notificationService.sendNotification({
           user_id: doctorUserId.toString(),
           title: isFuture ? 'Patient Confirmed Attendance' : 'Patient Arrived',
@@ -2171,21 +2171,21 @@ export const checkInAppointment = async (req: AuthRequest, res: Response): Promi
         const medicalRecord = await MedicalRecord.findOne({
           'treatment_plan._id': appointment.re_examination_step_id
         });
-        
+
         if (medicalRecord) {
           const step = medicalRecord.treatment_plan.find(
             (s: any) => s._id?.toString() === appointment.re_examination_step_id?.toString()
           );
-          
+
           if (step) {
             step.arrivalConfirmed = true;
             step.arrivalConfirmedAt = new Date();
             step.arrivalConfirmed = isFuture;
-            
+
             if (!isFuture) {
               step.status = 'in-progress';
             }
-            
+
             await medicalRecord.save({ validateModifiedOnly: true });
             console.log('✅ Updated medical record step arrival status');
           }
@@ -2197,7 +2197,7 @@ export const checkInAppointment = async (req: AuthRequest, res: Response): Promi
 
     res.status(200).json({
       success: true,
-      message: isFuture 
+      message: isFuture
         ? `Early confirmation successful! You have confirmed your attendance for ${appointmentDate.toLocaleDateString()}`
         : 'Check-in successful!',
       data: {
@@ -2226,10 +2226,10 @@ export const checkInAppointment = async (req: AuthRequest, res: Response): Promi
 
   } catch (error: any) {
     console.error('❌ Error checking in:', error);
-    
+
     let statusCode = 500;
     let errorMessage = 'Error checking in to appointment';
-    
+
     if (error.name === 'CastError') {
       statusCode = 400;
       errorMessage = 'Invalid appointment ID format';
@@ -2237,9 +2237,9 @@ export const checkInAppointment = async (req: AuthRequest, res: Response): Promi
       statusCode = 400;
       errorMessage = 'Validation error: ' + error.message;
     }
-    
-    res.status(statusCode).json({ 
-      success: false, 
+
+    res.status(statusCode).json({
+      success: false,
       message: errorMessage,
       error_type: error.name,
       timestamp: new Date().toISOString()

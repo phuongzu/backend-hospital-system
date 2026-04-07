@@ -44,9 +44,9 @@ export const forgotPassword = async (req: Request, res: Response): Promise<void>
 
     // Find user by email
     const user = await User.findOne({ email: email.toLowerCase().trim() });
-    
+
     console.log('👤 User found:', !!user);
-    
+
     // For security reasons, don't reveal if email exists or not
     if (!user) {
       console.log('📧 Email not found, but returning success for security');
@@ -87,10 +87,10 @@ export const forgotPassword = async (req: Request, res: Response): Promise<void>
       });
     } catch (emailError) {
       console.error('❌ Email sending failed:', emailError);
-      
+
       // Remove the stored code if email fails
       verificationCodes.delete(email.toLowerCase().trim());
-      
+
       res.status(500).json({
         success: false,
         message: 'Failed to send verification email. Please try again later.'
@@ -129,7 +129,7 @@ export const verifyCodeAndResetPassword = async (req: Request, res: Response): P
     }
 
     const normalizedEmail = email.toLowerCase().trim();
-    
+
     // Find stored verification code
     const storedCode = verificationCodes.get(normalizedEmail);
 
@@ -215,7 +215,7 @@ export const resendVerificationCode = async (req: Request, res: Response): Promi
     }
 
     const normalizedEmail = email.toLowerCase().trim();
-    
+
     // Find user
     const user = await User.findOne({ email: normalizedEmail });
     if (!user) {
@@ -274,17 +274,16 @@ const generateToken = (id: string, role: string, name: string, email: string): s
   if (!secret) {
     throw new Error('JWT_SECRET environment variable is not set');
   }
-  
+
   return jwt.sign(
-    { 
+    {
       userId: id,
-      id: id, 
-      role: role, 
+      id: id,
+      role: role,
       name: name,   // Thêm name
       email: email, // Thêm email
-      iat: Date.now() 
     },
-    secret, 
+    secret,
     { expiresIn: '7d' }
   );
 };
@@ -295,7 +294,7 @@ const generateRefreshToken = (id: string): string => {
   if (!secret) {
     throw new Error('JWT refresh secret is not configured');
   }
-  
+
   return jwt.sign({ id }, secret, { expiresIn: '30d' });
 };
 
@@ -307,9 +306,9 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
 
     // Enhanced input validation
     if (!name || !email || !password) {
-      res.status(400).json({ 
-        success: false, 
-        message: 'Name, email, and password are required' 
+      res.status(400).json({
+        success: false,
+        message: 'Name, email, and password are required'
       });
       return;
     }
@@ -317,18 +316,18 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
     // Email format validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
-      res.status(400).json({ 
-        success: false, 
-        message: 'Please provide a valid email address' 
+      res.status(400).json({
+        success: false,
+        message: 'Please provide a valid email address'
       });
       return;
     }
 
     // Password strength validation
     if (password.length < 6) {
-      res.status(400).json({ 
-        success: false, 
-        message: 'Password must be at least 6 characters long' 
+      res.status(400).json({
+        success: false,
+        message: 'Password must be at least 6 characters long'
       });
       return;
     }
@@ -336,9 +335,9 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
     // Check if user already exists
     const existingUser = await User.findOne({ email: email.toLowerCase() });
     if (existingUser) {
-      res.status(409).json({ 
-        success: false, 
-        message: 'User with this email already exists' 
+      res.status(409).json({
+        success: false,
+        message: 'User with this email already exists'
       });
       return;
     }
@@ -349,9 +348,9 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
 
       // Validate required doctor fields
       if (!specialty_id || !license_number || !years_of_experience || !consultation_fee) {
-        res.status(400).json({ 
-          success: false, 
-          message: 'For doctor registration, specialty, license number, years of experience, and consultation fee are required' 
+        res.status(400).json({
+          success: false,
+          message: 'For doctor registration, specialty, license number, years of experience, and consultation fee are required'
         });
         return;
       }
@@ -359,9 +358,9 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
       // Check if license number already exists in registration requests
       const existingLicense = await DoctorRegistrationRequest.findOne({ license_number });
       if (existingLicense) {
-        res.status(409).json({ 
-          success: false, 
-          message: 'License number already exists in registration requests' 
+        res.status(409).json({
+          success: false,
+          message: 'License number already exists in registration requests'
         });
         return;
       }
@@ -369,9 +368,9 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
       // Check if email already exists in registration requests
       const existingRequest = await DoctorRegistrationRequest.findOne({ email: email.toLowerCase() });
       if (existingRequest) {
-        res.status(409).json({ 
-          success: false, 
-          message: 'Registration request with this email already exists and is pending review' 
+        res.status(409).json({
+          success: false,
+          message: 'Registration request with this email already exists and is pending review'
         });
         return;
       }
@@ -426,7 +425,7 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
     const refreshToken = generateRefreshToken(String(newUser._id));
 
     // Update user with refresh token
-    await User.findByIdAndUpdate(newUser._id, { 
+    await User.findByIdAndUpdate(newUser._id, {
       refreshToken: refreshToken,
       lastLogin: new Date()
     });
@@ -450,18 +449,18 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
 
   } catch (error) {
     console.error('❌ Error in registerUser:', error);
-    
+
     if (error instanceof Error && error.message.includes('JWT')) {
-      res.status(500).json({ 
-        success: false, 
-        message: 'Server configuration error' 
+      res.status(500).json({
+        success: false,
+        message: 'Server configuration error'
       });
       return;
     }
 
-    res.status(500).json({ 
-      success: false, 
-      message: 'Internal server error' 
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
     });
   }
 };
@@ -544,25 +543,25 @@ export const loginUser = async (req: Request, res: Response): Promise<void> => {
     console.log('🔑 Starting password verification...');
     console.log('🔑 Input password length:', password.length);
     console.log('🔑 Stored password hash:', user.password ? 'Exists' : 'Missing');
-    
+
     const isPasswordValid = await bcrypt.compare(password, user.password);
     console.log('🔑 Password validation result:', isPasswordValid);
-    
+
     if (!isPasswordValid) {
       console.log('❌ Password invalid for user:', user.email);
-      
+
       // Handle failed login attempts for doctors
       if (user.role === 'doctor') {
         const currentAttempts = user.loginAttempts || 0;
         user.loginAttempts = currentAttempts + 1;
-        
+
         if (user.loginAttempts >= 5) {
           user.isLocked = true;
           user.lockedAt = new Date();
           await user.save();
-          
+
           console.log(`🔒 Account locked for doctor: ${user.email}`);
-          
+
           res.status(423).json({
             success: false,
             message: 'Account has been locked due to too many failed attempts. Please contact administrator.'
@@ -591,9 +590,9 @@ export const loginUser = async (req: Request, res: Response): Promise<void> => {
 
     // Generate tokens
     const accessToken = generateToken(
-      String(user._id), 
-      user.role, 
-      user.name, 
+      String(user._id),
+      user.role,
+      user.name,
       user.email  // thêm email
     );
     const refreshToken = generateRefreshToken(String(user._id));
@@ -663,7 +662,7 @@ export const loginUser = async (req: Request, res: Response): Promise<void> => {
       });
       return;
     }
-    
+
     res.status(500).json({
       success: false,
       message: 'Internal server error'
@@ -674,38 +673,38 @@ export const loginUser = async (req: Request, res: Response): Promise<void> => {
 export const upsertDoctorProfile = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
-      res.status(401).json({ 
-        success: false, 
-        message: 'Authentication required' 
+      res.status(401).json({
+        success: false,
+        message: 'Authentication required'
       });
       return;
     }
 
     if (req.user.role !== 'doctor') {
-      res.status(403).json({ 
-        success: false, 
-        message: 'Only doctors can update doctor profiles' 
+      res.status(403).json({
+        success: false,
+        message: 'Only doctors can update doctor profiles'
       });
       return;
     }
 
-    const { 
-      specialty_id, 
-      license_number, 
-      years_of_experience, 
-      available_hours, 
-      isAvailable, 
-      consultation_fee, 
-      languages, 
-      education, 
-      certifications 
+    const {
+      specialty_id,
+      license_number,
+      years_of_experience,
+      available_hours,
+      isAvailable,
+      consultation_fee,
+      languages,
+      education,
+      certifications
     } = req.body;
 
     // Validate required fields
     if (!specialty_id || !license_number) {
-      res.status(400).json({ 
-        success: false, 
-        message: 'Specialty and license number are required' 
+      res.status(400).json({
+        success: false,
+        message: 'Specialty and license number are required'
       });
       return;
     }
@@ -724,10 +723,10 @@ export const upsertDoctorProfile = async (req: AuthRequest, res: Response): Prom
         education: education || [],
         certifications: certifications || []
       },
-      { 
-        upsert: true, 
-        new: true, 
-        runValidators: true 
+      {
+        upsert: true,
+        new: true,
+        runValidators: true
       }
     ).populate('specialty_id', 'name');
 
@@ -738,9 +737,9 @@ export const upsertDoctorProfile = async (req: AuthRequest, res: Response): Prom
     });
   } catch (error) {
     console.error('❌ Error in upsertDoctorProfile:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Internal server error' 
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
     });
   }
 };
@@ -761,7 +760,7 @@ export const getRecordsByPatientName = async (req: AuthRequest, res: Response): 
     }
 
     // Tìm patients bằng tên
-    const patients = await User.find({ 
+    const patients = await User.find({
       name: { $regex: patientName, $options: 'i' },
       role: 'patient'
     });
@@ -772,9 +771,9 @@ export const getRecordsByPatientName = async (req: AuthRequest, res: Response): 
     const records = await MedicalRecord.find({
       patient_id: { $in: patientIds }
     })
-    .populate('patient_id', 'name email phoneNumber')
-    .populate('doctor_id', 'name email')
-    .populate('appointment_id');
+      .populate('patient_id', 'name email phoneNumber')
+      .populate('doctor_id', 'name email')
+      .populate('appointment_id');
 
     res.status(200).json({
       success: true,
@@ -801,7 +800,7 @@ export const getRecordsByDoctorName = async (req: AuthRequest, res: Response): P
     }
 
     // Tìm doctors bằng tên
-    const doctors = await User.find({ 
+    const doctors = await User.find({
       name: { $regex: doctorName, $options: 'i' },
       role: 'doctor'
     });
@@ -812,9 +811,9 @@ export const getRecordsByDoctorName = async (req: AuthRequest, res: Response): P
     const records = await MedicalRecord.find({
       doctor_id: { $in: doctorIds }
     })
-    .populate('patient_id', 'name email phoneNumber')
-    .populate('doctor_id', 'name email')
-    .populate('appointment_id');
+      .populate('patient_id', 'name email phoneNumber')
+      .populate('doctor_id', 'name email')
+      .populate('appointment_id');
 
     res.status(200).json({
       success: true,
@@ -832,9 +831,9 @@ export const refreshToken = async (req: Request, res: Response): Promise<void> =
     const { refreshToken } = req.body;
 
     if (!refreshToken) {
-      res.status(400).json({ 
-        success: false, 
-        message: 'Refresh token is required' 
+      res.status(400).json({
+        success: false,
+        message: 'Refresh token is required'
       });
       return;
     }
@@ -842,21 +841,21 @@ export const refreshToken = async (req: Request, res: Response): Promise<void> =
     // Verify refresh token
     const secret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
     if (!secret) {
-      res.status(500).json({ 
-        success: false, 
-        message: 'Server configuration error' 
+      res.status(500).json({
+        success: false,
+        message: 'Server configuration error'
       });
       return;
     }
 
     const decoded = jwt.verify(refreshToken, secret) as { id: string };
-    
+
     // Find user and check if refresh token matches
     const user = await User.findById(decoded.id);
     if (!user || user.refreshToken !== refreshToken) {
-      res.status(401).json({ 
-        success: false, 
-        message: 'Invalid refresh token' 
+      res.status(401).json({
+        success: false,
+        message: 'Invalid refresh token'
       });
       return;
     }
@@ -864,8 +863,8 @@ export const refreshToken = async (req: Request, res: Response): Promise<void> =
     const newRefreshToken = generateRefreshToken(String(user._id));
 
     // Update refresh token
-    await User.findByIdAndUpdate(user._id, { 
-      refreshToken: newRefreshToken 
+    await User.findByIdAndUpdate(user._id, {
+      refreshToken: newRefreshToken
     });
 
     res.status(200).json({
@@ -879,18 +878,18 @@ export const refreshToken = async (req: Request, res: Response): Promise<void> =
 
   } catch (error) {
     console.error('❌ Error in refreshToken:', error);
-    
+
     if (error instanceof jwt.JsonWebTokenError) {
-      res.status(401).json({ 
-        success: false, 
-        message: 'Invalid refresh token' 
+      res.status(401).json({
+        success: false,
+        message: 'Invalid refresh token'
       });
       return;
     }
 
-    res.status(500).json({ 
-      success: false, 
-      message: 'Internal server error' 
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
     });
   }
 };
@@ -899,16 +898,16 @@ export const refreshToken = async (req: Request, res: Response): Promise<void> =
 export const logoutUser = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
-      res.status(401).json({ 
-        success: false, 
-        message: 'Authentication required' 
+      res.status(401).json({
+        success: false,
+        message: 'Authentication required'
       });
       return;
     }
 
     // Invalidate refresh token
-    await User.findByIdAndUpdate(req.user._id, { 
-      refreshToken: null 
+    await User.findByIdAndUpdate(req.user._id, {
+      refreshToken: null
     });
 
     res.status(200).json({
@@ -918,9 +917,9 @@ export const logoutUser = async (req: AuthRequest, res: Response): Promise<void>
 
   } catch (error) {
     console.error('❌ Error in logoutUser:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Internal server error' 
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
     });
   }
 };
@@ -929,9 +928,9 @@ export const logoutUser = async (req: AuthRequest, res: Response): Promise<void>
 export const changePassword = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
-      res.status(401).json({ 
-        success: false, 
-        message: 'Authentication required' 
+      res.status(401).json({
+        success: false,
+        message: 'Authentication required'
       });
       return;
     }
@@ -939,17 +938,17 @@ export const changePassword = async (req: AuthRequest, res: Response): Promise<v
     const { currentPassword, newPassword } = req.body;
 
     if (!currentPassword || !newPassword) {
-      res.status(400).json({ 
-        success: false, 
-        message: 'Current password and new password are required' 
+      res.status(400).json({
+        success: false,
+        message: 'Current password and new password are required'
       });
       return;
     }
 
     if (newPassword.length < 6) {
-      res.status(400).json({ 
-        success: false, 
-        message: 'New password must be at least 6 characters long' 
+      res.status(400).json({
+        success: false,
+        message: 'New password must be at least 6 characters long'
       });
       return;
     }
@@ -957,18 +956,18 @@ export const changePassword = async (req: AuthRequest, res: Response): Promise<v
     // Get user with password
     const user = await User.findById(req.user._id).select('+password');
     if (!user) {
-      res.status(404).json({ 
-        success: false, 
-        message: 'User not found' 
+      res.status(404).json({
+        success: false,
+        message: 'User not found'
       });
       return;
     }
     // Verify current password
     const isCurrentPasswordValid = await bcrypt.compare(currentPassword, user.password);
     if (!isCurrentPasswordValid) {
-      res.status(400).json({ 
-        success: false, 
-        message: 'Current password is incorrect' 
+      res.status(400).json({
+        success: false,
+        message: 'Current password is incorrect'
       });
       return;
     }
@@ -978,8 +977,8 @@ export const changePassword = async (req: AuthRequest, res: Response): Promise<v
     const hashedNewPassword = await bcrypt.hash(newPassword, saltRounds);
 
     // Update password
-    await User.findByIdAndUpdate(req.user._id, { 
-      password: hashedNewPassword 
+    await User.findByIdAndUpdate(req.user._id, {
+      password: hashedNewPassword
     });
 
     res.status(200).json({
@@ -989,9 +988,9 @@ export const changePassword = async (req: AuthRequest, res: Response): Promise<v
 
   } catch (error) {
     console.error('❌ Error in changePassword:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Internal server error' 
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
     });
   }
 };
@@ -1001,7 +1000,7 @@ export const unlockDoctorAccount = async (req: AuthRequest, res: Response): Prom
   try {
     const { doctorId } = req.params;
     const adminId = req.user?._id;
-        if (req.user?.role !== 'admin') {
+    if (req.user?.role !== 'admin') {
       res.status(403).json({
         success: false,
         message: 'Access denied. Admin role required.'
@@ -1010,7 +1009,7 @@ export const unlockDoctorAccount = async (req: AuthRequest, res: Response): Prom
     }
 
     const user = await User.findById(doctorId);
-    
+
     if (!user) {
       res.status(404).json({
         success: false,
@@ -1065,7 +1064,7 @@ export const lockDoctorAccount = async (req: AuthRequest, res: Response): Promis
     }
 
     const user = await User.findById(doctorId);
-    
+
     if (!user) {
       res.status(404).json({
         success: false,
@@ -1101,7 +1100,8 @@ export const lockDoctorAccount = async (req: AuthRequest, res: Response): Promis
     });
   }
 };
-export const getLockedDoctors = async (req: AuthRequest, res: Response): Promise<void> => {  try {
+export const getLockedDoctors = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
     if (req.user?.role !== 'admin') {
       res.status(403).json({
         success: false,
@@ -1114,9 +1114,9 @@ export const getLockedDoctors = async (req: AuthRequest, res: Response): Promise
       role: 'doctor',
       isLocked: true
     })
-    .select('name email phoneNumber lockedAt loginAttempts')
-    .populate('lockedBy', 'name email')
-    .sort({ lockedAt: -1 });
+      .select('name email phoneNumber lockedAt loginAttempts')
+      .populate('lockedBy', 'name email')
+      .sort({ lockedAt: -1 });
 
     res.status(200).json({
       success: true,
@@ -1148,7 +1148,7 @@ export const submitUnlockRequest = async (req: Request, res: Response): Promise<
     }
 
     // Find the locked doctor
-    const doctor = await User.findOne({ 
+    const doctor = await User.findOne({
       email: email.toLowerCase().trim(),
       role: 'doctor'
     });
@@ -1190,7 +1190,7 @@ export const submitUnlockRequest = async (req: Request, res: Response): Promise<
 
     // Create unlock request
     const estimatedUnlockTime = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours from now
-    
+
     const unlockRequest = await UnlockRequest.create({
       doctor_id: doctor._id,
       doctor_email: doctor.email,
@@ -1219,7 +1219,7 @@ export const submitUnlockRequest = async (req: Request, res: Response): Promise<
     try {
       const admins = await User.find({ role: 'admin' }).select('email name');
       console.log(`📧 Found ${admins.length} admins to notify`);
-      
+
       if (admins.length === 0) {
         console.log('⚠️ No admin users found in the system');
       } else {
@@ -1276,8 +1276,8 @@ export const getPendingUnlockRequests = async (req: AuthRequest, res: Response):
     const pendingRequests = await UnlockRequest.find({
       status: 'pending'
     })
-    .populate('doctor_id', 'name email phoneNumber lockedAt loginAttempts')
-    .sort({ submitted_at: -1 });
+      .populate('doctor_id', 'name email phoneNumber lockedAt loginAttempts')
+      .sort({ submitted_at: -1 });
 
     res.status(200).json({
       success: true,
@@ -1477,7 +1477,7 @@ export const submitDoctorRegistration = async (req: Request, res: Response): Pro
       return;
     }
 
-    const existingRequest = await DoctorRegistrationRequest.findOne({ 
+    const existingRequest = await DoctorRegistrationRequest.findOne({
       email: email.toLowerCase(),
       status: 'pending'
     });

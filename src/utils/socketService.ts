@@ -455,6 +455,7 @@ class SocketService {
       // Send success back to sender
       socket.emit('message_sent_success', {
         messageId: newMessage._id,
+        tempId: data.tempId,
         conversationId,
         timestamp: new Date()
       });
@@ -481,8 +482,18 @@ class SocketService {
       const { messageId, conversationId, type } = data;
 
       if (!messageId || !conversationId || !type) {
-        ack?.({ success: false, error: 'Missing required fields' });  // ✅
-        socket.emit('delete_message_error', { error: 'Missing required fields', messageId });
+        ack?.({ success: false, error: 'Missing required fields' });
+        return;
+      }
+
+      // Kiểm tra user có trong conversation không
+      const conversation = await Conversation.findOne({
+        _id: conversationId,
+        participant_ids: userId
+      });
+
+      if (!conversation) {
+        ack?.({ success: false, error: 'Not in conversation' });
         return;
       }
 
@@ -490,17 +501,12 @@ class SocketService {
       const message = await Message.findById(messageId);
 
       if (!message) {
-        ack?.({ success: false, error: 'Message not found' });  // ✅
-        socket.emit('delete_message_error', { error: 'Message not found', messageId });
+        ack?.({ success: false, error: 'Message not found' });
         return;
       }
 
       if (type === 'everyone' && message.sender_id.toString() !== userId) {
-        ack?.({ success: false, error: 'Only sender can delete for everyone' });  // ✅
-        socket.emit('delete_message_error', {
-          error: 'Only sender can delete for everyone',
-          messageId
-        });
+        ack?.({ success: false, error: 'Only sender can delete for everyone' });
         return;
       }
 
@@ -511,10 +517,20 @@ class SocketService {
         message.message = 'This message was deleted';
         await message.save();
 
-        // Broadcast tới tất cả participants
-        this.emitMessageDeleted(conversationId, message);
+        // Populate trước khi emit
+        await message.populate('sender_id', 'name avatar role');
+        await message.populate('receiver_id', 'name avatar role');
 
-        // ✅ Gọi ack để client resolve Promise
+        // Emit đến conversation room
+        this.io?.to(`conversation:${conversationId}`).emit('message_deleted', {
+          messageId: message._id,
+          message: message.toObject(),
+          conversationId,
+          type: 'everyone',
+          timestamp: new Date(),
+          success: true
+        });
+
         ack?.({ success: true, messageId, conversationId, type });
 
       } else {
@@ -525,31 +541,28 @@ class SocketService {
           { new: true }
         );
 
-        // Chỉ emit cho socket của người gọi
+        // Emit chỉ cho user hiện tại
         socket.emit('message_deleted', {
           messageId,
           conversationId,
           type: 'me',
-          message: { _id: messageId },
+          message: { _id: messageId, deleted_for_me: true },
           success: true
         });
 
-        // ✅ Gọi ack để client resolve Promise
         ack?.({ success: true, messageId, conversationId, type });
       }
 
-      socket.emit('delete_message_success', { messageId, conversationId, type });
-
     } catch (error: any) {
       console.error('Error handling delete_message:', error);
-      ack?.({ success: false, error: 'Failed to delete message' });  // ✅
+      ack?.({ success: false, error: 'Failed to delete message' });
       socket.emit('delete_message_error', {
         error: 'Failed to delete message',
-        message: error.message,
-        messageId: data.messageId
+        message: error.message
       });
     }
   }
+
 
   /* =======================
      MESSAGE EMIT METHODS

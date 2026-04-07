@@ -155,11 +155,17 @@ export const SendMessageSchema = z.object({
  * Review Schemas
  */
 export const CreateReviewSchema = z.object({
-  doctor_id: z.string().min(1, 'Doctor is required'),
-  rating: z.number().min(1, 'Rating must be at least 1').max(5, 'Rating cannot exceed 5'),
-  comment: z.string().min(10, 'Comment must be at least 10 characters').max(500, 'Comment must be less than 500 characters'),
-  appointment_id: z.string().optional()
+  rating: z.number()
+    .min(1, 'Rating must be at least 1')
+    .max(5, 'Rating must be at most 5'),
+  comment: z.string()
+    .max(500, 'Comment cannot exceed 500 characters')
+    .optional(),
+  appointment_id: z.string()
+    .min(1, 'Appointment ID is required')
+    .regex(/^[0-9a-fA-F]{24}$/, 'Invalid appointment ID format')
 });
+
 
 /**
  * Notification Schemas

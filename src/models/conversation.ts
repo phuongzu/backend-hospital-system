@@ -62,27 +62,14 @@ const conversationSchema = new Schema<IConversation>(
    INDEXES
 =========================== */
 
-// 🔐 Unique conversation theo participant + medical_record
+// 🔐 Unique conversation index (cặp participant + medical_record)
+// Sử dụng participant_ids.0 và participant_ids.1 để tránh multikey index (vốn index từng phần tử)
+// Điều này cho phép một user tham gia nhiều conversation khác nhau.
 conversationSchema.index(
-  { participant_ids: 1, medical_record_id: 1 },
+  { 'participant_ids.0': 1, 'participant_ids.1': 1, medical_record_id: 1 },
   {
     unique: true,
-    name: 'unique_conversation_by_record',
-    partialFilterExpression: {
-      medical_record_id: { $ne: null }
-    }
-  }
-);
-
-// 🔐 Unique conversation KHÔNG có medical_record
-conversationSchema.index(
-  { participant_ids: 1 },
-  {
-    unique: true,
-    name: 'unique_conversation_no_record',
-    partialFilterExpression: {
-      medical_record_id: null
-    }
+    name: 'unique_conversation_index'
   }
 );
 

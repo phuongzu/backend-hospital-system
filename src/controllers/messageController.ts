@@ -4,6 +4,7 @@ import Conversation from '../models/conversation';
 import { AuthRequest } from '../middlewares/authmiddleware';
 import { socketService } from '../utils/socketService';
 import User from '../models/user';
+import mongoose from 'mongoose';
 
 /* =======================
    GET MESSAGES BY RECORD
@@ -78,18 +79,16 @@ export const sendMessage = async (req: AuthRequest, res: ExpressResponse) => {
 
     const senderId = req.user?._id;
 
-    // Ensure consistent sorting
-    const participantIds = [senderId, receiver_id].sort((a, b) => {
-      const aStr = a.toString();
-      const bStr = b.toString();
-      return aStr.localeCompare(bStr);
-    });
+    const participantIds = [senderId.toString(), receiver_id.toString()]
+      .sort()
+      .map(id => new mongoose.Types.ObjectId(id));
 
     // Find or create conversation
     const conversation = await Conversation.findOneAndUpdate(
       {
-        participant_ids: participantIds,
-        ...(medical_record_id && { medical_record_id })
+        'participant_ids.0': participantIds[0],
+        'participant_ids.1': participantIds[1],
+        medical_record_id: medical_record_id || null
       },
       {
         $setOnInsert: {
@@ -106,6 +105,7 @@ export const sendMessage = async (req: AuthRequest, res: ExpressResponse) => {
         setDefaultsOnInsert: true
       }
     );
+
 
     // Create message
     const newMessage = new Message({
@@ -390,12 +390,15 @@ export const sendMessageWithMedia = async (req: AuthRequest, res: ExpressRespons
       });
     }
 
-    const participantIds = [senderId.toString(), receiver_id.toString()].sort();
+    const participantIds = [senderId.toString(), receiver_id.toString()]
+      .sort()
+      .map(id => new mongoose.Types.ObjectId(id));
 
     const conversation = await Conversation.findOneAndUpdate(
       {
-        participant_ids: participantIds,
-        ...(medical_record_id && { medical_record_id })
+        'participant_ids.0': participantIds[0],
+        'participant_ids.1': participantIds[1],
+        medical_record_id: medical_record_id || null
       },
       {
         $setOnInsert: {
@@ -412,6 +415,7 @@ export const sendMessageWithMedia = async (req: AuthRequest, res: ExpressRespons
         setDefaultsOnInsert: true
       }
     );
+
 
     const newMessage = await Message.create({
       sender_id: senderId,
@@ -466,10 +470,10 @@ export const editMessage = async (req: AuthRequest, res: ExpressResponse) => {
     const { newMessage } = req.body;
     const userId = req.user?._id;
 
-    if (!newMessage) {
+    if (!messageId || !mongoose.Types.ObjectId.isValid(messageId)) {
       return res.status(400).json({
         success: false,
-        message: 'New message is required'
+        message: 'Invalid message ID'
       });
     }
 
@@ -535,8 +539,15 @@ export const editMessage = async (req: AuthRequest, res: ExpressResponse) => {
 export const deleteMessage = async (req: AuthRequest, res: ExpressResponse) => {
   try {
     const { messageId } = req.params;
-    const { type } = req.body; // 'everyone' or 'me'
+    const { type } = req.body;
     const userId = req.user?._id;
+
+    if (!messageId || !mongoose.Types.ObjectId.isValid(messageId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid message ID'
+      });
+    }
 
     const message = await Message.findById(messageId);
 
@@ -611,17 +622,10 @@ export const addReaction = async (req: AuthRequest, res: ExpressResponse) => {
     const { reaction } = req.body;
     const userId = req.user?._id;
 
-    if (!reaction || !messageId) {
+    if (!messageId || !mongoose.Types.ObjectId.isValid(messageId)) {
       return res.status(400).json({
         success: false,
-        message: 'Reaction and message ID are required'
-      });
-    }
-
-    if (reaction.length > 10) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid emoji'
+        message: 'Invalid message ID'
       });
     }
 
@@ -973,11 +977,15 @@ export const findOrCreateConversation = async (req: AuthRequest, res: ExpressRes
       });
     }
 
-    // Consistent sort to prevent duplicate conversations
-    const participantIds = [userId.toString(), participantId.toString()].sort();
-
+    const participantIds = [userId.toString(), participantId.toString()]
+      .sort()
+      .map(id => new mongoose.Types.ObjectId(id));
     const conversation = await Conversation.findOneAndUpdate(
-      { participant_ids: participantIds },
+      {
+        'participant_ids.0': participantIds[0],
+        'participant_ids.1': participantIds[1],
+        medical_record_id: null
+      },
       {
         $setOnInsert: {
           participant_ids: participantIds,
