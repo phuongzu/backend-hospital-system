@@ -96,13 +96,14 @@ export async function fetchDBContext(
   const DAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
   const dayOfWeek = DAYS[tomorrow.getDay()];
 
-  const doctors = await Doctor.find({
-    $or: [{ isAvailable: true }, { status: 'working' }],
-  })
+  const doctors = await Doctor.find({ isAvailable: true })
     .populate('user_id', 'name')
     .populate('specialty_id', 'name _id')
-    .limit(50)
+    .select('_id user_id specialty_id years_of_experience consultation_fee available_hours')
+    .limit(30)
     .lean();
+
+
 
   const doctorIds = doctors.map(d => d._id);
 
@@ -171,11 +172,13 @@ export async function fetchDBContext(
       appointment_date: { $gte: new Date() },
       status: { $in: ['pending', 'confirmed'] },
     })
-      .populate('doctor_id', 'name')
-      .populate('specialty_id', 'name')
+      .populate<{ doctor_id: { name: string } }>('doctor_id', 'name')
+      .populate<{ specialty_id: { name: string; _id: any } }>('specialty_id', 'name _id')
+      .select('_id appointment_date time_slot status doctor_id specialty_id')
       .sort({ appointment_date: 1 })
       .limit(5)
       .lean();
+
 
     patientExistingAppointments = existing.map(a => ({
       id: (a._id as Types.ObjectId).toString(),
@@ -217,8 +220,8 @@ function buildDecisionPrompt(
 
   const existingAppts = dbContext.patientExistingAppointments.length
     ? dbContext.patientExistingAppointments
-        .map(a => `- ${a.date} lúc ${a.timeSlot} với ${a.doctorName} (${a.specialtyName}) - ${a.status}`)
-        .join('\n')
+      .map(a => `- ${a.date} lúc ${a.timeSlot} với ${a.doctorName} (${a.specialtyName}) - ${a.status}`)
+      .join('\n')
     : 'Không có lịch hẹn nào';
 
   const profileBlock = patientProfile
@@ -286,6 +289,7 @@ LƯU Ý QUAN TRỌNG:
 - Phân tích bệnh nền và tuổi để điều chỉnh urgencyLevel
 - Chỉ trả về JSON, không giải thích thêm`;
 }
+
 
 // ==================== MAIN DECISION FUNCTION ====================
 
