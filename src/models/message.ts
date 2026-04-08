@@ -142,6 +142,8 @@ const messageSchema = new mongoose.Schema({
 // Index để optimize query reaction
 messageSchema.index({ 'reactions.user_id': 1 });
 messageSchema.index({ conversation_id: 1, 'reactions.createdAt': -1 });
+messageSchema.index({ conversation_id: 1, sender_id: 1, message: 1, timestamp: -1 });
+
 
 const Message = mongoose.models.Message || mongoose.model<IMessage>('Message', messageSchema);
 

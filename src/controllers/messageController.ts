@@ -5,7 +5,6 @@ import { AuthRequest } from '../middlewares/authmiddleware';
 import { socketService } from '../utils/socketService';
 import User from '../models/user';
 import mongoose from 'mongoose';
-
 /* =======================
    GET MESSAGES BY RECORD
 ======================= */
@@ -41,10 +40,63 @@ export const getMessagesByRecord = async (req: AuthRequest, res: ExpressResponse
       }
     );
 
+    // ✅ Transform messages: handle deleted_for and deleted flags
+    const transformedMessages = messages.map(msg => {
+      const msgObj = msg.toObject();
+      const currentUserIdStr = userId?.toString();
+
+      const isDeletedForMe = msgObj.deleted_for?.some(
+        (id: any) => id.toString() === currentUserIdStr
+      );
+
+      // Convert deleted_for IDs to strings for frontend consistency
+      const deletedForStrings = (msgObj.deleted_for || []).map((id: any) => id.toString());
+
+      // ✅ PRIORITY 1: Handle deleted for EVERYONE case
+      if (msgObj.deleted === true) {
+        return {
+          ...msgObj,
+          deleted: true,
+          deleted_for_me: true,
+          deleted_for: deletedForStrings,
+          message: 'This message was deleted',
+          message_type: 'text',
+          media_url: undefined,
+          media_name: undefined,
+          reactions: [],
+          reactions_count: 0,
+        };
+      }
+
+      // ✅ PRIORITY 2: Handle deleted for ME ONLY case
+      if (isDeletedForMe && !msgObj.deleted) {
+        return {
+          ...msgObj,
+          deleted: false,
+          deleted_for_me: true,
+          deleted_for: deletedForStrings,
+          message: 'This message was deleted for you',
+          message_type: 'text',
+          media_url: undefined,
+          media_name: undefined,
+          reactions: [],
+          reactions_count: 0,
+        };
+      }
+
+      // ✅ PRIORITY 3: Message not deleted
+      return {
+        ...msgObj,
+        deleted: false,
+        deleted_for_me: false,
+        deleted_for: deletedForStrings
+      };
+    });
+
     res.status(200).json({
       success: true,
       data: {
-        messages,
+        messages: transformedMessages,
         recordId
       }
     });
@@ -140,17 +192,21 @@ export const sendMessage = async (req: AuthRequest, res: ExpressResponse) => {
     await newMessage.populate('sender_id', 'name avatar role');
     await newMessage.populate('receiver_id', 'name avatar role');
 
+    const { clientTempId } = req.body;
+
     // Emit to Socket.IO
     socketService.emitNewMessage(
       conversation._id.toString(),
-      newMessage
+      newMessage,
+      clientTempId
     );
 
     res.status(201).json({
       success: true,
       data: {
         message: newMessage,
-        conversationId: conversation._id
+        conversationId: conversation._id,
+        clientTempId: req.body.clientTempId // ✅ Return clientTempId to sync frontend
       }
     });
   } catch (error: any) {
@@ -181,7 +237,7 @@ export const getConversations = async (req: AuthRequest, res: ExpressResponse) =
     const conversations = await Conversation.find({
       participant_ids: userId
     })
-      .populate('participant_ids', 'name avatar role')
+      .populate('participant_ids', 'name avatar role phoneNumber')
       .populate({
         path: 'last_message',
         populate: {
@@ -194,9 +250,16 @@ export const getConversations = async (req: AuthRequest, res: ExpressResponse) =
 
     const formattedConversations = await Promise.all(
       conversations.map(async (conversation) => {
+        // ✅ FIX: Đảm bảo tìm đúng participant
         const otherParticipant = conversation.participant_ids.find(
           (participant: any) => participant._id.toString() !== userId.toString()
         );
+
+        // ✅ FIX: Nếu không tìm thấy participant, bỏ qua conversation này
+        if (!otherParticipant) {
+          console.warn(`Conversation ${conversation._id} has no valid participant`);
+          return null;
+        }
 
         const unreadCount = await Message.countDocuments({
           conversation_id: conversation._id,
@@ -211,19 +274,45 @@ export const getConversations = async (req: AuthRequest, res: ExpressResponse) =
             (id: any) => id.toString() === userId.toString()
           );
 
-          if (isDeletedForMe && !lastMsgObj.deleted) {
+          // ✅ PRIORITY 1: Handle deleted for EVERYONE case
+          if (lastMsgObj.deleted === true) {
             lastMessage = {
               ...lastMsgObj,
+              deleted: true,
+              deleted_for_me: true,
               message: 'This message was deleted',
               message_type: 'text',
+              media_url: undefined,
+              media_name: undefined,
+              reactions: [],
+            } as any;
+          }
+          // ✅ PRIORITY 2: Handle deleted for ME ONLY case
+          else if (isDeletedForMe && !lastMsgObj.deleted) {
+            lastMessage = {
+              ...lastMsgObj,
+              deleted: false,
               deleted_for_me: true,
+              message: 'This message was deleted for you',
+              message_type: 'text',
+              media_url: undefined,
+              media_name: undefined,
+              reactions: [],
+            } as any;
+          }
+          // ✅ PRIORITY 3: Not deleted
+          else {
+            lastMessage = {
+              ...lastMsgObj,
+              deleted: false,
+              deleted_for_me: false,
             } as any;
           }
         }
 
         return {
           _id: conversation._id,
-          participant: otherParticipant,
+          participant: otherParticipant, // ✅ Đã đảm bảo có value
           last_message: lastMessage,
           last_message_at: conversation.last_message_at,
           unread_count: unreadCount,
@@ -233,9 +322,12 @@ export const getConversations = async (req: AuthRequest, res: ExpressResponse) =
       })
     );
 
+    // ✅ FIX: Lọc bỏ các conversation null
+    const validConversations = formattedConversations.filter(c => c !== null);
+
     res.status(200).json({
       success: true,
-      data: formattedConversations
+      data: validConversations
     });
   } catch (error) {
     console.error('Error fetching conversations:', error);
@@ -275,27 +367,64 @@ export const getConversationMessages = async (req: AuthRequest, res: ExpressResp
       .populate('receiver_id', 'name avatar role')
       .sort({ timestamp: 1 });
 
-    // Transform messages: nếu user nằm trong deleted_for, thay đổi nội dung
+    // Transform messages: handle deleted_for and deleted flags
     const transformedMessages = messages.map(msg => {
       const msgObj = msg.toObject();
+      const currentUserIdStr = userId?.toString();
+
       const isDeletedForMe = msgObj.deleted_for?.some(
-        (id: any) => id.toString() === userId?.toString()
+        (id: any) => id.toString() === currentUserIdStr
       );
 
-      if (isDeletedForMe && !msgObj.deleted) {
-        // User đã xóa message này cho mình, hiển thị thông báo
+      // Convert deleted_for IDs to strings for frontend consistency
+      const deletedForStrings = (msgObj.deleted_for || []).map((id: any) => id.toString());
+
+      // ✅ PRIORITY 1: Handle deleted for EVERYONE case (takes precedence)
+      if (msgObj.deleted === true) {
+        // Message deleted for everyone - show deleted message to all users
         return {
           ...msgObj,
-          deleted_for_me: true, // Thêm flag mới
+          deleted: true,
+          deleted_for_me: true, // Current user sees it as deleted too
+          deleted_for: deletedForStrings,
           message: 'This message was deleted',
           message_type: 'text',
           media_url: undefined,
           media_name: undefined,
-          reactions: [], // Xóa reactions khi đã xóa
+          media_names: undefined,
+          media_urls: undefined,
+          reactions: [],
+          reactions_count: 0,
+          edited: false,
         };
       }
 
-      return msgObj;
+      // ✅ PRIORITY 2: Handle deleted for ME ONLY case
+      if (isDeletedForMe && !msgObj.deleted) {
+        // User deleted this message for themselves only
+        return {
+          ...msgObj,
+          deleted: false, // Not deleted for everyone
+          deleted_for_me: true,
+          deleted_for: deletedForStrings,
+          message: 'This message was deleted for you',
+          message_type: 'text',
+          media_url: undefined,
+          media_name: undefined,
+          media_names: undefined,
+          media_urls: undefined,
+          reactions: [],
+          reactions_count: 0,
+        };
+      }
+
+      // ✅ PRIORITY 3: Message not deleted - return as is with deleted_for info
+      return {
+        ...msgObj,
+        deleted: false,
+        deleted_for_me: false,
+        deleted_for: deletedForStrings
+      };
     });
 
     // Mark as read (giữ nguyên)
@@ -443,14 +572,20 @@ export const sendMessageWithMedia = async (req: AuthRequest, res: ExpressRespons
     await newMessage.populate('sender_id', 'name avatar role');
     await newMessage.populate('receiver_id', 'name avatar role');
 
+    const { clientTempId } = req.body;
+
     socketService.emitNewMessage(
       conversation._id.toString(),
-      newMessage
+      newMessage,
+      clientTempId
     );
 
     res.status(201).json({
       success: true,
-      data: newMessage
+      data: {
+        ...newMessage.toObject(),
+        clientTempId: req.body.clientTempId // ✅ Return clientTempId to sync frontend
+      }
     });
   } catch (err) {
     console.error(err);
@@ -539,9 +674,10 @@ export const editMessage = async (req: AuthRequest, res: ExpressResponse) => {
 export const deleteMessage = async (req: AuthRequest, res: ExpressResponse) => {
   try {
     const { messageId } = req.params;
-    const { type } = req.body;
+    const type = req.query.type || req.body.type;
     const userId = req.user?._id;
 
+    // ✅ Validate messageId
     if (!messageId || !mongoose.Types.ObjectId.isValid(messageId)) {
       return res.status(400).json({
         success: false,
@@ -558,14 +694,96 @@ export const deleteMessage = async (req: AuthRequest, res: ExpressResponse) => {
       });
     }
 
-    if (type === 'everyone' && message.sender_id.toString() !== userId.toString()) {
-      return res.status(403).json({
+    // ✅ Validate user is in conversation
+    const conversation = await Conversation.findById(message.conversation_id);
+    if (!conversation) {
+      return res.status(404).json({
         success: false,
-        message: 'Only sender can delete message for everyone'
+        message: 'Conversation not found'
       });
     }
 
-    if (type === 'everyone') {
+    const isParticipant = conversation.participant_ids.some(
+      (id: any) => id.toString() === userId.toString()
+    );
+
+    if (!isParticipant) {
+      return res.status(403).json({
+        success: false,
+        message: 'You are not part of this conversation'
+      });
+    }
+
+    // ✅ DELETE FOR ME
+    if (type === 'me') {
+      const alreadyDeleted = message.deleted_for?.includes(userId);
+
+      if (alreadyDeleted) {
+        return res.status(200).json({
+          success: true,
+          message: 'Already deleted for you',
+          data: {
+            messageId: message._id,
+            deleted_for_me: true,
+            message: 'This message was deleted for you'
+          }
+        });
+      }
+
+      message.deleted_for = message.deleted_for || [];
+      message.deleted_for.push(userId);
+      await message.save();
+
+      // ✅ Transform response cho frontend
+      const transformedMessage = {
+        _id: message._id,
+        conversation_id: message.conversation_id,
+        deleted_for_me: true,
+        message: 'This message was deleted for you',
+        message_type: 'text',
+        media_url: undefined,
+        reactions: [],
+        reactions_count: 0,
+        timestamp: message.timestamp
+      };
+
+      // ✅ Emit socket event
+      socketService.emitMessageDeleted(message.conversation_id.toString(), {
+        messageId: message._id.toString(),
+        conversationId: message.conversation_id.toString(),
+        type: 'me',
+        userId: userId.toString(),
+        message: transformedMessage,
+        timestamp: new Date()
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: 'Message deleted for you',
+        data: transformedMessage
+      });
+    }
+    // ✅ DELETE FOR EVERYONE
+    else if (type === 'everyone') {
+      if (message.sender_id.toString() !== userId.toString()) {
+        return res.status(403).json({
+          success: false,
+          message: 'Only the sender can delete this message for everyone'
+        });
+      }
+
+      if (message.deleted) {
+        return res.status(200).json({
+          success: true,
+          message: 'Message already deleted',
+          data: {
+            messageId: message._id,
+            deleted: true,
+            message: 'This message was deleted'
+          }
+        });
+      }
+
       message.deleted = true;
       message.deleted_at = new Date();
       message.deleted_by = userId;
@@ -575,43 +793,47 @@ export const deleteMessage = async (req: AuthRequest, res: ExpressResponse) => {
       await message.populate('sender_id', 'name avatar role');
       await message.populate('receiver_id', 'name avatar role');
 
-      socketService.emitMessageDeleted(
-        message.conversation_id.toString(),
-        message
-      );
+      const transformedMessage = {
+        ...message.toObject(),
+        deleted: true,
+        deleted_for_me: true,
+        message: 'This message was deleted',
+        message_type: 'text',
+        media_url: undefined,
+        reactions: [],
+        reactions_count: 0
+      };
+
+      // ✅ Emit socket event
+      socketService.emitMessageDeleted(message.conversation_id.toString(), {
+        messageId: message._id.toString(),
+        conversationId: message.conversation_id.toString(),
+        type: 'everyone',
+        userId: userId.toString(),
+        message: transformedMessage,
+        timestamp: new Date()
+      });
 
       return res.status(200).json({
         success: true,
-        data: message
+        message: 'Message deleted for everyone',
+        data: transformedMessage
+      });
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid delete type. Use "me" or "everyone"'
       });
     }
-
-    if (type === 'me') {
-      const updatedMessage = await Message.findByIdAndUpdate(
-        messageId,
-        { $addToSet: { deleted_for: userId } },
-        { new: true }
-      );
-
-      return res.status(200).json({
-        success: true,
-        message: 'Message deleted for you only',
-        data: updatedMessage
-      });
-    }
-
-    res.status(400).json({
-      success: false,
-      message: 'Invalid delete type'
-    });
   } catch (error) {
     console.error('Delete message error:', error);
     res.status(500).json({
       success: false,
-      message: 'Delete message failed'
+      message: 'Failed to delete message'
     });
   }
 };
+
 
 /* =======================
    ADD REACTION
@@ -980,6 +1202,7 @@ export const findOrCreateConversation = async (req: AuthRequest, res: ExpressRes
     const participantIds = [userId.toString(), participantId.toString()]
       .sort()
       .map(id => new mongoose.Types.ObjectId(id));
+
     const conversation = await Conversation.findOneAndUpdate(
       {
         'participant_ids.0': participantIds[0],
@@ -1003,10 +1226,18 @@ export const findOrCreateConversation = async (req: AuthRequest, res: ExpressRes
         populate: { path: 'sender_id receiver_id', select: 'name avatar role' },
       });
 
-    // Format response same as getConversations
-    const otherParticipant = (conversation.participant_ids as any[]).find(
+    // ✅ FIX: Tìm participant khác
+    const otherParticipant = conversation.participant_ids.find(
       (p: any) => p._id.toString() !== userId.toString()
     );
+
+    // ✅ FIX: Kiểm tra tồn tại
+    if (!otherParticipant) {
+      return res.status(500).json({
+        success: false,
+        message: 'Invalid conversation state'
+      });
+    }
 
     return res.status(200).json({
       success: true,
