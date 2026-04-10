@@ -11,7 +11,7 @@ export interface TreatmentStep {
   dosage?: string;
   duration?: string;
   instructions?: string;
-  status: 'pending' | 'in-progress' | 'completed' | 'approved' | 'rejected' | 'scheduled' | 'waiting_for_patient_approval' | 'patient_suggested';  
+  status: 'pending' | 'in-progress' | 'completed' | 'approved' | 'rejected' | 'scheduled' | 'waiting_for_patient_approval' | 'patient_suggested';
   completedAt?: Date;
   createdAt?: Date;
   approvedAt?: Date;
@@ -35,8 +35,8 @@ export interface TreatmentStep {
   reExaminationAppointmentId?: mongoose.Types.ObjectId; // ID appointment
   reExaminationNotes?: string;           // Ghi chú tái khám
   arrivalConfirmed?: boolean;            // Đã xác nhận đến khám
-  isPhysicalVisit?: boolean;              
-  arrivalConfirmedAt?: Date;           
+  isPhysicalVisit?: boolean;
+  arrivalConfirmedAt?: Date;
   _id?: string;
 }
 
@@ -75,7 +75,7 @@ export interface IMedicalRecord extends Document {
   user_id: mongoose.Types.ObjectId;
   doctor_id: mongoose.Types.ObjectId;
   appointment_id: mongoose.Types.ObjectId;
-  
+
   // Medical Information
   diagnosis: string;
   treatment: string;
@@ -84,12 +84,12 @@ export interface IMedicalRecord extends Document {
   allergies?: string[];
   current_medications?: string[];
   reason?: string;
-  
+
   // Clinical Data
   vital_signs: VitalSigns;
   lab_results: LabResult[];
   prescriptions: Prescription[];
-  
+
   // Treatment Plan System
   treatment_plan: TreatmentStep[];
   current_step: number;
@@ -99,18 +99,18 @@ export interface IMedicalRecord extends Document {
   status: 'pending' | 'active' | 'resolved' | 'follow_up' | 'chronic';
   priority: 'low' | 'medium' | 'high' | 'urgent';
   severity: 'mild' | 'moderate' | 'severe' | 'critical';
-  
+
   // Additional Information
   notes?: string;
   follow_up_instructions?: string;
   follow_up_date?: Date;
   next_appointment?: Date;
   referral?: string;
-  
+
   // Timestamps
   created_at: Date;
   updated_at: Date;
-  
+
   // Virtuals
   age: number;
   bmi: number;
@@ -118,14 +118,14 @@ export interface IMedicalRecord extends Document {
   progress: number;
   isFollowUpRequired: boolean;
   hasPendingFeedback: boolean;
-  
+
   // Instance Methods
   addTreatmentStep(stepData: Omit<TreatmentStep, 'stepNumber' | 'status'>): Promise<this>;
   approveStep(stepNumber: number, doctorNotes?: string): Promise<this>;
   completeStep(stepNumber: number, patientMessage?: string): Promise<this>;
   submitPatientFeedback(stepNumber: number, feedback: string): Promise<this>;
-  doctorDecision(stepNumber: number, decision: 'approve' | 'approve_and_add_step' | 'approve_and_complete', 
-                doctorNotes?: string, newStepData?: Omit<TreatmentStep, 'stepNumber' | 'status'>): Promise<this>;  // NEW
+  doctorDecision(stepNumber: number, decision: 'approve' | 'approve_and_add_step' | 'approve_and_complete',
+    doctorNotes?: string, newStepData?: Omit<TreatmentStep, 'stepNumber' | 'status'>): Promise<this>;  // NEW
   updateStepStatus(stepNumber: number, status: TreatmentStep['status']): Promise<this>;
   addLabResult(testName: string, result: string, normalRange: string, unit: string, notes?: string): Promise<this>;
   addPrescription(prescriptionData: Omit<Prescription, '_id'>): Promise<this>;
@@ -158,7 +158,7 @@ export interface IMedicalRecordModel extends Model<IMedicalRecord> {
   findByStatus(status: string): Promise<IMedicalRecord[]>;
   findByPriority(priority: string): Promise<IMedicalRecord[]>;
   findRecentRecords(limit?: number): Promise<IMedicalRecord[]>;
-  
+
   // Treatment System Methods
   findActiveByDoctor(doctorId: string): Promise<IMedicalRecord | null>;
   findByAppointment(appointmentId: string): Promise<IMedicalRecord | null>;
@@ -190,7 +190,7 @@ const medicalRecordSchema = new Schema<IMedicalRecord, IMedicalRecordModel>(
       required: [true, 'Appointment ID is required'],
       index: true
     },
-    
+
     // Medical Information
     diagnosis: {
       type: String,
@@ -226,7 +226,7 @@ const medicalRecordSchema = new Schema<IMedicalRecord, IMedicalRecordModel>(
       type: String,
       trim: true
     },
-    
+
     // Clinical Data
     vital_signs: {
       blood_pressure: {
@@ -269,7 +269,7 @@ const medicalRecordSchema = new Schema<IMedicalRecord, IMedicalRecordModel>(
         max: [500, 'Blood sugar cannot exceed 500 mg/dL']
       }
     },
-    
+
     lab_results: [{
       test_name: {
         type: String,
@@ -298,7 +298,7 @@ const medicalRecordSchema = new Schema<IMedicalRecord, IMedicalRecordModel>(
         trim: true
       }
     }],
-    
+
     prescriptions: [{
       medication: {
         type: String,
@@ -335,7 +335,7 @@ const medicalRecordSchema = new Schema<IMedicalRecord, IMedicalRecordModel>(
         min: [0, 'Refills cannot be negative']
       }
     }],
-    
+
     // Treatment Plan System
     treatment_plan: [{
       stepNumber: {
@@ -379,7 +379,7 @@ const medicalRecordSchema = new Schema<IMedicalRecord, IMedicalRecordModel>(
         enum: ['pending', 'in-progress', 'completed', 'approved', 'rejected', 'scheduled'],
         default: 'pending'
       },
-        needsReExamination: {
+      needsReExamination: {
         type: Boolean,
         default: false
       },
@@ -439,20 +439,20 @@ const medicalRecordSchema = new Schema<IMedicalRecord, IMedicalRecordModel>(
         trim: true
       }
     }],
-    
+
     current_step: {
       type: Number,
       default: 1,
       min: [1, 'Current step must be at least 1']
     },
-    
+
     consultation_status: {
       type: String,
       enum: ['scheduled', 'in-progress', 'completed', 'cancelled'],
       default: 'in-progress',
       index: true
     },
-    
+
     // Medical Status
     status: {
       type: String,
@@ -463,7 +463,7 @@ const medicalRecordSchema = new Schema<IMedicalRecord, IMedicalRecordModel>(
       default: 'active',
       index: true
     },
-    
+
     priority: {
       type: String,
       enum: {
@@ -473,7 +473,7 @@ const medicalRecordSchema = new Schema<IMedicalRecord, IMedicalRecordModel>(
       default: 'medium',
       index: true
     },
-    
+
     severity: {
       type: String,
       enum: {
@@ -483,51 +483,51 @@ const medicalRecordSchema = new Schema<IMedicalRecord, IMedicalRecordModel>(
       default: 'mild',
       index: true
     },
-    
+
     // Additional Information
     notes: {
       type: String,
       trim: true,
       maxlength: [2000, 'Notes cannot exceed 2000 characters']
     },
-    
+
     follow_up_instructions: {
       type: String,
       trim: true
     },
-    
+
     follow_up_date: {
       type: Date,
       validate: {
-        validator: function(this: IMedicalRecord, value: Date) {
+        validator: function (this: IMedicalRecord, value: Date) {
           return !value || value > new Date();
         },
         message: 'Follow-up date must be in the future'
       }
     },
-    
+
     next_appointment: {
       type: Date,
       validate: {
-        validator: function(this: IMedicalRecord, value: Date) {
+        validator: function (this: IMedicalRecord, value: Date) {
           return !value || value > new Date();
         },
         message: 'Next appointment must be in the future'
       }
     },
-    
+
     referral: {
       type: String,
       trim: true
     },
-    
+
     // Timestamps
     created_at: {
       type: Date,
       default: Date.now,
       index: true
     },
-    
+
     updated_at: {
       type: Date,
       default: Date.now
@@ -543,12 +543,12 @@ const medicalRecordSchema = new Schema<IMedicalRecord, IMedicalRecordModel>(
 // ==================== VIRTUAL PROPERTIES ====================
 
 // Virtual for age calculation
-medicalRecordSchema.virtual('age').get(function() {
+medicalRecordSchema.virtual('age').get(function () {
   return null;
 });
 
 // Virtual for BMI calculation
-medicalRecordSchema.virtual('bmi').get(function() {
+medicalRecordSchema.virtual('bmi').get(function () {
   if (this.vital_signs?.weight && this.vital_signs?.height) {
     const weightKg = this.vital_signs.weight;
     const heightM = this.vital_signs.height / 100;
@@ -559,7 +559,7 @@ medicalRecordSchema.virtual('bmi').get(function() {
 });
 
 // Virtual for record type classification
-medicalRecordSchema.virtual('recordType').get(function() {
+medicalRecordSchema.virtual('recordType').get(function () {
   if (this.lab_results && this.lab_results.length > 0) return 'Lab Results';
   if (this.prescriptions && this.prescriptions.length > 0) return 'Prescription';
   if (this.vital_signs && Object.keys(this.vital_signs).length > 0) return 'Vital Signs';
@@ -568,24 +568,24 @@ medicalRecordSchema.virtual('recordType').get(function() {
 });
 
 // Virtual for treatment progress calculation
-medicalRecordSchema.virtual('progress').get(function() {
+medicalRecordSchema.virtual('progress').get(function () {
   if (this.treatment_plan.length === 0) return 0;
-  
-  const completedSteps = this.treatment_plan.filter(step => 
+
+  const completedSteps = this.treatment_plan.filter(step =>
     step.status === 'completed' || step.status === 'approved'
   ).length;
-  
+
   return Math.round((completedSteps / this.treatment_plan.length) * 100);
 });
 
 // Virtual for follow-up requirement
-medicalRecordSchema.virtual('isFollowUpRequired').get(function() {
+medicalRecordSchema.virtual('isFollowUpRequired').get(function () {
   return !!this.follow_up_date || this.status === 'follow_up';
 });
 
 // NEW: Check if there are steps with pending feedback
-medicalRecordSchema.virtual('hasPendingFeedback').get(function() {
-  return this.treatment_plan.some(step => 
+medicalRecordSchema.virtual('hasPendingFeedback').get(function () {
+  return this.treatment_plan.some(step =>
     step.status === 'completed' && step.patient_feedback && !step.approval_requested
   );
 });
@@ -593,72 +593,72 @@ medicalRecordSchema.virtual('hasPendingFeedback').get(function() {
 // ==================== INSTANCE METHODS ====================
 
 // Add treatment step
-medicalRecordSchema.methods.addTreatmentStep = function(stepData: Omit<TreatmentStep, 'stepNumber' | 'status'>) {
+medicalRecordSchema.methods.addTreatmentStep = function (stepData: Omit<TreatmentStep, 'stepNumber' | 'status'>) {
   const stepNumber = this.treatment_plan.length + 1;
   const newStep: TreatmentStep = {
     stepNumber,
     ...stepData,
     status: stepNumber === 1 ? 'in-progress' : 'pending'
   };
-  
+
   this.treatment_plan.push(newStep);
-  
+
   if (stepNumber === 1) {
     this.current_step = 1;
   }
-  
+
   return this.save();
 };
 
 // Submit patient feedback
-medicalRecordSchema.methods.submitPatientFeedback = function(stepNumber: number, feedback: string) {
+medicalRecordSchema.methods.submitPatientFeedback = function (stepNumber: number, feedback: string) {
   const step = this.treatment_plan.find((s: TreatmentStep) => s.stepNumber === stepNumber);
-  
+
   if (!step) {
     throw new Error(`Step ${stepNumber} not found`);
   }
-  
+
   if (step.status !== 'completed') {
     throw new Error('Step must be completed before submitting feedback');
   }
-  
+
   step.patient_feedback = feedback;
   step.approval_requested = true;
   step.approval_requested_at = new Date();
-  
+
   return this.save();
 };
 
 // Doctor decision on step
-medicalRecordSchema.methods.doctorDecision = function(
+medicalRecordSchema.methods.doctorDecision = function (
   stepNumber: number,
   decision: 'approve' | 'approve_and_add_step' | 'approve_and_complete' | 'approve_needs_re_examination',
   doctorNotes?: string,
   newStepData?: Omit<TreatmentStep, 'stepNumber' | 'status'>
 ) {
   const step = this.treatment_plan.find((s: TreatmentStep) => s.stepNumber === stepNumber);
-  
+
   if (!step) {
     throw new Error(`Step ${stepNumber} not found`);
   }
-  
+
   if (step.status !== 'completed') {
     throw new Error('Step must be completed before doctor decision');
   }
-  
+
   // Update current step
   step.status = 'approved';
   step.doctorNotes = doctorNotes;
   step.approvedAt = new Date();
   step.approval_requested = false;
-  
+
   // Process decision
   if (decision === 'approve_needs_re_examination') {
     // Đánh dấu cần tái khám, KHÔNG tự tạo lịch
     step.needsReExamination = true;
     step.requires_followup = true;
     step.followup_reason = doctorNotes;
-    
+
   } else if (decision === 'approve_and_add_step') {
     // Add new follow-up step
     const newStepNumber = this.treatment_plan.length + 1;
@@ -675,7 +675,7 @@ medicalRecordSchema.methods.doctorDecision = function(
       followup_reason: doctorNotes
     };
     this.treatment_plan.push(newStep);
-    
+
   } else if (decision === 'approve_and_complete') {
     // Approve all completed steps
     this.treatment_plan.forEach((s: TreatmentStep) => {
@@ -684,13 +684,13 @@ medicalRecordSchema.methods.doctorDecision = function(
         s.approvedAt = new Date();
       }
     });
-    
+
     // Complete consultation
     this.consultation_status = 'completed';
     this.status = 'resolved';
     this.updated_at = new Date();
   }
-  
+
   // Activate next step if exists
   const nextStep = this.treatment_plan.find((s: TreatmentStep) => s.stepNumber === stepNumber + 1);
   if (nextStep && nextStep.status === 'pending') {
@@ -698,21 +698,21 @@ medicalRecordSchema.methods.doctorDecision = function(
     nextStep.startedAt = new Date();
     this.current_step = stepNumber + 1;
   }
-  
+
   return this.save();
 };
-  
+
 
 // Get steps with patient feedback
-medicalRecordSchema.methods.getStepsWithFeedback = function(): TreatmentStep[] {
-  return this.treatment_plan.filter((step: TreatmentStep) => 
+medicalRecordSchema.methods.getStepsWithFeedback = function (): TreatmentStep[] {
+  return this.treatment_plan.filter((step: TreatmentStep) =>
     step.patient_feedback && step.approval_requested
   );
 };
 
 // Check if has pending doctor decisions
-medicalRecordSchema.methods.hasPendingDoctorDecision = function(): boolean {
-  return this.treatment_plan.some((step: TreatmentStep) => 
+medicalRecordSchema.methods.hasPendingDoctorDecision = function (): boolean {
+  return this.treatment_plan.some((step: TreatmentStep) =>
     step.status === 'completed' && step.patient_feedback && step.approval_requested
   );
 };
@@ -720,8 +720,8 @@ medicalRecordSchema.methods.hasPendingDoctorDecision = function(): boolean {
 // ==================== STATIC METHODS ====================
 
 // Find records by doctor with pending feedback
-medicalRecordSchema.statics.findByDoctorWithPendingFeedback = function(doctorId: string) {
-  return this.find({ 
+medicalRecordSchema.statics.findByDoctorWithPendingFeedback = function (doctorId: string) {
+  return this.find({
     doctor_id: doctorId,
     'treatment_plan.status': 'completed',
     'treatment_plan.patient_feedback': { $exists: true, $ne: '' },
@@ -735,7 +735,7 @@ medicalRecordSchema.statics.findByDoctorWithPendingFeedback = function(doctorId:
 // Trong medicalRecordSchema.methods
 
 // Schedule re-examination for a step
-medicalRecordSchema.methods.scheduleReExamination = function(
+medicalRecordSchema.methods.scheduleReExamination = function (
   stepNumber: number,
   appointmentDate: Date,
   appointmentTime: string,
@@ -743,14 +743,14 @@ medicalRecordSchema.methods.scheduleReExamination = function(
   appointmentId?: mongoose.Types.ObjectId
 ) {
   const step = this.treatment_plan.find((s: TreatmentStep) => s.stepNumber === stepNumber);
-  
+
   if (!step) {
     throw new Error(`Step ${stepNumber} not found`);
   }
-  
+
   // QUAN TRỌNG: Tìm appointmentId theo thứ tự ưu tiên
   let targetAppointmentId = null;
-  
+
   // 1. Ưu tiên: appointmentId từ tham số (nếu có)
   if (appointmentId) {
     targetAppointmentId = appointmentId;
@@ -759,130 +759,130 @@ medicalRecordSchema.methods.scheduleReExamination = function(
   else if (step.reExaminationAppointmentId) {
     targetAppointmentId = step.reExaminationAppointmentId;
   }
-  
+
   // Cập nhật thông tin step
   step.reExaminationScheduled = true;
   step.reExaminationDate = appointmentDate;
   step.reExaminationTime = appointmentTime;
   step.reExaminationNotes = notes;
   step.needsReExamination = false;
-  
+
   // Chỉ cập nhật appointmentId nếu có giá trị mới
   if (targetAppointmentId) {
     step.reExaminationAppointmentId = targetAppointmentId;
   }
-  
+
   // Cập nhật trạng thái
   if (step.status === 'completed' || step.status === 'approved') {
     step.status = 'scheduled';
   }
-  
+
   return this.save();
 };
 
 
 // Reschedule re-examination
-medicalRecordSchema.methods.rescheduleReExamination = function(
+medicalRecordSchema.methods.rescheduleReExamination = function (
   stepNumber: number,
   newDate: Date,
   newTime: string,
   notes?: string
 ) {
   const step = this.treatment_plan.find((s: TreatmentStep) => s.stepNumber === stepNumber);
-  
+
   if (!step) {
     throw new Error(`Step ${stepNumber} not found`);
   }
-  
+
   if (!step.reExaminationScheduled) {
     throw new Error('Re-examination not scheduled yet');
   }
-  
+
   step.reExaminationDate = newDate;
   step.reExaminationTime = newTime;
-  
+
   if (notes) {
     step.reExaminationNotes = notes;
   }
-  
+
   return this.save();
 };
 
 // Cancel re-examination
-medicalRecordSchema.methods.cancelReExamination = function(stepNumber: number) {
+medicalRecordSchema.methods.cancelReExamination = function (stepNumber: number) {
   const step = this.treatment_plan.find((s: TreatmentStep) => s.stepNumber === stepNumber);
-  
+
   if (!step) {
     throw new Error(`Step ${stepNumber} not found`);
   }
-  
+
   step.reExaminationScheduled = false;
   step.reExaminationDate = undefined;
   step.reExaminationTime = undefined;
   step.reExaminationNotes = undefined;
   step.arrivalConfirmed = false;
   step.arrivalConfirmedAt = undefined;
-  
+
   // Giữ lại appointmentId để có thể tham chiếu nếu cần
-  
+
   // Chuyển status về trạng thái trước đó
   if (step.status === 'scheduled') {
     step.status = step.needsReExamination ? 'approved' : 'completed';
   }
-  
+
   return this.save();
 };
 
 // Confirm patient arrival for re-examination
-medicalRecordSchema.methods.confirmReExaminationArrival = function(stepNumber: number) {
+medicalRecordSchema.methods.confirmReExaminationArrival = function (stepNumber: number) {
   const step = this.treatment_plan.find((s: TreatmentStep) => s.stepNumber === stepNumber);
-  
+
   if (!step) {
     throw new Error(`Step ${stepNumber} not found`);
   }
-  
+
   if (!step.reExaminationScheduled) {
     throw new Error('Re-examination not scheduled');
   }
-  
+
   if (!step.reExaminationDate) {
     throw new Error('Re-examination date not set');
   }
-  
+
   // Kiểm tra xem có phải ngày hẹn không
   const today = new Date();
   const appointmentDate = new Date(step.reExaminationDate);
-  
+
   if (appointmentDate.toDateString() !== today.toDateString()) {
     throw new Error('Can only confirm arrival on scheduled date');
   }
-  
+
   step.arrivalConfirmed = true;
   step.arrivalConfirmedAt = new Date();
   step.status = 'in-progress'; // Bắt đầu quá trình tái khám
-  
+
   return this.save();
 };
 
 // Get all steps that need re-examination
-medicalRecordSchema.methods.getStepsNeedingReExamination = function(): TreatmentStep[] {
-  return this.treatment_plan.filter((step: TreatmentStep) => 
+medicalRecordSchema.methods.getStepsNeedingReExamination = function (): TreatmentStep[] {
+  return this.treatment_plan.filter((step: TreatmentStep) =>
     step.needsReExamination && !step.reExaminationScheduled
   );
 };
 
 // Get all scheduled re-examinations
-medicalRecordSchema.methods.getScheduledReExaminations = function(): TreatmentStep[] {
-  return this.treatment_plan.filter((step: TreatmentStep) => 
+medicalRecordSchema.methods.getScheduledReExaminations = function (): TreatmentStep[] {
+  return this.treatment_plan.filter((step: TreatmentStep) =>
     step.reExaminationScheduled && step.reExaminationDate
   );
 };
 
 // Check if has any upcoming re-examinations
-medicalRecordSchema.virtual('hasUpcomingReExaminations').get(function() {
-  return this.treatment_plan.some((step: TreatmentStep) => 
-    step.reExaminationScheduled && 
-    step.reExaminationDate && 
+medicalRecordSchema.virtual('hasUpcomingReExaminations').get(function () {
+  return this.treatment_plan.some((step: TreatmentStep) =>
+    step.reExaminationScheduled &&
+    step.reExaminationDate &&
     step.reExaminationDate > new Date()
   );
 });
