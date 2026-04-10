@@ -182,7 +182,6 @@ export const verifyCodeAndResetPassword = async (req: Request, res: Response): P
     // Remove used verification code
     verificationCodes.delete(normalizedEmail);
 
-    // Invalidate all refresh tokens for security
     await User.findByIdAndUpdate(user._id, {
       refreshToken: null
     });

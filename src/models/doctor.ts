@@ -122,7 +122,8 @@ const doctorSchema = new Schema<IDoctor, IDoctorModel>(
         trim: true,
         enum: [
           'English', 'Spanish', 'French', 'German', 'Chinese',
-          'Japanese', 'Korean', 'Arabic', 'Hindi', 'Vietnamese', 'Other',
+          'Japanese', 'Korean', 'Arabic', 'Hindi', 'Vietnamese', 'Italian',
+          'Russian', 'Portuguese', 'Thai', 'Indonesian', 'Malay', 'Filipino', 'Other',
         ],
       },
     ],

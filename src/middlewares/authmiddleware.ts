@@ -65,7 +65,7 @@ export const authorize = (...roles: string[]) => {
         userId: req.user._id,
         email: req.user.email
       });
-      
+
       res.status(403).json({
         success: false,
         message: `Access denied. ${req.user.role} role is not authorized to access this resource.`

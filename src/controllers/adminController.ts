@@ -54,7 +54,7 @@ export const getAdminDashboard = async (req: AuthRequest, res: Response): Promis
         {
           $match: {
             status: 'completed',
-            createdAt: { 
+            createdAt: {
               $gte: new Date(new Date().getFullYear(), new Date().getMonth(), 1),
               $lt: new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1)
             }
@@ -203,7 +203,7 @@ export const getAllDoctors = async (req: AuthRequest, res: Response): Promise<vo
     const { page = 1, limit = 1000, search = '', status = '' } = req.query; // Tăng limit lên 1000
 
     const query: any = { role: 'doctor' };
-    
+
     if (search) {
       query.$or = [
         { name: { $regex: search, $options: 'i' } },
@@ -228,7 +228,7 @@ export const getAllDoctors = async (req: AuthRequest, res: Response): Promise<vo
         // Find doctor profile from Doctor collection
         const doctorProfile = await Doctor.findOne({ user_id: doctor._id })
           .populate('specialty_id', 'name');
-        
+
         // Get appointment statistics
         const appointmentStats = await Appointment.aggregate([
           { $match: { doctor_id: doctorProfile?._id } },
@@ -282,7 +282,7 @@ export const getAllPatients = async (req: AuthRequest, res: Response): Promise<v
     const { page = 1, limit = 1000, search = '' } = req.query;
 
     const query: any = { role: 'patient' };
-    
+
     if (search) {
       query.$or = [
         { name: { $regex: search, $options: 'i' } },
@@ -300,7 +300,7 @@ export const getAllPatients = async (req: AuthRequest, res: Response): Promise<v
       patients.map(async (patient) => {
         const appointmentCount = await Appointment.countDocuments({ user_id: patient._id });
         const medicalRecordCount = await MedicalRecord.countDocuments({ user_id: patient._id });
-        
+
         // Lấy appointment gần nhất
         const lastAppointment = await Appointment.findOne({ user_id: patient._id })
           .sort({ appointment_date: -1 })
@@ -310,10 +310,10 @@ export const getAllPatients = async (req: AuthRequest, res: Response): Promise<v
         let patientStatus = 'inactive';
         const lastLoginDate = patient.lastLogin ? new Date(patient.lastLogin) : null;
         const now = new Date();
-        
+
         if (lastLoginDate) {
           const daysSinceLastLogin = Math.floor((now.getTime() - lastLoginDate.getTime()) / (1000 * 60 * 60 * 24));
-          
+
           if (daysSinceLastLogin <= 7) {
             patientStatus = 'active';
           } else if (daysSinceLastLogin <= 30) {
@@ -327,7 +327,7 @@ export const getAllPatients = async (req: AuthRequest, res: Response): Promise<v
         if (lastAppointment) {
           const appointmentDate = new Date(lastAppointment.appointment_date);
           const daysSinceLastAppointment = Math.floor((now.getTime() - appointmentDate.getTime()) / (1000 * 60 * 60 * 24));
-          
+
           if (daysSinceLastAppointment <= 30) {
             patientStatus = 'active';
           }
@@ -364,18 +364,18 @@ export const getAllPatients = async (req: AuthRequest, res: Response): Promise<v
 // Create new doctor (Admin only)
 export const createDoctor = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { 
-      name, 
-      email, 
-      password, 
-      phoneNumber, 
-      dateOfBirth, 
-      gender, 
+    const {
+      name,
+      email,
+      password,
+      phoneNumber,
+      dateOfBirth,
+      gender,
       address,
-      specialty_id, 
-      license_number, 
-      years_of_experience, 
-      consultation_fee 
+      specialty_id,
+      license_number,
+      years_of_experience,
+      consultation_fee
     } = req.body;
 
     // Validate required fields
@@ -497,18 +497,18 @@ export const getUserDetails = async (req: AuthRequest, res: Response): Promise<v
     }
 
     let additionalData: any = {};
-    
+
     if (user.role === 'doctor') {
       // FIX: Get doctor profile from Doctor collection, not populate
       const doctorProfile = await Doctor.findOne({ user_id: userId })
         .populate('specialty_id', 'name description');
-      
+
       // Get doctor statistics
       const appointmentStats = await Appointment.aggregate([
         { $match: { doctor_id: doctorProfile?._id } },
         { $group: { _id: '$status', count: { $sum: 1 } } }
       ]);
-      
+
       additionalData = {
         doctorProfile,
         appointmentStats: appointmentStats.reduce((acc: any, stat) => {
@@ -519,7 +519,7 @@ export const getUserDetails = async (req: AuthRequest, res: Response): Promise<v
     } else if (user.role === 'patient') {
       const appointmentCount = await Appointment.countDocuments({ user_id: userId });
       const medicalRecordCount = await MedicalRecord.countDocuments({ user_id: userId });
-      
+
       additionalData = {
         appointmentCount,
         medicalRecordCount
@@ -641,9 +641,9 @@ export const getLockedDoctors = async (req: AuthRequest, res: Response): Promise
       role: 'doctor',
       isLocked: true
     })
-    .select('name email phoneNumber lockedAt loginAttempts')
-    .populate('lockedBy', 'name email')
-    .sort({ lockedAt: -1 });
+      .select('name email phoneNumber lockedAt loginAttempts')
+      .populate('lockedBy', 'name email')
+      .sort({ lockedAt: -1 });
 
     res.status(200).json({
       success: true,
@@ -665,7 +665,7 @@ export const unlockDoctorAccount = async (req: AuthRequest, res: Response): Prom
     const adminId = req.user?._id;
 
     const user = await User.findById(doctorId);
-    
+
     if (!user) {
       res.status(404).json({
         success: false,
@@ -712,7 +712,7 @@ export const lockDoctorAccount = async (req: AuthRequest, res: Response): Promis
     const { reason } = req.body;
 
     const user = await User.findById(doctorId);
-    
+
     if (!user) {
       res.status(404).json({
         success: false,
@@ -755,8 +755,8 @@ export const getPendingUnlockRequests = async (req: AuthRequest, res: Response):
     const pendingRequests = await UnlockRequest.find({
       status: 'pending'
     })
-    .populate('doctor_id', 'name email phoneNumber lockedAt loginAttempts')
-    .sort({ submitted_at: -1 });
+      .populate('doctor_id', 'name email phoneNumber lockedAt loginAttempts')
+      .sort({ submitted_at: -1 });
 
     res.status(200).json({
       success: true,
@@ -1006,7 +1006,7 @@ export const approveDoctorRegistration = async (req: AuthRequest, res: Response)
     // Generate random password
     const randomPassword = Math.random().toString(36).slice(-8) + 'A1!';
     const hashedPassword = await bcrypt.hash(randomPassword, 12);
-    
+
     // 🔥 SỬA QUAN TRỌNG: Tạo user với status hợp lệ cho doctor
     const newUser = await User.create({
       name: request.name,
@@ -1075,15 +1075,15 @@ export const approveDoctorRegistration = async (req: AuthRequest, res: Response)
 
   } catch (error) {
     console.error('❌ Error approving doctor registration:', error);
-        if (error instanceof mongoose.Error.ValidationError) {
+    if (error instanceof mongoose.Error.ValidationError) {
       const errorDetails = Object.values(error.errors).map((err: any) => ({
         field: err.path,
         message: err.message,
         value: err.value
       }));
-      
+
       console.error('❌ Validation errors:', errorDetails);
-      
+
       res.status(400).json({
         success: false,
         message: 'Validation failed',
@@ -1091,7 +1091,7 @@ export const approveDoctorRegistration = async (req: AuthRequest, res: Response)
       });
       return;
     }
-    
+
     if (error.code === 11000) {
       res.status(409).json({
         success: false,
@@ -1099,7 +1099,7 @@ export const approveDoctorRegistration = async (req: AuthRequest, res: Response)
       });
       return;
     }
-    
+
     res.status(500).json({
       success: false,
       message: 'Internal server error'
@@ -1268,7 +1268,7 @@ export const lockUser = async (req: AuthRequest, res: Response): Promise<void> =
     const { reason } = req.body;
 
     const user = await User.findById(userId);
-    
+
     if (!user) {
       res.status(404).json({
         success: false,
@@ -1303,7 +1303,7 @@ export const unlockUser = async (req: AuthRequest, res: Response): Promise<void>
     const adminId = req.user?._id;
 
     const user = await User.findById(userId);
-    
+
     if (!user) {
       res.status(404).json({
         success: false,
@@ -1431,5 +1431,178 @@ export const createSpecialty = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: 'A specialty with this name already exists' });
     }
     res.status(400).json({ success: false, message: error.message || 'Error creating specialty' });
+  }
+};
+
+
+export const getDoctorSchedule = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { doctorId } = req.params;
+    console.log(`[DEBUG] getDoctorSchedule called with doctorId: ${doctorId}`);
+
+    let user = await User.findById(doctorId).select('name email phoneNumber dayOff status role');
+
+    // If user not found, maybe it's a Doctor Profile ID?
+    if (!user) {
+      console.log(`[DEBUG] User not found by ID ${doctorId}, checking as Doctor Profile ID...`);
+      const profile = await Doctor.findById(doctorId);
+      if (profile) {
+        user = await User.findById(profile.user_id).select('name email phoneNumber dayOff status role');
+        console.log(`[DEBUG] Found User by Doctor Profile ID. User ID: ${user?._id}`);
+      }
+    }
+
+    if (!user || user.role !== 'doctor') {
+      console.log(`[DEBUG] Doctor check failed. User: ${user ? 'found' : 'null'}, Role: ${user?.role}`);
+      res.status(404).json({ success: false, message: 'Doctor not found or role mismatch' });
+      return;
+    }
+
+    const doctorProfile = await Doctor.findOne({ user_id: user._id })
+      .populate('specialty_id', 'name');
+
+    if (!doctorProfile) {
+      res.status(404).json({ success: false, message: 'Doctor profile not found' });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        doctorId,
+        name: user.name,
+        email: user.email,
+        phoneNumber: user.phoneNumber,
+        status: user.status,
+        specialty: doctorProfile.specialty_id,
+        consultationFee: doctorProfile.consultation_fee,
+        available_hours: doctorProfile.available_hours,
+        dayOff: user.dayOff || [],
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error in getDoctorSchedule:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+export const updateDoctorSchedule = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { doctorId } = req.params;
+    console.log(`[DEBUG] updateDoctorSchedule called for ID: ${doctorId}`);
+    console.log(`[DEBUG] req.body keys: ${Object.keys(req.body || {})}`);
+
+    const { available_hours, dayOff } = req.body;
+
+    let user = await User.findById(doctorId);
+    if (!user) {
+      console.log(`[DEBUG] User not found by ID ${doctorId}, checking as Doctor Profile ID...`);
+      const profile = await Doctor.findById(doctorId);
+      if (profile) {
+        user = await User.findById(profile.user_id);
+      }
+    }
+
+    if (!user || user.role !== 'doctor') {
+      console.log(`[DEBUG] Doctor check failed for ID ${doctorId}. User: ${user ? 'found' : 'null'}, Role: ${user?.role}`);
+      res.status(404).json({ success: false, message: 'Doctor not found' });
+      return;
+    }
+
+    const doctorProfile = await Doctor.findOne({ user_id: user._id });
+    if (!doctorProfile) {
+      console.log(`[DEBUG] Doctor profile not found for user_id: ${user._id}`);
+      res.status(404).json({ success: false, message: 'Doctor profile not found' });
+      return;
+    }
+
+    console.log(`[DEBUG] Found Doctor Profile ID: ${doctorProfile._id} for User ID: ${user._id}`);
+
+    // Validate and Normalize available_hours
+    const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
+    const normalizedHours: any = {};
+
+    if (available_hours && typeof available_hours === 'object') {
+      console.log(`[DEBUG] Normalizing and Validating available_hours...`);
+      for (const [day, slot] of Object.entries(available_hours) as any[]) {
+        // Only accept objects that match the expected structure
+        if (slot && typeof slot === 'object' && !Array.isArray(slot)) {
+          if (slot.isAvailable) {
+            if (!slot.start || !slot.end) {
+              console.log(`[DEBUG] Validation failed: Missing start/end for ${day}`);
+              res.status(400).json({ success: false, message: `Missing start or end time for ${day}.` });
+              return;
+            }
+            if (!timeRegex.test(slot.start) || !timeRegex.test(slot.end)) {
+              console.log(`[DEBUG] Validation failed: Invalid format for ${day}: ${slot.start}-${slot.end}`);
+              res.status(400).json({ success: false, message: `Invalid time format for ${day}. Use HH:MM.` });
+              return;
+            }
+            const start = new Date(`2000-01-01T${slot.start}:00`);
+            const end = new Date(`2000-01-01T${slot.end}:00`);
+            if (start >= end) {
+              console.log(`[DEBUG] Validation failed: Start >= End for ${day}`);
+              res.status(400).json({ success: false, message: `Start time must be before end time for ${day}.` });
+              return;
+            }
+          }
+          normalizedHours[day] = {
+            start: slot.start || '09:00',
+            end: slot.end || '17:00',
+            isAvailable: !!slot.isAvailable
+          };
+        } else {
+          console.log(`[DEBUG] Skipping/Removing invalid legacy data for ${day}:`, slot);
+        }
+      }
+
+      console.log(`[DEBUG] Applying atomic update to doctor profile (ID: ${doctorProfile._id})...`);
+      // Use updateOne to bypass full document validation for other unrelated fields (like education/languages)
+      await Doctor.updateOne(
+        { _id: doctorProfile._id },
+        { $set: { available_hours: normalizedHours } }
+      );
+      console.log(`[DEBUG] Doctor profile available_hours updated successfully.`);
+    }
+
+    if (Array.isArray(dayOff)) {
+      console.log(`[DEBUG] Validating dayOff: ${dayOff}`);
+      // Validate date strings YYYY-MM-DD
+      const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+      const invalid = dayOff.find(d => typeof d !== 'string' || !dateRegex.test(d));
+      if (invalid) {
+        console.log(`[DEBUG] Validation failed: Invalid dayOff date: ${invalid}`);
+        res.status(400).json({ success: false, message: `Invalid date format: ${invalid}. Use YYYY-MM-DD.` });
+        return;
+      }
+      const uniqueDayOffs = [...new Set(dayOff)].sort();
+      
+      console.log(`[DEBUG] Applying atomic update to user (ID: ${user._id}) dayOff...`);
+      await User.updateOne(
+        { _id: user._id },
+        { $set: { dayOff: uniqueDayOffs } }
+      );
+      console.log(`[DEBUG] User dayOff updated successfully.`);
+      
+      // Update local object for the final response
+      user.dayOff = uniqueDayOffs;
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Doctor schedule updated successfully',
+      data: {
+        available_hours: normalizedHours,
+        dayOff: user.dayOff
+      }
+    });
+  } catch (error: any) {
+    console.error('❌ Error in updateDoctorSchedule:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 };
