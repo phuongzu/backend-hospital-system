@@ -1092,7 +1092,7 @@ export const approveDoctorRegistration = async (req: AuthRequest, res: Response)
       return;
     }
 
-    if (error.code === 11000) {
+    if (error) {
       res.status(409).json({
         success: false,
         message: 'Duplicate entry found'
@@ -1576,14 +1576,14 @@ export const updateDoctorSchedule = async (req: AuthRequest, res: Response): Pro
         return;
       }
       const uniqueDayOffs = [...new Set(dayOff)].sort();
-      
+
       console.log(`[DEBUG] Applying atomic update to user (ID: ${user._id}) dayOff...`);
       await User.updateOne(
         { _id: user._id },
         { $set: { dayOff: uniqueDayOffs } }
       );
       console.log(`[DEBUG] User dayOff updated successfully.`);
-      
+
       // Update local object for the final response
       user.dayOff = uniqueDayOffs;
     }

@@ -14,7 +14,7 @@ export interface IAppointment extends Document {
   is_re_examination: boolean;
   re_examination_step_id: mongoose.Types.ObjectId;
   re_examination_type?: 'followup' | 'physical' | 'lab';
-  
+
   // Metadata for tracking
   metadata?: {
     consultation_id?: string;
@@ -43,26 +43,26 @@ const appointmentSchema = new mongoose.Schema<IAppointment>({
   specialty_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Specialty' },
   appointment_date: { type: Date, required: true },
   time_slot: { type: String, required: true },
-  status: { type: String, enum: ['pending', 'confirmed', 'completed', 'cancelled','scheduled'], default: 'pending' },
+  status: { type: String, enum: ['pending', 'confirmed', 'completed', 'cancelled', 'scheduled'], default: 'pending' },
   reason: String,
-  re_examination_step_id: { 
-    type: mongoose.Schema.Types.ObjectId, 
+  re_examination_step_id: {
+    type: mongoose.Schema.Types.ObjectId,
     ref: 'MedicalRecord.treatment_plan._id',
     sparse: true
   },
-  is_re_examination: { 
-    type: Boolean, 
-    default: false 
+  is_re_examination: {
+    type: Boolean,
+    default: false
   },
   notes: String,
   created_at: { type: Date, default: Date.now },
 });
-appointmentSchema.pre('save', async function(next) {
+appointmentSchema.pre('save', async function (next) {
   const appointment = this;
-    if (appointment.isNew) {
+  if (appointment.isNew) {
     const startOfDay = new Date(appointment.appointment_date);
     startOfDay.setHours(0, 0, 0, 0);
-    
+
     const endOfDay = new Date(appointment.appointment_date);
     endOfDay.setHours(23, 59, 59, 999);
 
@@ -80,7 +80,7 @@ appointmentSchema.pre('save', async function(next) {
       return next(error);
     }
   }
-  
+
   next();
 });
 

@@ -1,9 +1,9 @@
 import Groq from 'groq-sdk';
-import Doctor from '../models/doctor';
+import Doctor, { IDoctor } from '../models/doctor';
 import Appointment from '../models/appointment';
 import Specialty from '../models/specialty';
 import Review from '../models/review';
-import { PatientProfile, UrgencyLevel, Language } from './aiMedicalService';
+import { PatientProfile, UrgencyLevel } from './aiMedicalService';
 import { Types } from 'mongoose';
 
 // ==================== TYPES ====================
@@ -25,7 +25,9 @@ export interface AIDecision {
   emergencyReason?: string;
   followUpNeeded: boolean;
   estimatedWaitDays?: number;
+  userIntent?: string;
 }
+
 
 export interface DBContext {
   availableSpecialties: SpecialtyContext[];
@@ -62,10 +64,37 @@ interface ExistingAppointment {
   status: string;
 }
 
-const ALL_TIME_SLOTS = [
-  '09:00', '09:30', '10:00', '10:30', '11:00', '11:30',
-  '14:00', '14:30', '15:00', '15:30', '16:00', '16:30',
-];
+export const generateTimeSlotsFromSchedule = (
+  availableHours: IDoctor['available_hours'],
+  date: Date,
+  intervalMinutes = 30
+): string[] => {
+  const days = [
+    'sunday', 'monday', 'tuesday', 'wednesday',
+    'thursday', 'friday', 'saturday',
+  ] as const;
+
+  const dayName = days[date.getDay()] as keyof IDoctor['available_hours'];
+  const schedule = availableHours?.[dayName];
+
+  if (!schedule || !schedule.isAvailable) return [];
+
+  const [startH, startM] = schedule.start.split(':').map(Number);
+  const [endH, endM] = schedule.end.split(':').map(Number);
+
+  const slots: string[] = [];
+  let current = startH * 60 + startM;
+  const endTotal = endH * 60 + endM;
+
+  while (current + intervalMinutes <= endTotal) {
+    const h = Math.floor(current / 60).toString().padStart(2, '0');
+    const m = (current % 60).toString().padStart(2, '0');
+    slots.push(`${h}:${m}`);
+    current += intervalMinutes;
+  }
+
+  return slots;
+};
 
 // ==================== FETCH DB CONTEXT ====================
 
@@ -74,7 +103,7 @@ export async function fetchDBContext(
   symptomText?: string
 ): Promise<DBContext> {
 
-  // 1. Fetch tất cả specialties đang active
+  // 1. Fetch all active specialties
   const specialties = await Specialty.find({ isActive: true })
     .select('_id name description doctorCount')
     .lean();
@@ -86,16 +115,7 @@ export async function fetchDBContext(
     doctorCount: s.doctorCount || 0,
   }));
 
-  // 2. Fetch doctors có lịch trống (ngày mai trở đi)
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  tomorrow.setHours(0, 0, 0, 0);
-  const endOfTomorrow = new Date(tomorrow);
-  endOfTomorrow.setHours(23, 59, 59, 999);
-
-  const DAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-  const dayOfWeek = DAYS[tomorrow.getDay()];
-
+  // 2. Fetch doctors (up to 30 for performance)
   const doctors = await Doctor.find({ isAvailable: true })
     .populate('user_id', 'name')
     .populate('specialty_id', 'name _id')
@@ -103,69 +123,76 @@ export async function fetchDBContext(
     .limit(30)
     .lean();
 
-
-
   const doctorIds = doctors.map(d => d._id);
-
-  // Lấy slot đã bị đặt ngày mai
-  const bookedAppointments = await Appointment.find({
-    doctor_id: { $in: doctorIds },
-    appointment_date: { $gte: tomorrow, $lte: endOfTomorrow },
-    status: { $in: ['pending', 'confirmed'] },
-  }).select('doctor_id time_slot').lean();
-
-  const bookedByDoctor = new Map<string, Set<string>>();
-  for (const appt of bookedAppointments) {
-    const key = appt.doctor_id.toString();
-    if (!bookedByDoctor.has(key)) bookedByDoctor.set(key, new Set());
-    bookedByDoctor.get(key)!.add(appt.time_slot);
-  }
-
-  // Lấy rating
-  const ratings = await Review.aggregate([
-    { $match: { doctor_id: { $in: doctorIds } } },
-    { $group: { _id: '$doctor_id', avg: { $avg: '$rating' } } },
-  ]);
-  const ratingMap = new Map(ratings.map(r => [r._id.toString(), r.avg]));
-
   const availableDoctors: DoctorContext[] = [];
 
+  // 3. Scan next 7 days to find availability for each doctor
+  const today = new Date();
   for (const doctor of doctors) {
-    const docId = (doctor._id as Types.ObjectId).toString();
-    const booked = bookedByDoctor.get(docId) || new Set();
+    let foundDay: Date | null = null;
+    let availableSlots: string[] = [];
 
-    // Kiểm tra lịch làm việc theo ngày
-    const daySchedule = (doctor.available_hours as any)?.[dayOfWeek];
-    if (daySchedule?.isAvailable === false) continue;
+    for (let i = 1; i <= 7; i++) {
+      const targetDate = new Date(today);
+      targetDate.setDate(today.getDate() + i);
+      targetDate.setHours(0, 0, 0, 0);
 
-    let slotsForDay = ALL_TIME_SLOTS;
-    if (daySchedule?.start && daySchedule?.end) {
-      slotsForDay = ALL_TIME_SLOTS.filter(
-        s => s >= daySchedule.start && s <= daySchedule.end
+      const slots = generateTimeSlotsFromSchedule(
+        doctor.available_hours as IDoctor['available_hours'],
+        targetDate
       );
+
+      if (slots.length > 0) {
+        // Check if these slots are already booked
+        const booked = await Appointment.find({
+          doctor_id: doctor._id,
+          appointment_date: {
+            $gte: targetDate,
+            $lte: new Date(new Date(targetDate).setHours(23, 59, 59, 999))
+          },
+          status: { $in: ['pending', 'confirmed'] },
+        }).select('time_slot').lean();
+
+        const bookedSlots = new Set(booked.map(b => b.time_slot));
+        const freeSlots = slots.filter(s => !bookedSlots.has(s));
+
+        if (freeSlots.length > 0) {
+          foundDay = targetDate;
+          availableSlots = freeSlots.slice(0, 5);
+          break;
+        }
+      }
     }
 
-    const availableSlots = slotsForDay.filter(s => !booked.has(s));
-    if (!availableSlots.length) continue; // Bỏ qua bác sĩ hết slot
+    if (foundDay) {
+      const docId = (doctor._id as Types.ObjectId).toString();
+      const specialtyId = (doctor.specialty_id as any)?._id?.toString() ?? '';
+      const specialtyName = (doctor.specialty_id as any)?.name ?? '';
 
-    const specialtyId = (doctor.specialty_id as any)?._id?.toString() || '';
-    const specialtyName = (doctor.specialty_id as any)?.name || '';
+      // Get rating for this doctor
+      const ratingData = await Review.aggregate([
+        { $match: { doctor_id: doctor._id } },
+        { $group: { _id: '$doctor_id', avg: { $avg: '$rating' } } },
+      ]);
+      const rating = ratingData[0]?.avg || 0;
 
-    availableDoctors.push({
-      id: docId,
-      name: (doctor.user_id as any)?.name || 'Bác sĩ',
-      specialtyId,
-      specialtyName,
-      availableSlots: availableSlots.slice(0, 5),
-      nextAvailableDate: tomorrow.toISOString().split('T')[0],
-      rating: ratingMap.get(docId) ?? 0,
-      experience: doctor.years_of_experience || 0,
-      consultationFee: doctor.consultation_fee || 0,
-    });
+      availableDoctors.push({
+        id: docId,
+        name: (doctor.user_id as any)?.name ?? 'Doctor',
+        specialtyId,
+        specialtyName,
+        availableSlots,
+        nextAvailableDate: foundDay.toISOString().split('T')[0],
+        rating,
+        experience: doctor.years_of_experience ?? 0,
+        consultationFee: doctor.consultation_fee ?? 0,
+      });
+    }
   }
 
-  // 3. Fetch lịch hẹn hiện có của patient
+  // 4. Fetch patient's upcoming appointments
   let patientExistingAppointments: ExistingAppointment[] = [];
+
   if (userId) {
     const existing = await Appointment.find({
       user_id: userId,
@@ -179,13 +206,12 @@ export async function fetchDBContext(
       .limit(5)
       .lean();
 
-
     patientExistingAppointments = existing.map(a => ({
       id: (a._id as Types.ObjectId).toString(),
-      date: new Date(a.appointment_date).toLocaleDateString('vi-VN'),
+      date: new Date(a.appointment_date).toLocaleDateString('en-US'),
       timeSlot: a.time_slot,
-      doctorName: (a.doctor_id as any)?.name || 'Bác sĩ',
-      specialtyName: (a.specialty_id as any)?.name || 'Chuyên khoa',
+      doctorName: (a.doctor_id as any)?.name ?? 'Doctor',
+      specialtyName: (a.specialty_id as any)?.name ?? 'Specialty',
       status: a.status,
     }));
   }
@@ -203,110 +229,103 @@ function buildDecisionPrompt(
   conversationText: string,
   dbContext: DBContext,
   patientProfile: PatientProfile | null,
-  language: Language
 ): string {
   const specialtiesList = dbContext.availableSpecialties
-    .map(s => `- ID: ${s.id} | Tên: ${s.name} | Số bác sĩ: ${s.doctorCount}`)
+    .map(s => `- ID: ${s.id} | Name: ${s.name} | Doctors: ${s.doctorCount}`)
     .join('\n');
 
   const doctorsList = dbContext.availableDoctors
     .map(d =>
-      `- ID: ${d.id} | Tên: ${d.name} | Chuyên khoa: ${d.specialtyName} (ID: ${d.specialtyId}) | ` +
-      `Rating: ${d.rating.toFixed(1)} | Kinh nghiệm: ${d.experience} năm | ` +
-      `Phí: ${d.consultationFee.toLocaleString()}đ | ` +
-      `Slot trống ngày ${d.nextAvailableDate}: ${d.availableSlots.join(', ')}`
+      `- ID: ${d.id} | Name: ${d.name} | Specialty: ${d.specialtyName} (ID: ${d.specialtyId}) | ` +
+      `Rating: ${d.rating.toFixed(1)} | Experience: ${d.experience}yrs | ` +
+      `Fee: ${d.consultationFee} | ` +
+      `Available slots on ${d.nextAvailableDate}: ${d.availableSlots.join(', ')}`
     )
     .join('\n');
 
   const existingAppts = dbContext.patientExistingAppointments.length
     ? dbContext.patientExistingAppointments
-      .map(a => `- ${a.date} lúc ${a.timeSlot} với ${a.doctorName} (${a.specialtyName}) - ${a.status}`)
+      .map(a => `- ${a.date} at ${a.timeSlot} with ${a.doctorName} (${a.specialtyName}) - ${a.status}`)
       .join('\n')
-    : 'Không có lịch hẹn nào';
+    : 'None';
 
   const profileBlock = patientProfile
     ? `
-HỒSƠ BỆNH NHÂN:
-- Tuổi: ${patientProfile.age ?? 'Không rõ'}
-- Giới tính: ${patientProfile.gender ?? 'Không rõ'}
-- Dị ứng: ${patientProfile.allergies.join(', ') || 'Không có'}
-- Bệnh nền: ${patientProfile.chronicConditions.join(', ') || 'Không có'}
-- Thuốc đang dùng: ${patientProfile.currentMedications.join(', ') || 'Không có'}
-- Chẩn đoán gần đây: ${patientProfile.recentDiagnoses.join(', ') || 'Không có'}`
+PATIENT PROFILE:
+- Age: ${patientProfile.age ?? 'Unknown'}
+- Gender: ${patientProfile.gender ?? 'Unknown'}
+- Allergies: ${patientProfile.allergies.join(', ') || 'None'}
+- Chronic conditions: ${patientProfile.chronicConditions.join(', ') || 'None'}
+- Current medications: ${patientProfile.currentMedications.join(', ') || 'None'}
+`
     : '';
 
-  return `Bạn là một bác sĩ AI chuyên gia. Hãy phân tích cuộc hội thoại và dữ liệu bệnh viện bên dưới, sau đó đưa ra quyết định lâm sàng.
+  return `You are an expert AI doctor. Analyze the conversation and hospital data below, then return a clinical decision as JSON.
 
 ═══════════════════════════════════════
-CUỘC HỘI THOẠI VỚI BỆNH NHÂN:
+CONVERSATION WITH PATIENT:
 ═══════════════════════════════════════
 ${conversationText}
 ${profileBlock}
 
 ═══════════════════════════════════════
-DỮ LIỆU BỆNH VIỆN THỰC TẾ:
+REAL HOSPITAL DATABASE:
 ═══════════════════════════════════════
 
-CHUYÊN KHOA ĐANG HOẠT ĐỘNG:
+ACTIVE SPECIALTIES:
 ${specialtiesList}
 
-BÁC SĨ CÓ LỊCH TRỐNG (ngày mai):
+DOCTORS WITH EARLIEST AVAILABLE SLOTS (within next 7 days):
 ${doctorsList}
 
-LỊCH HẸN HIỆN CÓ CỦA BỆNH NHÂN:
+PATIENT'S EXISTING APPOINTMENTS:
 ${existingAppts}
 
 ═══════════════════════════════════════
-YÊU CẦU:
+REQUIREMENTS:
 ═══════════════════════════════════════
-Dựa trên triệu chứng, hồ sơ bệnh nhân và dữ liệu bệnh viện thực tế ở trên,
-hãy trả về JSON với cấu trúc CHÍNH XÁC như sau (không thêm text ngoài JSON):
+Based on the patient's symptoms, profile, and real hospital data above,
+return ONLY valid JSON with EXACTLY this structure (no extra text outside JSON):
 
 {
   "urgencyLevel": "low" | "medium" | "high" | "critical",
-  "triageScore": <số từ 0-100>,
+  "triageScore": <0-100>,
   "requiresEmergency": <true/false>,
-  "emergencyReason": "<lý do nếu emergency, hoặc null>",
+  "emergencyReason": "<reason if emergency, or null>",
   "shouldBook": <true/false>,
-  "reasoning": "<giải thích ngắn gọn quyết định bằng tiếng Việt>",
-  "recommendedSpecialtyId": "<ID chuyên khoa từ danh sách trên, hoặc null>",
-  "recommendedSpecialtyName": "<tên chuyên khoa, hoặc null>",
-  "recommendedDoctorId": "<ID bác sĩ phù hợp nhất từ danh sách trên, hoặc null>",
-  "recommendedDoctorName": "<tên bác sĩ, hoặc null>",
-  "recommendedTimeSlot": "<slot giờ từ danh sách slot trống của bác sĩ đó, hoặc null>",
-  "recommendedDate": "<ngày khuyến nghị YYYY-MM-DD, hoặc null>",
-  "redFlags": ["<dấu hiệu nguy hiểm nếu có>"],
-  "selfCareAdvice": ["<lời khuyên tự chăm sóc nếu urgency thấp>"],
+  "reasoning": "<brief explanation in English>",
+  "recommendedSpecialtyId": "<specialty ID from list above, or null>",
+  "recommendedSpecialtyName": "<specialty name, or null>",
+  "recommendedDoctorId": "<best matching doctor ID from list above, or null>",
+  "recommendedDoctorName": "<doctor name, or null>",
+  "recommendedTimeSlot": "<time slot from that doctor's available slots, or null>",
+  "recommendedDate": "<recommended date YYYY-MM-DD, or null>",
+  "redFlags": ["<warning signs if any>"],
+  "selfCareAdvice": ["<self-care tips if low urgency>"],
   "followUpNeeded": <true/false>,
-  "estimatedWaitDays": <số ngày nên khám trong vòng bao lâu>
+  "estimatedWaitDays": <days until appointment recommended>
 }
 
-LƯU Ý QUAN TRỌNG:
-- Chỉ chọn bác sĩ từ danh sách "BÁC SĨ CÓ LỊCH TRỐNG" ở trên
-- Chỉ chọn slot từ danh sách "Slot trống" của bác sĩ đó
-- Nếu bệnh nhân đã có lịch hẹn cùng chuyên khoa → shouldBook = false
-- Nếu critical/emergency → shouldBook = false, requiresEmergency = true
-- Phân tích bệnh nền và tuổi để điều chỉnh urgencyLevel
-- Chỉ trả về JSON, không giải thích thêm`;
+IMPORTANT RULES:
+- Only select doctors from the "DOCTORS WITH AVAILABLE SLOTS" list above
+- Only select slots from that doctor's listed available slots
+- If patient already has an appointment for the same specialty → shouldBook = false
+- If critical/emergency → shouldBook = false, requiresEmergency = true
+- Adjust urgencyLevel based on chronic conditions and patient age
+- Write the "reasoning" field in English
+- Return ONLY the JSON object, no other text`;
 }
 
-
-// ==================== MAIN DECISION FUNCTION ====================
+// Call Models AI
 
 export async function getAIDecision(
   groq: Groq,
   conversationText: string,
   dbContext: DBContext,
   patientProfile: PatientProfile | null,
-  language: Language,
   groqModel: string
 ): Promise<AIDecision> {
-  const prompt = buildDecisionPrompt(
-    conversationText,
-    dbContext,
-    patientProfile,
-    language
-  );
+  const prompt = buildDecisionPrompt(conversationText, dbContext, patientProfile);
 
   try {
     const completion = await groq.chat.completions.create({
@@ -314,38 +333,38 @@ export async function getAIDecision(
       messages: [
         {
           role: 'system',
-          content: 'Bạn là bác sĩ AI chuyên gia. Chỉ trả về JSON hợp lệ, không thêm bất kỳ text nào khác.',
+          content: 'You are an expert AI doctor. Return only valid JSON, no additional text.',
         },
         { role: 'user', content: prompt },
       ],
-      temperature: 0.2,       // Thấp để quyết định nhất quán
+      temperature: 0.2,
       max_tokens: 800,
-      response_format: { type: 'json_object' }, // Ép Groq trả JSON
+      response_format: { type: 'json_object' },
     });
 
     const raw = completion.choices[0]?.message?.content ?? '{}';
     const parsed = JSON.parse(raw) as AIDecision;
 
-    // Validate và sanitize output của AI
     return sanitizeAIDecision(parsed, dbContext);
 
   } catch (error) {
     console.error('❌ AI Decision failed, using safe fallback:', error);
-    // Fallback an toàn nếu AI fail
     return {
       urgencyLevel: 'medium',
       triageScore: 50,
       shouldBook: false,
-      reasoning: 'Không thể phân tích tự động. Vui lòng tư vấn bác sĩ.',
+      reasoning: 'Automatic analysis unavailable. Please consult a doctor.',
       redFlags: [],
       requiresEmergency: false,
       followUpNeeded: true,
       estimatedWaitDays: 3,
+      userIntent: 'symptom_report',
     };
   }
 }
 
-// ==================== VALIDATE AI OUTPUT ====================
+
+// Protect 
 
 function sanitizeAIDecision(
   decision: Partial<AIDecision>,
@@ -353,32 +372,40 @@ function sanitizeAIDecision(
 ): AIDecision {
   const validUrgencies: UrgencyLevel[] = ['low', 'medium', 'high', 'critical'];
 
-  // Đảm bảo urgencyLevel hợp lệ
   const urgencyLevel = validUrgencies.includes(decision.urgencyLevel as UrgencyLevel)
     ? decision.urgencyLevel as UrgencyLevel
     : 'medium';
 
-  // Xác minh doctorId có trong DB thật
-  const doctorExists = dbContext.availableDoctors.find(
+  const validIntents = [
+    'greeting', 'small_talk', 'symptom_report', 'confirm_booking',
+    'decline_booking', 'appointment_inquiry', 'general_health_info',
+    'medication_inquiry', 'emergency_report'
+  ];
+
+  const userIntent = validIntents.includes(decision.userIntent ?? '')
+    ? decision.userIntent
+    : 'symptom_report';
+
+  // Verify doctor exists in real DB context
+  const doctor = dbContext.availableDoctors.find(
     d => d.id === decision.recommendedDoctorId
-  );
-  const doctor = doctorExists ?? null;
+  ) ?? null;
 
-  // Xác minh slot có thật trong lịch trống của bác sĩ đó
-  const slotValid = doctor?.availableSlots.includes(decision.recommendedTimeSlot ?? '');
+  // Verify slot exists in doctor's real available slots
+  const slotValid = doctor?.availableSlots.includes(decision.recommendedTimeSlot ?? '') ?? false;
 
-  // Xác minh specialtyId có trong DB
-  const specialtyExists = dbContext.availableSpecialties.find(
+  // Verify specialty exists in real DB context
+  const specialty = dbContext.availableSpecialties.find(
     s => s.id === decision.recommendedSpecialtyId
-  );
+  ) ?? null;
 
   return {
     urgencyLevel,
     triageScore: Math.min(100, Math.max(0, decision.triageScore ?? 50)),
     shouldBook: decision.shouldBook ?? false,
     reasoning: decision.reasoning ?? '',
-    recommendedSpecialtyId: specialtyExists?.id,
-    recommendedSpecialtyName: specialtyExists?.name ?? decision.recommendedSpecialtyName,
+    recommendedSpecialtyId: specialty?.id,
+    recommendedSpecialtyName: specialty?.name ?? decision.recommendedSpecialtyName,
     recommendedDoctorId: doctor?.id,
     recommendedDoctorName: doctor?.name,
     recommendedTimeSlot: slotValid ? decision.recommendedTimeSlot : doctor?.availableSlots[0],
@@ -389,5 +416,6 @@ function sanitizeAIDecision(
     emergencyReason: decision.emergencyReason ?? undefined,
     followUpNeeded: decision.followUpNeeded ?? true,
     estimatedWaitDays: decision.estimatedWaitDays ?? 7,
+    userIntent,
   };
 }

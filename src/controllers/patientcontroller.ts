@@ -63,16 +63,53 @@ const handleError = (res: Response, error: Error, message = 'Internal server err
 
 // ========== HELPER FUNCTIONS ==========
 
+
+// ✅ THÊM — hàm tính slots từ available_hours của doctor
+const generateTimeSlotsFromSchedule = (
+  availableHours: IDoctor['available_hours'],
+  date: Date,
+  intervalMinutes: number = 30
+): string[] => {
+  const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+  const dayName = days[date.getDay()] as keyof IDoctor['available_hours'];
+  const schedule = availableHours?.[dayName];
+
+  // Bác sĩ nghỉ ngày này → trả về mảng rỗng
+  if (!schedule || !schedule.isAvailable) return [];
+
+  const slots: string[] = [];
+  const [startH, startM] = schedule.start.split(':').map(Number);
+  const [endH, endM] = schedule.end.split(':').map(Number);
+
+  let current = startH * 60 + startM;
+  const endTotal = endH * 60 + endM;
+
+  // Dừng trước giờ kết thúc 1 slot để slot cuối không vượt quá giờ làm
+  while (current + intervalMinutes <= endTotal) {
+    const h = Math.floor(current / 60).toString().padStart(2, '0');
+    const m = (current % 60).toString().padStart(2, '0');
+    slots.push(`${h}:${m}`);
+    current += intervalMinutes;
+  }
+  return slots;
+};
+
 // Get alternative time slots
 const getAlternativeTimeSlots = async (doctorId: string, date: Date): Promise<string[]> => {
   try {
     const startOfDay = new Date(date);
     startOfDay.setHours(0, 0, 0, 0);
-
     const endOfDay = new Date(date);
     endOfDay.setHours(23, 59, 59, 999);
 
-    // FIX: Lấy tất cả các appointment đã đặt trong ngày
+    // Lấy doctor để đọc available_hours
+    const doctor = await Doctor.findById(doctorId).select('available_hours');
+    if (!doctor) return [];
+
+    // Tính slots theo lịch thực tế của bác sĩ
+    const allTimeSlots = generateTimeSlotsFromSchedule(doctor.available_hours, date);
+    if (allTimeSlots.length === 0) return []; // bác sĩ nghỉ ngày này
+
     const bookedAppointments = await Appointment.find({
       doctor_id: doctorId,
       appointment_date: { $gte: startOfDay, $lte: endOfDay },
@@ -80,20 +117,14 @@ const getAlternativeTimeSlots = async (doctorId: string, date: Date): Promise<st
     }).select('time_slot');
 
     const bookedSlots = bookedAppointments.map(app => app.time_slot);
-
-    // Tất cả các time slot có sẵn
-    const allTimeSlots = [
-      '09:00', '09:30', '10:00', '10:30', '11:00', '11:30',
-      '14:00', '14:30', '15:00', '15:30', '16:00', '16:30'
-    ];
-
-    // Lọc ra các slot chưa được đặt
     return allTimeSlots.filter(slot => !bookedSlots.includes(slot));
   } catch (error) {
     console.error('Error getting alternative slots:', error);
     return [];
   }
 };
+
+
 // Calculate end time based on start time and duration
 const calculateEndTime = (startTime: string, durationMinutes: number): string => {
   const [hours, minutes] = startTime.split(':').map(Number);
@@ -657,7 +688,6 @@ export const getAppointmentAvailability = async (req: Request, res: Response) =>
     if (!doctor_id || !date) {
       return res.status(400).json({ message: 'Doctor ID and date are required' });
     }
-
     if (!Types.ObjectId.isValid(doctor_id as string)) {
       return res.status(400).json({ message: 'Invalid doctor ID format' });
     }
@@ -668,28 +698,46 @@ export const getAppointmentAvailability = async (req: Request, res: Response) =>
     const endOfDay = new Date(appointmentDate);
     endOfDay.setHours(23, 59, 59, 999);
 
+    // ✅ Lấy available_hours của bác sĩ
+    const doctor = await Doctor.findById(doctor_id).select('available_hours');
+    if (!doctor) {
+      return res.status(404).json({ message: 'Doctor not found' });
+    }
+
+    // ✅ Tính slots động theo ngày được chọn
+    const allTimeSlots = generateTimeSlotsFromSchedule(doctor.available_hours, appointmentDate);
+
+    // Bác sĩ nghỉ ngày này
+    if (allTimeSlots.length === 0) {
+      return res.json({
+        date: appointmentDate.toISOString().split('T')[0],
+        availableSlots: [],
+        isDayOff: true,
+        summary: {
+          totalSlots: 0,
+          bookedSlots: 0,
+          availableCount: 0,
+          isFullyBooked: true
+        },
+        doctor: { id: doctor_id }
+      });
+    }
+
     const existingAppointments = await Appointment.find({
       doctor_id,
       appointment_date: { $gte: startOfDay, $lte: endOfDay },
       status: { $in: ['pending', 'confirmed', 'in_progress'] }
     });
 
-    const allTimeSlots = [
-      '09:00', '09:30', '10:00', '10:30', '11:00', '11:30',
-      '14:00', '14:30', '15:00', '15:30', '16:00', '16:30'
-    ];
-
     const bookedSlots = existingAppointments.map(app => app.time_slot);
 
-    // Tạo response chi tiết
     const availableSlots = allTimeSlots.map(slot => {
       const isBooked = bookedSlots.includes(slot);
       const bookedAppointment = existingAppointments.find(app => app.time_slot === slot);
-
       return {
         time: slot,
         isAvailable: !isBooked,
-        isReserved: false, // Có thể thêm logic reservation
+        isReserved: false,
         bookedInfo: isBooked ? {
           appointment_id: bookedAppointment?._id,
           patient_id: bookedAppointment?.user_id,
@@ -698,27 +746,26 @@ export const getAppointmentAvailability = async (req: Request, res: Response) =>
       };
     });
 
-    // Kiểm tra số lượng slot còn trống
-    const availableCount = availableSlots.filter(slot => slot.isAvailable).length;
+    const availableCount = availableSlots.filter(s => s.isAvailable).length;
 
     res.json({
       date: appointmentDate.toISOString().split('T')[0],
       availableSlots,
+      isDayOff: false,
       summary: {
         totalSlots: allTimeSlots.length,
         bookedSlots: bookedSlots.length,
-        availableCount: availableCount,
+        availableCount,
         isFullyBooked: availableCount === 0
       },
-      doctor: {
-        id: doctor_id
-      }
+      doctor: { id: doctor_id }
     });
   } catch (error) {
     console.error('Error fetching appointment availability:', error);
     res.status(500).json({ message: 'Error fetching availability', error });
   }
 };
+
 
 export const bookAppointment = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
@@ -1261,13 +1308,7 @@ export const getAllAppointmentsForPatient = async (req: AuthRequest, res: Respon
       })
       .populate('specialty_id', 'name')
       .sort({ appointment_date: -1, time_slot: -1 });
-
-    if (!appointments || appointments.length === 0) {
-      res.status(404).json({ message: 'You don\'t have any appointments yet. Tap here to schedule one.' });
-      return;
-    }
-
-    res.json(appointments);
+    res.status(200).json(appointments);
   } catch (error) {
     console.error('Error fetching appointments:', error);
     res.status(500).json({ message: 'Error fetching appointments', error });
@@ -2100,14 +2141,14 @@ export const checkInAppointment = async (req: AuthRequest, res: Response): Promi
       console.log('✅ Early confirmation for future appointment');
     }
 
-    appointment.status = newStatus;
+    appointment.status = 'confirmed';
     appointment.updated_at = new Date();
 
     // Thêm metadata check-in
     appointment.metadata = {
       ...appointment.metadata,
       checked_in_at: new Date(),
-      checked_in_by: 'patient',
+      checkedin_by: 'patient',
       check_in_type: checkInType,
       check_in_time: new Date(),
       appointment_date_original: appointmentDate,
@@ -2138,7 +2179,11 @@ export const checkInAppointment = async (req: AuthRequest, res: Response): Promi
             appointment_date: appointmentDate.toLocaleDateString(),
             appointment_time: appointment.time_slot,
             check_in_time: new Date().toLocaleTimeString(),
-            days_before: isFuture ? Math.ceil((appointmentDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)) : 0
+            days_before: String(
+              isFuture
+                ? Math.ceil((appointmentDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+                : 0
+            )
           },
           type: 'appointment',
           category: 'info',

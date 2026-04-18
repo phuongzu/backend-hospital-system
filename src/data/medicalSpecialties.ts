@@ -9,7 +9,6 @@ export interface MedicalSpecialty {
   commonConditions: string[];
   diagnosticProcedures: string[];
   treatments: string[];
-  vietnameseTerms: { [key: string]: string };
 }
 
 export const MedicalSpecialties: MedicalSpecialty[] = [
@@ -36,17 +35,7 @@ export const MedicalSpecialties: MedicalSpecialty[] = [
       "Angioplasty and stenting", "Pacemaker implantation",
       "Coronary bypass surgery", "Valve repair/replacement",
       "Ablation therapy", "Heart transplant"
-    ],
-    vietnameseTerms: {
-      "Hypertension": "Cao huyết áp",
-      "Heart failure": "Suy tim",
-      "Arrhythmia": "Rối loạn nhịp tim",
-      "ECG": "Điện tâm đồ",
-      "Echocardiogram": "Siêu âm tim",
-      "Heart attack": "Đau tim",
-      "Cardiac catheterization": "Thông tim",
-      "Pacemaker": "Máy tạo nhịp tim"
-    }
+    ]
   },
   {
     _id: "64f1a1a1a1a1a1a1a1a1a1a2",
@@ -71,16 +60,7 @@ export const MedicalSpecialties: MedicalSpecialty[] = [
       "Surgical excision", "Cosmetic procedures",
       "Cryotherapy", "Laser treatment", "Chemical peels",
       "Biologic therapies"
-    ],
-    vietnameseTerms: {
-      "Acne": "Mụn trứng cá",
-      "Eczema": "Chàm",
-      "Psoriasis": "Vảy nến",
-      "Skin biopsy": "Sinh thiết da",
-      "Topical medications": "Thuốc bôi ngoài da",
-      "Skin cancer": "Ung thư da",
-      "Fungal infections": "Nhiễm nấm"
-    }
+    ]
   },
   {
     _id: "64f1a1a1a1a1a1a1a1a1a1a3",
@@ -105,16 +85,7 @@ export const MedicalSpecialties: MedicalSpecialty[] = [
       "Occupational therapy", "Speech therapy",
       "Deep brain stimulation", "Botox injections",
       "Nerve blocks", "Surgical interventions"
-    ],
-    vietnameseTerms: {
-      "Migraine": "Đau nửa đầu",
-      "Epilepsy": "Động kinh",
-      "Stroke": "Đột quỵ",
-      "Parkinson's disease": "Bệnh Parkinson",
-      "Alzheimer's disease": "Bệnh Alzheimer",
-      "EEG": "Điện não đồ",
-      "EMG": "Điện cơ đồ"
-    }
+    ]
   },
   {
     _id: "64f1a1a1a1a1a1a1a1a1a1a4",
@@ -141,15 +112,7 @@ export const MedicalSpecialties: MedicalSpecialty[] = [
       "Nutritional counseling", "Developmental therapy",
       "Behavioral therapy", "Parent education",
       "Preventive care", "Growth monitoring"
-    ],
-    vietnameseTerms: {
-      "Vaccinations": "Tiêm chủng",
-      "Growth monitoring": "Theo dõi tăng trưởng",
-      "Developmental delays": "Chậm phát triển",
-      "ADHD": "Tăng động giảm chú ý",
-      "Asthma": "Hen suyễn",
-      "Nutritional deficiencies": "Thiếu dinh dưỡng"
-    }
+    ]
   },
   {
     _id: "64f1a1a1a1a1a1a1a1a1a1a5",
@@ -175,15 +138,7 @@ export const MedicalSpecialties: MedicalSpecialty[] = [
       "Arthroscopic surgery", "Physical therapy",
       "Pain management", "Cortisone injections",
       "Spinal surgery", "Sports medicine rehabilitation"
-    ],
-    vietnameseTerms: {
-      "Fractures": "Gãy xương",
-      "Osteoarthritis": "Thoái hóa khớp",
-      "Back pain": "Đau lưng",
-      "Joint replacement": "Thay khớp",
-      "Physical therapy": "Vật lý trị liệu",
-      "Sports injuries": "Chấn thương thể thao"
-    }
+    ]
   },
   {
     _id: "64f1a1a1a1a1a1a1a1a1a1a6",
@@ -210,15 +165,7 @@ export const MedicalSpecialties: MedicalSpecialty[] = [
       "Glaucoma medications", "Retinal surgery",
       "Corneal transplantation", "Vision therapy",
       "Prescription glasses/contacts", "Intravitreal injections"
-    ],
-    vietnameseTerms: {
-      "Cataracts": "Đục thủy tinh thể",
-      "Glaucoma": "Glaucoma",
-      "Visual acuity test": "Đo thị lực",
-      "Cataract surgery": "Phẫu thuật đục thủy tinh thể",
-      "Refractive errors": "Tật khúc xạ",
-      "Conjunctivitis": "Viêm kết mạc"
-    }
+    ]
   },
   {
     _id: "64f1a1a1a1a1a1a1a1a1a1a7",
@@ -242,15 +189,7 @@ export const MedicalSpecialties: MedicalSpecialty[] = [
       "Fillings", "Root canal treatment", "Tooth extraction",
       "Dental crowns", "Dental implants", "Orthodontics",
       "Teeth cleaning", "Gum surgery", "Oral surgery"
-    ],
-    vietnameseTerms: {
-      "Dental caries": "Sâu răng",
-      "Gum disease": "Bệnh nướu răng",
-      "Tooth extraction": "Nhổ răng",
-      "Root canal treatment": "Điều trị tủy răng",
-      "Dental implants": "Cấy ghép răng",
-      "Orthodontics": "Chỉnh nha"
-    }
+    ]
   },
   {
     _id: "64f1a1a1a1a1a1a1a1a1a1a8",
@@ -276,15 +215,7 @@ export const MedicalSpecialties: MedicalSpecialty[] = [
       "Cognitive behavioral therapy", "ECT",
       "TMS", "Hospitalization", "Group therapy",
       "Family therapy", "Rehabilitation programs"
-    ],
-    vietnameseTerms: {
-      "Depression": "Trầm cảm",
-      "Anxiety disorders": "Rối loạn lo âu",
-      "Psychotherapy": "Trị liệu tâm lý",
-      "Medication management": "Quản lý thuốc",
-      "Bipolar disorder": "Rối loạn lưỡng cực",
-      "Schizophrenia": "Tâm thần phân liệt"
-    }
+    ]
   },
   {
     _id: "64f1a1a1a1a1a1a1a1a1a1a9",
@@ -310,15 +241,7 @@ export const MedicalSpecialties: MedicalSpecialty[] = [
       "Emergency surgery", "Transplant surgery",
       "Vascular surgery", "Surgical oncology",
       "Trauma surgery", "Minimally invasive procedures"
-    ],
-    vietnameseTerms: {
-      "Appendicitis": "Viêm ruột thừa",
-      "Gallstones": "Sỏi mật",
-      "Hernias": "Thoát vị",
-      "Surgery": "Phẫu thuật",
-      "Laparoscopic surgery": "Phẫu thuật nội soi",
-      "Transplant surgery": "Phẫu thuật cấy ghép"
-    }
+    ]
   },
   {
     _id: "64f1a1a1a1a1a1a1a1a1a1aa",
@@ -344,15 +267,7 @@ export const MedicalSpecialties: MedicalSpecialty[] = [
       "Fertility treatments", "Minimally invasive surgery",
       "Hysterectomy", "Cancer treatments",
       "Menopausal management", "Reproductive health counseling"
-    ],
-    vietnameseTerms: {
-      "Menstrual disorders": "Rối loạn kinh nguyệt",
-      "PCOS": "Buồng trứng đa nang",
-      "Pap smear": "Xét nghiệm Pap",
-      "Hormone therapy": "Liệu pháp hormone",
-      "Infertility": "Vô sinh",
-      "Menopause": "Mãn kinh"
-    }
+    ]
   },
   {
     _id: "64f1a1a1a1a1a1a1a1a1a1ab",
@@ -380,15 +295,7 @@ export const MedicalSpecialties: MedicalSpecialty[] = [
       "Hormone replacement", "Thyroid medications",
       "Osteoporosis treatment", "Lifestyle counseling",
       "Diabetes education", "Metabolic management"
-    ],
-    vietnameseTerms: {
-      "Diabetes mellitus": "Đái tháo đường",
-      "Thyroid disorders": "Rối loạn tuyến giáp",
-      "Insulin therapy": "Liệu pháp insulin",
-      "HbA1c": "Xét nghiệm HbA1c",
-      "Osteoporosis": "Loãng xương",
-      "Hormone replacement": "Thay thế hormone"
-    }
+    ]
   },
   {
     _id: "64f1a1a1a1a1a1a1a1a1a1ac",
@@ -414,15 +321,7 @@ export const MedicalSpecialties: MedicalSpecialty[] = [
       "Nutritional counseling", "Lifestyle modifications",
       "Liver disease management", "Inflammatory bowel disease therapy",
       "Cancer treatments", "Surgical referrals"
-    ],
-    vietnameseTerms: {
-      "GERD": "Trào ngược dạ dày",
-      "Endoscopy": "Nội soi",
-      "Colonoscopy": "Nội soi đại tràng",
-      "Liver diseases": "Bệnh gan",
-      "Irritable bowel syndrome": "Hội chứng ruột kích thích",
-      "Peptic ulcers": "Loét dạ dày"
-    }
+    ]
   }
 ];
 

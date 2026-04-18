@@ -25,40 +25,11 @@ function calculateEndTime(startTime: string, durationMinutes: number): string {
   return `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
 }
 
-function determinePriority(
-  symptoms: string[],
-  reason?: string
-): 'high' | 'medium' | 'low' {
-  const highPriorityTerms = [
-    'chest pain', 'đau ngực',
-    'difficulty breathing', 'khó thở', 'shortness of breath',
-    'severe', 'nghiêm trọng', 'dữ dội',
-    'emergency', 'cấp cứu',
-    'vomiting blood', 'nôn ra máu',
-    'unconscious', 'bất tỉnh',
-    'stroke', 'đột quỵ',
-  ];
-  const mediumPriorityTerms = [
-    'fever', 'sốt',
-    'persistent', 'kéo dài',
-    'worsening', 'nặng hơn',
-  ];
 
-  const combined = [...symptoms, reason ?? ''].join(' ').toLowerCase();
 
-  if (highPriorityTerms.some(k => combined.includes(k))) return 'high';
-  if (mediumPriorityTerms.some(k => combined.includes(k)) || symptoms.length >= 3) return 'medium';
-  return 'low';
-}
 
-/**
- * Return preparation instructions based on specialty.
- * In production, populate the map from your DB or config.
- */
 function getPreparationInstructions(specialtyId?: string): string {
   const map: Record<string, string> = {
-    // Populate with real specialty IDs from your DB
-    // 'cardiology_id': 'Fast for 4 hours before ECG. Avoid caffeine.',
   };
   return (
     map[specialtyId ?? ''] ??
@@ -187,7 +158,7 @@ export const sendMessage = async (
       return;
     }
 
-    const { message, language } = req.body;
+    const { message } = req.body;
 
     if (!message || typeof message !== 'string' || !message.trim()) {
       res.status(400).json({ success: false, message: 'Message is required' });
@@ -211,26 +182,10 @@ export const sendMessage = async (
       session.consent_timestamp = new Date();
     }
 
-    // ── FIX: Detect appointment management intent BEFORE calling AI ──
-    const { intent } = detectAppointmentIntentLocal(message);
 
-    if (intent === 'view_upcoming') {
-      await handleViewUpcomingIntent(req, res, session.session_id);
-      return;
-    }
-
-    if (intent === 'reschedule') {
-      await handleRescheduleIntent(req, res, session.session_id);
-      return;
-    }
-
-    if (intent === 'cancel') {
-      await handleCancelIntent(req, res, session.session_id);
-      return;
-    }
-
-    // ── Normal AI flow ──────────────────────────────────────────────
+    // ── AI reasoning flow ──────────────────────────────────────────
     const aiService = getServiceForSession(session.session_id);
+
 
     if (aiService.getHistory().length === 0 && session.messages.length > 0) {
       aiService.loadHistoryFromDB(session.messages);
@@ -257,6 +212,21 @@ export const sendMessage = async (
       patientContextUsed: aiResponse.patientContextUsed,
       appointmentRecommendation: aiResponse.appointmentRecommendation as any,
     });
+
+    // ── Action Dispatcher based on AI Intent ──
+    if (aiResponse.userIntent === 'appointment_inquiry') {
+      await handleViewUpcomingIntent(req, res, session.session_id, session);
+      return;
+    }
+    if (aiResponse.userIntent === 'appointment_reschedule') {
+      await handleRescheduleIntent(req, res, session.session_id, session);
+      return;
+    }
+    if (aiResponse.userIntent === 'appointment_cancel') {
+      await handleCancelIntent(req, res, session.session_id, session);
+      return;
+    }
+
 
     auditLogger.log({
       userId: req.user._id.toString(),
@@ -302,45 +272,9 @@ export const sendMessage = async (
 // LOCAL intent detector (self-contained, no circular import)
 // ============================================================
 
-function detectAppointmentIntentLocal(message: string): {
-  intent: 'view_upcoming' | 'reschedule' | 'cancel' | 'none';
-  confidence: number;
-} {
-  const lower = message.toLowerCase().trim();
 
-  const viewKeywords = [
-    'xem lịch', 'lịch hẹn', 'lịch khám', 'appointment',
-    'sắp tới', 'upcoming', 'lịch của tôi', 'my appointment',
-    'có lịch', 'đặt rồi', 'check appointment', 'kiểm tra lịch',
-    'những lịch', 'danh sách lịch',
-    // Quick reply exact matches
-    'xem lịch hẹn sắp tới', 'view upcoming appointments',
-  ];
+// Note: Local intent detection removed in favor of AI reasoning.
 
-  const rescheduleKeywords = [
-    'đổi lịch', 'dời lịch', 'thay đổi lịch', 'reschedule',
-    'đổi giờ', 'thay giờ', 'đổi ngày', 'thay ngày',
-    'đổi bác sĩ', 'chuyên khoa khác', 'change appointment',
-    'sửa lịch', 'cập nhật lịch', 'muốn đổi', 'cần đổi',
-    // Quick reply exact matches
-    'tôi muốn đổi lịch khám', 'i want to reschedule',
-  ];
-
-  const cancelKeywords = [
-    'hủy lịch', 'cancel', 'huỷ lịch', 'bỏ lịch', 'xóa lịch',
-    'không đi khám', 'không cần khám nữa', 'hủy hẹn', 'huỷ hẹn',
-    'cancel appointment', 'delete appointment',
-    // Quick reply exact matches
-    'hủy lịch hẹn của tôi', 'cancel my appointment',
-  ];
-
-  // Reschedule takes priority over view (keywords can overlap)
-  if (rescheduleKeywords.some(k => lower.includes(k))) return { intent: 'reschedule', confidence: 0.92 };
-  if (cancelKeywords.some(k => lower.includes(k))) return { intent: 'cancel', confidence: 0.92 };
-  if (viewKeywords.some(k => lower.includes(k))) return { intent: 'view_upcoming', confidence: 0.90 };
-
-  return { intent: 'none', confidence: 0 };
-}
 
 // ==================== HISTORY ====================
 
@@ -509,7 +443,7 @@ export const getDoctorsBySpecialty = async (
     const doctors = await Doctor.find({ specialty_id, isAvailable: true })
       .populate('user_id', 'name email phoneNumber avatar')
       .select(
-        'consultation_fee years_of_experience qualifications achievements education certifications'
+        'consultation_fee years_of_experience qualifications achievements education certifications available_hours'
       );
 
     const targetDate = date ? new Date(date as string) : new Date();
@@ -549,16 +483,19 @@ export const getDoctorsBySpecialty = async (
       allRatings.map(r => [r._id.toString(), { avg: r.avgRating, total: r.totalReviews }])
     );
 
-    const ALL_TIME_SLOTS = [
-      '09:00', '09:30', '10:00', '10:30', '11:00', '11:30',
-      '14:00', '14:30', '15:00', '15:30', '16:00', '16:30',
-    ];
+    const { generateTimeSlotsFromSchedule } = await import('../utils/AIDecisionEngine');
 
     const result = doctors
       .map(doctor => {
         const id = (doctor._id as Types.ObjectId).toString();
         const booked = bookedByDoctor.get(id) || new Set();
-        const available = ALL_TIME_SLOTS.filter(s => !booked.has(s));
+
+        const allSlots = generateTimeSlotsFromSchedule(
+          doctor.available_hours as any,
+          targetDate
+        );
+
+        const available = allSlots.filter(s => !booked.has(s));
         const rating = ratingMap.get(id) || { avg: 0, total: 0 };
         return {
           _id: doctor._id,
@@ -579,6 +516,7 @@ export const getDoctorsBySpecialty = async (
           is_available_today: available.length > 0,
         };
       })
+      .filter(d => d.available_slots.length > 0) // Only show doctors with slots on this day
       .sort((a, b) => {
         if (a.rating.average !== b.rating.average)
           return b.rating.average - a.rating.average;
@@ -731,13 +669,11 @@ function validateBookingRequest(
   useAI: boolean
 ): { valid: boolean; error?: string } {
   if (useAI) {
-    // Chế độ AI: không cần doctor_id từ trước
     return { valid: true };
   }
-  // Chế độ thủ công: bắt buộc đủ 3 trường
-  if (!body.doctor_id) return { valid: false, error: 'doctor_id là bắt buộc' };
-  if (!body.appointment_date) return { valid: false, error: 'appointment_date là bắt buộc' };
-  if (!body.time_slot) return { valid: false, error: 'time_slot là bắt buộc' };
+  if (!body.doctor_id) return { valid: false, error: 'doctor_id is required' };
+  if (!body.appointment_date) return { valid: false, error: 'appointment_date is required' };
+  if (!body.time_slot) return { valid: false, error: 'time_slot is required' };
   return { valid: true };
 }
 
@@ -749,7 +685,7 @@ export const bookAppointmentFromAI = async (
 
   // ── 0. Auth guard ────────────────────────────────────────────
   if (!req.user) {
-    res.status(401).json({ success: false, message: 'Xác thực thất bại' });
+    res.status(401).json({ success: false, message: 'Authentication failed' });
     return;
   }
 
@@ -786,9 +722,9 @@ export const bookAppointmentFromAI = async (
       const conversationText = session
         ? session.messages
           .slice(-10)
-          .map(m => `${m.role === 'user' ? 'Bệnh nhân' : 'AI'}: ${m.content.substring(0, 300)}`)
+          .map(m => `${m.role === 'user' ? 'Patient' : 'AI'}: ${m.content.substring(0, 300)}`)
           .join('\n')
-        : body.reason ?? 'Bệnh nhân yêu cầu đặt lịch khám';
+        : body.reason ?? 'Patient requests to book an appointment';
 
       // Fetch toàn bộ data thật từ DB
       const dbContext = await fetchDBContext(userId);
@@ -796,7 +732,7 @@ export const bookAppointmentFromAI = async (
       if (!dbContext.availableDoctors.length) {
         res.status(503).json({
           success: false,
-          message: 'Hiện không có bác sĩ nào trống lịch. Vui lòng thử lại sau.',
+          message: 'Currently no doctors are available. Please try again later.',
         });
         return;
       }
@@ -818,15 +754,13 @@ export const bookAppointmentFromAI = async (
         conversationText,
         dbContext,
         patientProfile,
-        'vi',
         GROQ_MODEL
       );
 
-      // Validate AI đã chọn được bác sĩ hợp lệ
       if (!aiDecision.recommendedDoctorId || !aiDecision.recommendedTimeSlot) {
         res.status(422).json({
           success: false,
-          message: 'AI không thể chọn bác sĩ phù hợp. Vui lòng chọn thủ công.',
+          message: 'The AI ​​cannot select a suitable doctor. Please choose manually.',
           data: {
             availableDoctors: dbContext.availableDoctors.slice(0, 5),
             aiReasoning: aiDecision.reasoning,
@@ -839,7 +773,7 @@ export const bookAppointmentFromAI = async (
       if (aiDecision.requiresEmergency) {
         res.status(200).json({
           success: false,
-          message: '🚨 Tình trạng nguy cấp. Gọi 115 ngay, không đặt lịch online.',
+          message: '🚨 Emergency situation. Call 115 immediately, do not make appointments online.',
           data: {
             emergency: true,
             reason: aiDecision.emergencyReason,
@@ -960,7 +894,7 @@ export const bookAppointmentFromAI = async (
     if (duplicateCheck) {
       res.status(409).json({
         success: false,
-        message: 'Bạn đã có lịch hẹn trong ngày này rồi.',
+        message: 'You have an appointment on this day with Dr. ' + doctor.user_id.name,
         data: {
           existingAppointmentId: (duplicateCheck._id as Types.ObjectId).toString(),
           date: finalDate,
@@ -970,14 +904,13 @@ export const bookAppointmentFromAI = async (
       return;
     }
 
-    // ── 7. Tạo appointment ───────────────────────────────────────
+    // ── 7. Create appointment ───────────────────────────────────────
     const symptoms = body.symptoms ?? [];
-    const reason = body.reason ?? 'Đặt lịch qua trợ lý AI';
+    const reason = body.reason ?? 'Schedule appointments via AI assistant.';
     const urgencyLevel = body.urgency_level
       ?? (aiDecisionMeta as any)?.urgencyLevel
       ?? 'medium';
     const appointmentEndTime = calculateEndTime(finalSlot, APPOINTMENT_DURATION_MINUTES);
-    const priority = determinePriority(symptoms, reason);
 
     const appointment = await Appointment.create({
       user_id: req.user._id,
@@ -989,12 +922,11 @@ export const bookAppointmentFromAI = async (
       status: 'pending',
       reason,
       notes: [
-        `Urgency: ${urgencyLevel}`,
+        `Urgency: ${urgencyLevel.toUpperCase()}`,
         symptoms.length ? `Symptoms: ${symptoms.join(', ')}` : '',
-        aiDecisionMeta ? `AI reasoning: ${(aiDecisionMeta as any).reasoning ?? ''}` : '',
+        aiDecisionMeta ? `AI Reasoning: ${(aiDecisionMeta as any).reasoning ?? ''}` : '',
       ].filter(Boolean).join(' | '),
       symptoms,
-      priority,
       metadata: {
         booked_via: 'ai_assistant',
         session_id: body.session_id,
@@ -1022,7 +954,6 @@ export const bookAppointmentFromAI = async (
         appointment_end_time: appointmentEndTime,
         status: 'pending',
         consultation_fee: doctor.consultation_fee,
-        priority,
       },
       ai_decision: aiDecisionMeta ?? null,
     };
@@ -1045,23 +976,21 @@ export const bookAppointmentFromAI = async (
           session.appointments_booked.push(appointment._id as Types.ObjectId);
 
           const confirmMsg = [
-            `✅ **Đặt lịch thành công!**`,
-            ``,
-            `👨‍⚕️ Bác sĩ: **${doctorName}**`,
-            `🏥 Chuyên khoa: ${specialtyName}`,
-            `📅 Ngày: ${targetDate.toLocaleDateString('vi-VN')}`,
-            `⏰ Giờ: ${finalSlot} – ${appointmentEndTime}`,
+            ` ✅ **Appointment successfully booked!**`,
+            `👨‍⚕️ Doctor: **${doctorName}**`,
+            `🏥 Specialty: ${specialtyName}`,
+            `📅 Date: ${targetDate.toLocaleDateString('vi-VN')}`,
+            `⏰ Time: ${finalSlot} – ${appointmentEndTime}`,
             useAI && (aiDecisionMeta as any)?.reasoning
-              ? `\n💡 Lý do AI chọn: ${(aiDecisionMeta as any).reasoning}`
+              ? `\n💡 Reason for choosing AI: ${(aiDecisionMeta as any).reasoning}`
               : '',
-            `\nVui lòng đến trước 15 phút và mang theo giấy tờ tùy thân.`,
+            `\nPlease arrive 15 minutes early and bring your identification.`,
           ].filter(s => s !== undefined).join('\n');
 
           await session.addMessage({
             role: 'assistant',
             content: confirmMsg,
             category: 'appointment',
-            language: 'vi',
             confidence: 1.0,
           });
 
@@ -1071,7 +1000,7 @@ export const bookAppointmentFromAI = async (
               content: confirmMsg,
               timestamp: new Date(),
               category: 'appointment',
-              language: 'vi',
+              language: 'en',
             });
           }
         }
@@ -1117,7 +1046,7 @@ export const bookAppointmentFromAI = async (
       },
       channels: ['in_app', 'email', 'sms'],
       action_url: `/appointments/${appointmentId}`,
-      action_label: 'Xem chi tiết lịch hẹn',
+      action_label: 'View appointment details',
     }).catch(err => console.error('❌ Patient notification failed:', err));
 
     // Thông báo bác sĩ
@@ -1126,14 +1055,14 @@ export const bookAppointmentFromAI = async (
         user_id: doctorUserId,
         template_key: 'new_appointment_request',
         variables: {
-          patient_name: userName ?? 'Bệnh nhân',
+          patient_name: userName ?? 'Patient',
           appointment_date: targetDate.toLocaleDateString('vi-VN'),
           appointment_time: finalSlot,
           reason: reason,
         },
         type: 'appointment',
         category: 'info',
-        priority: priority === 'high' ? 'high' : 'medium',
+        priority: (urgencyLevel === 'high' || urgencyLevel === 'critical') ? 'high' : 'medium',
         related_record: appointmentId,
         related_record_type: 'appointment',
         data: {
@@ -1144,7 +1073,6 @@ export const bookAppointmentFromAI = async (
             reason,
             symptoms,
             urgency_level: urgencyLevel,
-            priority,
             ai_selected: useAI,
           },
           patient: { name: userName, email: userEmail, phone: userPhone },
@@ -1152,7 +1080,7 @@ export const bookAppointmentFromAI = async (
         },
         channels: ['in_app', 'email'],
         action_url: `/doctor/appointments/${appointmentId}`,
-        action_label: 'Xem yêu cầu khám',
+        action_label: 'View the examination request',
       }).catch(err => console.error('❌ Doctor notification failed:', err));
     }
 
@@ -1184,8 +1112,8 @@ export const bookAppointmentFromAI = async (
 
       notificationService.sendNotification({
         user_id: userId,
-        title: 'Nhắc nhở lịch khám',
-        message: `Nhắc nhở: Bạn có lịch khám với Bs. ${doctorName} vào ngày mai lúc ${finalSlot}.`,
+        title: 'Appointment reminder',
+        message: `Reminder: You have an appointment with Doctor ${doctorName} tomorrow at ${finalSlot}.`,
         type: 'reminder',
         category: 'info',
         priority: 'medium',
@@ -1220,7 +1148,7 @@ export const bookAppointmentFromAI = async (
     // ── 12. Trả về response ──────────────────────────────────────
     res.status(201).json({
       success: true,
-      message: 'Đặt lịch thành công!',
+      message: 'Appointment booked successfully!',
       data: {
         ...resultData,
         patient: {
@@ -1237,25 +1165,22 @@ export const bookAppointmentFromAI = async (
         },
         preparation: getPreparationInstructions(specialtyName),
         next_steps: [
-          'Chờ bác sĩ xác nhận lịch hẹn',
-          'Đến trước 15 phút',
-          'Mang CMND/CCCD và thẻ bảo hiểm',
-          'Mang kết quả xét nghiệm cũ nếu có',
+          'Wait for the doctor to confirm the appointment',
+          'Arrive 15 minutes early',
+          'Bring your ID card/citizen identification card and insurance card',
+          'Bring any old test results if available',
         ],
       },
     });
 
   } catch (error: any) {
     console.error('❌ bookAppointmentFromAI error:', error);
-
-    // Thông báo admin khi có lỗi nghiêm trọng
     console.error('🔴 bookAppointmentFromAI critical error:', {
       userId,
       error: error.message,
       stack: error.stack,
       timestamp: new Date().toISOString(),
     });
-    // Chỉ gửi notification nếu có admin userId thật từ config
     const adminUserId = process.env.ADMIN_USER_ID;
     if (adminUserId) {
       notificationService.sendNotification({
@@ -1273,14 +1198,14 @@ export const bookAppointmentFromAI = async (
     if (error.code === 11000) {
       res.status(409).json({
         success: false,
-        message: 'Lịch hẹn trùng lặp. Vui lòng thử lại.',
+        message: 'Appointments clash. Please try again.',
       });
       return;
     }
 
     res.status(500).json({
       success: false,
-      message: 'Đặt lịch thất bại. Vui lòng thử lại.',
+      message: 'Scheduling failed. Please try again.',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }
@@ -1527,7 +1452,7 @@ export const getLifestyleAdvice = async (req: Request, res: Response) => {
     if (!topic?.trim()) {
       return res.status(400).json({
         success: false,
-        message: 'Vui lòng nhập chủ đề cần tư vấn',
+        message: 'Please enter the topic you need advice on.',
       });
     }
 
@@ -1535,7 +1460,7 @@ export const getLifestyleAdvice = async (req: Request, res: Response) => {
     if (!sanitized.safe) {
       return res.status(400).json({
         success: false,
-        message: sanitized.reason || 'Chủ đề không hợp lệ',
+        message: sanitized.reason || 'Subject matter not accepted.',
       });
     }
 
@@ -1562,11 +1487,38 @@ export const getLifestyleAdvice = async (req: Request, res: Response) => {
     console.error('Error in getLifestyleAdvice:', error);
     return res.status(500).json({
       success: false,
-      message: 'Có lỗi xảy ra khi lấy lời khuyên',
+      message: 'Errors occur when seeking advice.',
     });
   }
 };
 
+async function getUpcomingApptList(userId: string, language: Language = 'en') {
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+
+  const upcoming = await Appointment.find({
+    user_id: userId,
+    appointment_date: { $gte: startOfToday },
+    status: { $in: ['pending', 'confirmed'] },
+  })
+    .populate({
+      path: 'doctor_id',
+      populate: { path: 'user_id', select: 'name' }
+    })
+    .populate('specialty_id', 'name')
+    .sort({ appointment_date: 1 })
+    .limit(5)
+    .lean();
+
+  return upcoming.map((a) => ({
+    id: (a._id as Types.ObjectId).toString(),
+    date: new Date(a.appointment_date).toLocaleDateString(language === 'vi' ? 'vi-VN' : 'en-US'),
+    time: a.time_slot,
+    doctorName: ((a.doctor_id as any)?.user_id as any)?.name || 'Doctor',
+    specialty: (a.specialty_id as any)?.name || 'General Medicine',
+    status: a.status,
+  }));
+}
 
 export const detectAppointmentIntent = (message: string): {
   intent: 'view_upcoming' | 'reschedule' | 'cancel' | 'none';
@@ -1574,30 +1526,31 @@ export const detectAppointmentIntent = (message: string): {
 } => {
   const lower = message.toLowerCase().trim();
 
-  // ── Xem lịch hẹn sắp tới ──
   const viewKeywords = [
-    'xem lịch', 'lịch hẹn', 'lịch khám', 'appointment',
-    'sắp tới', 'upcoming', 'lịch của tôi', 'my appointment',
-    'có lịch', 'đặt rồi', 'check appointment', 'kiểm tra lịch',
-    'những lịch', 'danh sách lịch',
-  ];
-  if (viewKeywords.some(k => lower.includes(k))) return { intent: 'view_upcoming', confidence: 0.9 };
+    'view schedule', 'appointment',
+
+    'upcoming', 'my appointment',
+
+    'scheduled', 'booked', 'check appointment', 'check schedule',
+
+    'schedules', 'schedule list',
+
+  ]; if (viewKeywords.some(k => lower.includes(k))) return { intent: 'view_upcoming', confidence: 0.9 };
 
   // ── Đổi / reschedule ──
   const rescheduleKeywords = [
-    'đổi lịch', 'dời lịch', 'thay đổi lịch', 'reschedule',
-    'đổi giờ', 'thay giờ', 'đổi ngày', 'thay ngày',
-    'đổi bác sĩ', 'chuyên khoa khác', 'change appointment',
-    'sửa lịch', 'cập nhật lịch', 'muốn đổi', 'cần đổi',
+    'change schedule', 'reschedule', 'change time', 'schedule', 'change date',
+    'change doctor', 'other specialty', 'change appointment',
+    'edit schedule', 'update schedule', 'want to change', 'need to change',
   ];
   if (rescheduleKeywords.some(k => lower.includes(k))) return { intent: 'reschedule', confidence: 0.9 };
 
-  // ── Hủy ──
   const cancelKeywords = [
-    'hủy lịch', 'cancel', 'huỷ lịch', 'bỏ lịch', 'xóa lịch',
-    'không đi khám', 'không cần khám nữa', 'hủy hẹn', 'huỷ hẹn',
-    'cancel appointment', 'delete appointment',
+    'cancel appointment', 'cancel', 'cancel appointment', 'cancel appointment', 'delete appointment',
+
+    "don't go for examination", "no longer need examination", "cancel appointment", "cancel appointment"
   ];
+
   if (cancelKeywords.some(k => lower.includes(k))) return { intent: 'cancel', confidence: 0.9 };
 
   return { intent: 'none', confidence: 0 };
@@ -1607,56 +1560,38 @@ export const detectAppointmentIntent = (message: string): {
 export async function handleViewUpcomingIntent(
   req: AuthRequest,
   res: Response,
-  sessionId: string
+  sessionId: string,
+  session?: any // Optional session for persistence
 ): Promise<void> {
   const userId = req.user!._id.toString();
-  const lang = (req.body.language as string) || 'vi';
-
   try {
-    const upcoming = await Appointment.find({
-      user_id: userId,
-      appointment_date: { $gte: new Date() },
-      status: { $in: ['pending', 'confirmed'] },
-    })
-      .populate('specialty_id', 'name')
-      .sort({ appointment_date: 1 })
-      .limit(5)
-      .lean();
-
-    // Resolve doctor names separately
-    const apptList = await Promise.all(upcoming.map(async (a) => {
-      const doctorDoc = await Doctor.findById(a.doctor_id)
-        .populate('user_id', 'name')
-        .lean();
-      return {
-        id: (a._id as Types.ObjectId).toString(),
-        date: new Date(a.appointment_date).toLocaleDateString('vi-VN'),
-        time: a.time_slot,
-        doctorName: (doctorDoc?.user_id as any)?.name || 'Bác sĩ',
-        specialty: (a.specialty_id as any)?.name || 'Đa khoa',
-        status: a.status,
-      };
-    }));
+    const apptList = await getUpcomingApptList(userId, (req.query.lang as any) || 'en');
 
     const responseText = apptList.length === 0
-      ? (lang === 'vi'
-        ? '📅 Bạn hiện không có lịch hẹn nào sắp tới.\n\nBạn có muốn đặt lịch khám mới không?'
-        : '📅 You have no upcoming appointments.\n\nWould you like to book a new one?')
-      : (lang === 'vi'
-        ? `📅 **Lịch hẹn sắp tới của bạn (${apptList.length}):**\n\n` +
-        apptList.map((a, i) =>
-          `${i + 1}. BS. ${a.doctorName} – ${a.specialty}\n   📆 ${a.date} lúc ${a.time}\n   🔵 ${a.status === 'confirmed' ? 'Đã xác nhận' : 'Chờ xác nhận'}`
-        ).join('\n\n')
-        : `📅 **Your upcoming appointments (${apptList.length}):**\n\n` +
-        apptList.map((a, i) =>
-          `${i + 1}. Dr. ${a.doctorName} – ${a.specialty}\n   📆 ${a.date} at ${a.time}\n   🔵 ${a.status}`
-        ).join('\n\n'));
+      ? '📅 You have no upcoming appointments.\n\nWould you like to book a new one?'
+      : `📅 **Your upcoming appointments (${apptList.length}):**\n\n` +
+      apptList.map((a, i) =>
+        `${i + 1}. Dr. ${a.doctorName} – ${a.specialty}
+   📆 ${a.date} at ${a.time}
+   🔵 ${a.status === 'confirmed' ? 'Confirmed' : 'Pending'}`
+      ).join('\n\n');
 
-    // Add to session history
-    const session = await ChatSession.findOne({ session_id: sessionId, user_id: req.user!._id });
-    if (session) {
-      await session.addMessage({ role: 'user', content: req.body.message?.trim() ?? '' });
-      await session.addMessage({ role: 'assistant', content: responseText, category: 'appointment_management', language: lang as any, confidence: 1.0 });
+    const recommendation = {
+      actionType: 'view_appointments' as const,
+      shouldBook: false,
+      urgencyLevel: 'low' as const,
+      symptoms: [],
+    };
+
+    // ── Update persistence in ChatSession ─────────────────────
+    if (session && session.messages.length > 0) {
+      const lastMsg = session.messages[session.messages.length - 1];
+      if (lastMsg.role === 'assistant') {
+        lastMsg.content = responseText;
+        lastMsg.category = 'appointment_management';
+        lastMsg.appointmentRecommendation = recommendation;
+        await session.save();
+      }
     }
 
     res.status(200).json({
@@ -1665,20 +1600,12 @@ export async function handleViewUpcomingIntent(
         response: responseText,
         confidence: 1.0,
         category: 'appointment_management',
-        language: lang,
         session_id: sessionId,
-        upcomingAppointments: apptList,  // <-- BẮT BUỘC ở top level
-        appointmentRecommendation: {
-          actionType: 'view_appointments' as const,
-          shouldBook: false,
-          urgencyLevel: 'low' as const,
-          symptoms: [],
-        },
+        upcomingAppointments: apptList,
+        appointmentRecommendation: recommendation,
         suggestedActions: apptList.length > 0
-          ? (lang === 'vi'
-            ? ['Đổi lịch hẹn', 'Hủy lịch hẹn', 'Đặt lịch mới']
-            : ['Reschedule', 'Cancel appointment', 'Book new'])
-          : (lang === 'vi' ? ['Đặt lịch khám mới'] : ['Book new appointment']),
+          ? ['Reschedule', 'Cancel appointment', 'Book new']
+          : ['Book new appointment'],
       },
     });
   } catch (error) {
@@ -1691,46 +1618,33 @@ export async function handleViewUpcomingIntent(
 export async function handleRescheduleIntent(
   req: AuthRequest,
   res: Response,
-  sessionId: string
+  sessionId: string,
+  session?: any
 ): Promise<void> {
   const userId = req.user!._id.toString();
-  const lang = (req.body.language as string) || 'vi';
-
   try {
-    const upcoming = await Appointment.find({
-      user_id: userId,
-      appointment_date: { $gte: new Date() },
-      status: { $in: ['pending', 'confirmed'] },
-    })
-      .populate('specialty_id', 'name')
-      .sort({ appointment_date: 1 })
-      .limit(5)
-      .lean();
-
-    const apptList = await Promise.all(upcoming.map(async (a) => {
-      const doctorDoc = await Doctor.findById(a.doctor_id).populate('user_id', 'name').lean();
-      return {
-        id: (a._id as Types.ObjectId).toString(),
-        date: new Date(a.appointment_date).toLocaleDateString('vi-VN'),
-        time: a.time_slot,
-        doctorName: (doctorDoc?.user_id as any)?.name || 'Bác sĩ',
-        specialty: (a.specialty_id as any)?.name || 'Đa khoa',
-        status: a.status,
-      };
-    }));
+    const apptList = await getUpcomingApptList(userId, (req.query.lang as any) || 'en');
 
     const responseText = apptList.length === 0
-      ? (lang === 'vi'
-        ? '📅 Bạn chưa có lịch hẹn nào để đổi. Bạn có muốn đặt lịch mới không?'
-        : '📅 You have no appointments to reschedule. Would you like to book a new one?')
-      : (lang === 'vi'
-        ? `🔄 Bạn muốn đổi lịch hẹn nào?\n\nTôi thấy bạn có **${apptList.length}** lịch hẹn sắp tới. Hãy chọn lịch cần đổi.`
-        : `🔄 Which appointment would you like to reschedule?\n\nYou have **${apptList.length}** upcoming appointment(s). Please select one.`);
+      ? '📅 You have no appointments to reschedule. Would you like to book a new one?'
+      : `🔄 Which appointment would you like to reschedule?
+    You have **${apptList.length}** upcoming appointment(s). Please select one.`;
 
-    const session = await ChatSession.findOne({ session_id: sessionId, user_id: req.user!._id });
-    if (session) {
-      await session.addMessage({ role: 'user', content: req.body.message?.trim() ?? '' });
-      await session.addMessage({ role: 'assistant', content: responseText, category: 'appointment_management', language: lang as any, confidence: 1.0 });
+    const recommendation = {
+      actionType: 'reschedule',
+      shouldBook: false,
+      urgencyLevel: 'low' as const,
+      symptoms: [],
+    };
+
+    if (session && session.messages.length > 0) {
+      const lastMsg = session.messages[session.messages.length - 1];
+      if (lastMsg.role === 'assistant') {
+        lastMsg.content = responseText;
+        lastMsg.category = 'appointment_management';
+        lastMsg.appointmentRecommendation = recommendation;
+        await session.save();
+      }
     }
 
     res.status(200).json({
@@ -1739,15 +1653,9 @@ export async function handleRescheduleIntent(
         response: responseText,
         confidence: 1.0,
         category: 'appointment_management',
-        language: lang,
         session_id: sessionId,
         upcomingAppointments: apptList,
-        appointmentRecommendation: {
-          actionType: 'reschedule',
-          shouldBook: false,
-          urgencyLevel: 'low' as const,
-          symptoms: [],
-        },
+        appointmentRecommendation: recommendation,
       },
     });
   } catch (error) {
@@ -1760,42 +1668,20 @@ export async function handleRescheduleIntent(
 export async function handleCancelIntent(
   req: AuthRequest,
   res: Response,
-  sessionId: string
+  sessionId: string,
+  session?: any
 ): Promise<void> {
   const userId = req.user!._id.toString();
-  const lang = (req.body.language as string) || 'vi';
-
   try {
-    const upcoming = await Appointment.find({
-      user_id: userId,
-      appointment_date: { $gte: new Date() },
-      status: { $in: ['pending', 'confirmed'] },
-    })
-      .populate('specialty_id', 'name')
-      .sort({ appointment_date: 1 })
-      .limit(5)
-      .lean();
-
-    const apptList = await Promise.all(upcoming.map(async (a) => {
-      const doctorDoc = await Doctor.findById(a.doctor_id).populate('user_id', 'name').lean();
-      return {
-        id: (a._id as Types.ObjectId).toString(),
-        date: new Date(a.appointment_date).toLocaleDateString('vi-VN'),
-        time: a.time_slot,
-        doctorName: (doctorDoc?.user_id as any)?.name || 'Bác sĩ',
-        specialty: (a.specialty_id as any)?.name || 'Đa khoa',
-        status: a.status,
-      };
-    }));
+    const apptList = await getUpcomingApptList(userId, (req.query.lang as any) || 'en');
 
     if (apptList.length === 0) {
       res.status(200).json({
         success: true,
         data: {
-          response: lang === 'vi' ? '📅 Bạn không có lịch hẹn nào sắp tới để hủy.' : '📅 You have no upcoming appointments to cancel.',
+          response: '📅 You have no upcoming appointments to cancel.',
           confidence: 1.0,
           category: 'appointment_management',
-          language: lang,
           session_id: sessionId,
           upcomingAppointments: [],
         },
@@ -1803,14 +1689,24 @@ export async function handleCancelIntent(
       return;
     }
 
-    const responseText = lang === 'vi'
-      ? `❌ Bạn muốn hủy lịch hẹn nào?\n\n⚠️ Lưu ý: Hủy trước ít nhất 24 giờ để tránh phí.`
-      : `❌ Which appointment would you like to cancel?\n\n⚠️ Note: Cancel at least 24 hours in advance to avoid fees.`;
+    const responseText = `❌ Which appointment would you like to cancel?
+      ⚠️ Note: Cancel at least 24 hours in advance to avoid fees.`;
 
-    const session = await ChatSession.findOne({ session_id: sessionId, user_id: req.user!._id });
-    if (session) {
-      await session.addMessage({ role: 'user', content: req.body.message?.trim() ?? '' });
-      await session.addMessage({ role: 'assistant', content: responseText, category: 'appointment_management', language: lang as any, confidence: 1.0 });
+    const recommendation = {
+      actionType: 'cancel',
+      shouldBook: false,
+      urgencyLevel: 'low' as const,
+      symptoms: [],
+    };
+
+    if (session && session.messages.length > 0) {
+      const lastMsg = session.messages[session.messages.length - 1];
+      if (lastMsg.role === 'assistant') {
+        lastMsg.content = responseText;
+        lastMsg.category = 'appointment_management';
+        lastMsg.appointmentRecommendation = recommendation;
+        await session.save();
+      }
     }
 
     res.status(200).json({
@@ -1819,16 +1715,9 @@ export async function handleCancelIntent(
         response: responseText,
         confidence: 1.0,
         category: 'appointment_management',
-        language: lang,
         session_id: sessionId,
-        // FIX: top-level upcomingAppointments + actionType in recommendation
         upcomingAppointments: apptList,
-        appointmentRecommendation: {
-          actionType: 'cancel',
-          shouldBook: false,
-          urgencyLevel: 'low' as const,
-          symptoms: [],
-        },
+        appointmentRecommendation: recommendation,
       },
     });
   } catch (error) {
@@ -1848,7 +1737,6 @@ export const rescheduleAppointment = async (
 
     const { id } = req.params;
     const { new_time_slot, new_date } = req.body;
-    const lang = (req.body.language as string) || 'vi';
 
     if (!new_time_slot || !new_date) {
       res.status(400).json({ success: false, message: 'new_time_slot và new_date là bắt buộc' });
@@ -1856,10 +1744,10 @@ export const rescheduleAppointment = async (
     }
 
     const appointment = await Appointment.findOne({ _id: id, user_id: req.user._id });
-    if (!appointment) { res.status(404).json({ success: false, message: 'Không tìm thấy lịch hẹn' }); return; }
+    if (!appointment) { res.status(404).json({ success: false, message: 'No appointment found.' }); return; }
 
     if (!['pending', 'confirmed'].includes(appointment.status)) {
-      res.status(409).json({ success: false, message: 'Không thể đổi lịch hẹn đã hủy hoặc hoàn thành' });
+      res.status(409).json({ success: false, message: 'Canceled or completed appointments cannot be rescheduled.' });
       return;
     }
 
@@ -1889,8 +1777,7 @@ export const rescheduleAppointment = async (
 
       res.status(409).json({
         success: false,
-        message: lang === 'vi' ? `Giờ ${new_time_slot} đã được đặt. Vui lòng chọn giờ khác.` : `Slot ${new_time_slot} is taken.`,
-        data: { alternativeSlots },
+        message: `⏰ The time slot ${new_time_slot} is already booked. Please select a different time.`, data: { alternativeSlots },
       });
       return;
     }
@@ -1901,7 +1788,7 @@ export const rescheduleAppointment = async (
 
     appointment.appointment_date = newTargetDate;
     appointment.time_slot = new_time_slot;
-    appointment.status = 'pending'; // reset to pending for doctor re-confirm
+    appointment.status = 'pending';
     (appointment as any).notes = [(appointment as any).notes, `Rescheduled from ${oldDate.toLocaleDateString('vi-VN')} ${oldSlot} → ${new_date} ${new_time_slot}`].filter(Boolean).join(' | ');
     await appointment.save();
 
@@ -1911,20 +1798,26 @@ export const rescheduleAppointment = async (
 
     notificationService.sendNotification({
       user_id: req.user._id.toString(),
-      title: lang === 'vi' ? 'Đổi lịch thành công' : 'Appointment Rescheduled',
-      message: lang === 'vi'
-        ? `Lịch hẹn của bạn đã được đổi sang ${newTargetDate.toLocaleDateString('vi-VN')} lúc ${new_time_slot}.`
-        : `Your appointment has been rescheduled to ${new_date} at ${new_time_slot}.`,
-      type: 'appointment', category: 'info', priority: 'medium',
-      related_record: id, related_record_type: 'appointment',
-      data: { new_date, new_slot: new_time_slot, old_date: oldDate.toLocaleDateString('vi-VN'), old_slot: oldSlot },
+      title: 'Appointment Rescheduled',
+      message: `Your appointment has been rescheduled to ${new_date} at ${new_time_slot}.`,
+      type: 'appointment',
+      category: 'info',
+      priority: 'medium',
+      related_record: id,
+      related_record_type: 'appointment',
+      data: {
+        new_date,
+        new_slot: new_time_slot,
+        old_date: oldDate.toLocaleDateString(),
+        old_slot: oldSlot,
+      },
       channels: ['in_app', 'email'],
       action_url: `/appointments/${id}`,
     }).catch(err => console.error('Reschedule notification failed:', err));
 
     res.status(200).json({
       success: true,
-      message: lang === 'vi' ? 'Đổi lịch thành công!' : 'Appointment rescheduled!',
+      message: 'Appointment rescheduled!',
       data: {
         appointment_id: id,
         new_date: new_date,
@@ -1949,21 +1842,20 @@ export const cancelAppointmentByChat = async (
 
     const { id } = req.params;
     const { reason, force } = req.body;
-    const lang = (req.body.language as string) || 'vi';
 
     const appointment = await Appointment.findOne({ _id: id, user_id: req.user._id })
       .populate('doctor_id', 'user_id')
       .populate('specialty_id', 'name');
 
-    if (!appointment) { res.status(404).json({ success: false, message: 'Không tìm thấy lịch hẹn' }); return; }
+    if (!appointment) { res.status(404).json({ success: false, message: 'No appointment found.' }); return; }
 
     if (appointment.status === 'cancelled') {
-      res.status(409).json({ success: false, message: lang === 'vi' ? 'Lịch hẹn đã được hủy trước đó' : 'Appointment already cancelled' });
+      res.status(409).json({ success: false, message: 'Appointment already cancelled' });
       return;
     }
 
     if (appointment.status === 'completed') {
-      res.status(409).json({ success: false, message: lang === 'vi' ? 'Không thể hủy lịch hẹn đã hoàn thành' : 'Cannot cancel a completed appointment' });
+      res.status(409).json({ success: false, message: 'Cannot cancel a completed appointment' });
       return;
     }
 
@@ -1979,9 +1871,9 @@ export const cancelAppointmentByChat = async (
         // FIX: return canStillCancel: true so frontend can offer force-cancel
         res.status(409).json({
           success: false,
-          message: lang === 'vi'
-            ? `⚠️ Lịch hẹn chỉ còn ${Math.round(hoursUntil)} giờ nữa. Hủy trong vòng 24 giờ có thể phát sinh phí hủy.`
-            : `⚠️ Appointment is in ${Math.round(hoursUntil)} hours. Cancelling within 24h may incur a fee.`,
+          message: hoursUntil < 24
+            ? `⚠️ Appointment is in ${Math.round(hoursUntil)} hours. Cancelling within 24h may incur a fee.`
+            : `You can cancel this appointment without any fee.`,
           data: { hoursUntil: Math.round(hoursUntil), canStillCancel: true },
         });
         return;
@@ -1990,7 +1882,7 @@ export const cancelAppointmentByChat = async (
 
     // Proceed with cancellation
     appointment.status = 'cancelled';
-    (appointment as any).cancellation_reason = reason || (lang === 'vi' ? 'Hủy qua trợ lý AI' : 'Cancelled via AI chat');
+    (appointment as any).cancellation_reason = reason || ('Cancelled via AI chat');
     (appointment as any).cancelled_at = new Date();
     if (force) (appointment as any).late_cancellation = true;
     await appointment.save();
@@ -2000,16 +1892,24 @@ export const cancelAppointmentByChat = async (
     const doctorUserId = (doctorDoc?.user_id as any)?._id?.toString();
     const userName = (req.user as any).name as string | undefined;
 
+    const formatDate = (d: any) => new Date(d).toLocaleDateString('en-US');
+
+    // Notify doctor
     if (doctorUserId) {
       notificationService.sendNotification({
         user_id: doctorUserId,
-        title: lang === 'vi' ? 'Lịch hẹn bị hủy' : 'Appointment Cancelled',
-        message: lang === 'vi'
-          ? `Bệnh nhân ${userName} đã hủy lịch hẹn ngày ${new Date(appointment.appointment_date).toLocaleDateString('vi-VN')} lúc ${appointment.time_slot}${force ? ' (hủy muộn)' : ''}.`
-          : `Patient ${userName} cancelled appointment on ${new Date(appointment.appointment_date).toLocaleDateString()} at ${appointment.time_slot}${force ? ' (late cancellation)' : ''}.`,
-        type: 'appointment', category: 'warning', priority: 'medium',
-        related_record: id, related_record_type: 'appointment',
-        data: { appointment_id: id, reason: reason || 'Cancelled via chat', force: !!force },
+        title: 'Appointment Cancelled',
+        message: `Patient ${userName} cancelled appointment on ${formatDate(appointment.appointment_date)} at ${appointment.time_slot}${force ? ' (late cancellation)' : ''}.`,
+        type: 'appointment',
+        category: 'warning',
+        priority: 'medium',
+        related_record: id,
+        related_record_type: 'appointment',
+        data: {
+          appointment_id: id,
+          reason: reason || 'Cancelled via chat',
+          force: !!force,
+        },
         channels: ['in_app', 'email'],
       }).catch(err => console.error('Cancel doctor notification failed:', err));
     }
@@ -2017,20 +1917,22 @@ export const cancelAppointmentByChat = async (
     // Notify patient
     notificationService.sendNotification({
       user_id: req.user._id.toString(),
-      title: lang === 'vi' ? 'Đã hủy lịch hẹn' : 'Appointment Cancelled',
-      message: lang === 'vi'
-        ? `Lịch hẹn ngày ${new Date(appointment.appointment_date).toLocaleDateString('vi-VN')} lúc ${appointment.time_slot} đã được hủy thành công.`
-        : `Your appointment on ${new Date(appointment.appointment_date).toLocaleDateString()} at ${appointment.time_slot} has been cancelled.`,
-      type: 'appointment', category: 'info', priority: 'medium',
-      related_record: id, related_record_type: 'appointment',
+      title: 'Appointment Cancelled',
+      message: `Your appointment on ${formatDate(appointment.appointment_date)} at ${appointment.time_slot} has been cancelled.`,
+      type: 'appointment',
+      category: 'info',
+      priority: 'medium',
+      related_record: id,
+      related_record_type: 'appointment',
       data: { appointment_id: id },
       channels: ['in_app', 'email'],
       action_url: `/appointments`,
     }).catch(err => console.error('Cancel patient notification failed:', err));
 
+    // Response
     res.status(200).json({
       success: true,
-      message: lang === 'vi' ? 'Hủy lịch hẹn thành công!' : 'Appointment cancelled!',
+      message: 'Appointment cancelled successfully!',
       data: {
         appointment_id: id,
         status: 'cancelled',
@@ -2043,7 +1945,6 @@ export const cancelAppointmentByChat = async (
     res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
-
 
 
 export const getAvailableSlotsForReschedule = async (
@@ -2082,4 +1983,3 @@ export const getAvailableSlotsForReschedule = async (
     res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
-
