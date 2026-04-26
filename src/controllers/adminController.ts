@@ -1606,3 +1606,5 @@ export const updateDoctorSchedule = async (req: AuthRequest, res: Response): Pro
     });
   }
 };
+
+

@@ -27,6 +27,7 @@ export const getActiveConsultation = async (req: Request, res: Response) => {
       ]
     })
       .populate('user_id', 'name email phoneNumber dateOfBirth gender')
+      .populate('doctor_id', 'name')
       .populate('appointment_id')
       .sort({ updated_at: -1 });
 
@@ -91,7 +92,10 @@ export const createConsultation = async (req: Request, res: Response) => {
     });
 
     await medicalRecord.save();
-    await medicalRecord.populate('user_id', 'name email phoneNumber dateOfBirth gender');
+    await medicalRecord.populate([
+      { path: 'user_id', select: 'name email phoneNumber dateOfBirth gender' },
+      { path: 'doctor_id', select: 'name' }
+    ]);
 
     console.log('Medical record created:', medicalRecord);
 
@@ -1194,6 +1198,7 @@ export const getDoctorConsultations = async (req: Request, res: Response) => {
       doctor_id: doctorId
     })
       .populate('user_id', 'name email phoneNumber dateOfBirth gender')
+      .populate('doctor_id', 'name')
       .populate('appointment_id')
       .sort({ updated_at: -1 });
 

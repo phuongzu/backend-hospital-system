@@ -25,6 +25,7 @@ import {
   createDrug,
   getDoctorSchedule,
   updateDoctorSchedule,
+  updateDepartments,
 } from '../controllers/adminController';
 import { protect } from '../middlewares/authmiddleware';
 

@@ -301,13 +301,13 @@ const generateRefreshToken = (id: string): string => {
 
 export const registerUser = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { name, email, password, role, phoneNumber, doctorProfile } = req.body;
+    const { name, email, password, role, phoneNumber, dateOfBirth, gender, doctorProfile } = req.body;
 
-    // Enhanced input validation
-    if (!name || !email || !password) {
+    // Validate base fields
+    if (!name || !email) {
       res.status(400).json({
         success: false,
-        message: 'Name, email, and password are required'
+        message: 'Name and email are required'
       });
       return;
     }
@@ -322,13 +322,22 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
       return;
     }
 
-    // Password strength validation
-    if (password.length < 6) {
-      res.status(400).json({
-        success: false,
-        message: 'Password must be at least 6 characters long'
-      });
-      return;
+    // Password only required for patient registration
+    if (role !== 'doctor') {
+      if (!password) {
+        res.status(400).json({
+          success: false,
+          message: 'Password is required'
+        });
+        return;
+      }
+      if (password.length < 6) {
+        res.status(400).json({
+          success: false,
+          message: 'Password must be at least 6 characters long'
+        });
+        return;
+      }
     }
 
     // Check if user already exists
@@ -341,12 +350,11 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
       return;
     }
 
-    // NEW LOGIC: If registering as doctor, create registration request instead of user
+    // ── DOCTOR REGISTRATION REQUEST ──────────────────────────────────────────
     if (role === 'doctor') {
       const { specialty_id, license_number, years_of_experience, consultation_fee } = doctorProfile || {};
 
-      // Validate required doctor fields
-      if (!specialty_id || !license_number || !years_of_experience || !consultation_fee) {
+      if (!specialty_id || !license_number || years_of_experience === undefined || !consultation_fee) {
         res.status(400).json({
           success: false,
           message: 'For doctor registration, specialty, license number, years of experience, and consultation fee are required'
@@ -354,7 +362,15 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
         return;
       }
 
-      // Check if license number already exists in registration requests
+      if (!phoneNumber) {
+        res.status(400).json({
+          success: false,
+          message: 'Phone number is required for doctor registration'
+        });
+        return;
+      }
+
+      // Check duplicates
       const existingLicense = await DoctorRegistrationRequest.findOne({ license_number });
       if (existingLicense) {
         res.status(409).json({
@@ -364,7 +380,6 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
         return;
       }
 
-      // Check if email already exists in registration requests
       const existingRequest = await DoctorRegistrationRequest.findOne({ email: email.toLowerCase() });
       if (existingRequest) {
         res.status(409).json({
@@ -374,11 +389,11 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
         return;
       }
 
-      // Create doctor registration request
+      // Create registration request (no password stored)
       const registrationRequest = await DoctorRegistrationRequest.create({
         name: name.trim(),
         email: email.toLowerCase().trim(),
-        phoneNumber: phoneNumber || '',
+        phoneNumber: phoneNumber.trim(),
         specialty_id,
         license_number,
         years_of_experience,
@@ -388,6 +403,13 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
       });
 
       console.log(`📝 Doctor registration request created: ${registrationRequest._id}`);
+
+      // Send confirmation email (optional, don't fail if email errors)
+      try {
+        await emailService.sendRegistrationConfirmation(email, name);
+      } catch (emailError) {
+        console.error('Error sending confirmation email:', emailError);
+      }
 
       res.status(201).json({
         success: true,
@@ -401,31 +423,28 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
       return;
     }
 
-    // For patient registration (existing logic)
+    // ── PATIENT REGISTRATION ─────────────────────────────────────────────────
     const saltRounds = 12;
     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
-    // Create new user (only for patients)
     const newUser: IUser = await User.create({
       name: name.trim(),
       email: email.toLowerCase().trim(),
       password: hashedPassword,
-      role: 'patient', // Default to patient role
+      role: 'patient',
       phoneNumber: phoneNumber || '',
       isActive: true,
       lastLogin: null,
-      dateOfBirth: req.body.dateOfBirth || '',
-      gender: req.body.gender || '',
+      dateOfBirth: dateOfBirth || '',
+      gender: gender || '',
       address: req.body.address || '',
     });
 
-    // Generate tokens for patient
     const accessToken = generateToken(String(newUser._id), newUser.role, newUser.name, newUser.email);
     const refreshToken = generateRefreshToken(String(newUser._id));
 
-    // Update user with refresh token
     await User.findByIdAndUpdate(newUser._id, {
-      refreshToken: refreshToken,
+      refreshToken,
       lastLogin: new Date()
     });
 
@@ -450,20 +469,13 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
     console.error('❌ Error in registerUser:', error);
 
     if (error instanceof Error && error.message.includes('JWT')) {
-      res.status(500).json({
-        success: false,
-        message: 'Server configuration error'
-      });
+      res.status(500).json({ success: false, message: 'Server configuration error' });
       return;
     }
 
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
+    res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
-
 
 export const loginUser = async (req: Request, res: Response): Promise<void> => {
   try {

@@ -1,20 +1,20 @@
 import express from 'express';
-import { 
-getAllSpecialties,
-getSpecialtyById,
-updateSpecialty,
-createSpecialty,
-deleteSpecialty
+import {
+    getAllSpecialties,
+    getSpecialtyById,
+    updateSpecialty,
+    createSpecialty,
+    deleteSpecialty
 } from '../controllers/specialtyController';
-import { validateRequest } from '../middlewares/validateRequest';
+import { protect } from '../middlewares/authmiddleware';
 
 const router = express.Router();
 
 // Get all specialties
 router.get('/', getAllSpecialties);
-router.get('/:id',getSpecialtyById);
-router.post('/create',createSpecialty);
-router.put('/specialties/:id',updateSpecialty);
-router.delete('/:id',deleteSpecialty);
+router.get('/:id', getSpecialtyById);
+router.post('/create', protect, createSpecialty);
+router.put('/:id', protect, updateSpecialty);
+router.delete('/:id', protect, deleteSpecialty);
 
 export default router;

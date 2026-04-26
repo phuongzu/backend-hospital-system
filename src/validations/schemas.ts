@@ -4,14 +4,12 @@ import { z } from 'zod';
  * Authentication Schemas
  */
 export const RegisterSchema = z.object({
-  name: z.string().min(2, 'Name must be at least 2 characters').max(100, 'Name must be less than 100 characters').trim(),
+  name: z.string().min(2, 'Name must be at least 2 characters').max(100).trim(),
   email: z.string().email('Invalid email address').toLowerCase(),
   password: z.string()
-    .min(8, 'Password must be at least 8 characters')
-    .max(128, 'Password must be less than 128 characters')
-    .regex(/[A-Z]/, 'Password must contain at least one uppercase letter')
-    .regex(/[0-9]/, 'Password must contain at least one number')
-    .regex(/[!@#$%^&*(),.?":{}|<>]/, 'Password must contain at least one special character'),
+    .min(6, 'Password must be at least 6 characters')
+    .max(128)
+    .optional(),
   phoneNumber: z.string().optional().refine(
     (val) => !val || /^\+?[\d\s-]{10,}$/.test(val),
     'Invalid phone number format'
@@ -23,6 +21,15 @@ export const RegisterSchema = z.object({
     years_of_experience: z.number().optional(),
     consultation_fee: z.number().optional(),
   }).optional()
+}).superRefine((data, ctx) => {
+  // Patient phải có password
+  if (data.role !== 'doctor' && !data.password) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Password is required for patient registration',
+      path: ['password'],
+    });
+  }
 });
 
 export const LoginSchema = z.object({
