@@ -10,10 +10,7 @@ export const RegisterSchema = z.object({
     .min(6, 'Password must be at least 6 characters')
     .max(128)
     .optional(),
-  phoneNumber: z.string().optional().refine(
-    (val) => !val || /^\+?[\d\s-]{10,}$/.test(val),
-    'Invalid phone number format'
-  ),
+  phoneNumber: z.string().optional(),
   role: z.enum(['patient', 'doctor']).default('patient'),
   doctorProfile: z.object({
     specialty_id: z.string().optional(),
@@ -22,7 +19,6 @@ export const RegisterSchema = z.object({
     consultation_fee: z.number().optional(),
   }).optional()
 }).superRefine((data, ctx) => {
-  // Patient phải có password
   if (data.role !== 'doctor' && !data.password) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -118,11 +114,29 @@ export const DoctorProfileSchema = z.object({
 export const UpdatePatientInfoSchema = z.object({
   phoneNumber: z.string().optional(),
   dateOfBirth: z.string().optional(),
-  gender: z.enum(['male', 'female', 'other']).optional(),
+  gender: z.enum(['male', 'female', 'other', 'prefer_not_to_say']).optional(),
   address: z.string().optional(),
-  bloodType: z.string().optional(),
-  allergies: z.string().optional(),
-  medications: z.string().optional()
+  blood_type: z.string().optional(),
+  allergist: z.string().optional(),
+  current_medications: z.array(z.object({
+    _id: z.string().optional(),
+    name: z.string(),
+    dosage: z.string().optional(),
+    frequency: z.string().optional(),
+    start_date: z.string().optional(),
+    reason: z.string().optional(),
+    prescribed_by: z.string().optional()
+  })).optional(),
+  height: z.number().optional(),
+  weight: z.number().optional(),
+  BMI: z.number().optional(),
+  chronic_diseases: z.array(z.string()).optional(),
+  emergency_contact: z.object({
+    name: z.string(),
+    relationship: z.string().optional(),
+    phone: z.string(),
+    email: z.string().optional()
+  }).optional()
 });
 
 export const EmergencyContactSchema = z.object({

@@ -356,15 +356,6 @@ export const updateMedications = async (req: AuthRequest, res: Response): Promis
 
     await userInfo.save();
 
-    // Also update the User model if medications/allergies are provided
-    if (medications !== undefined || allergies !== undefined) {
-      const userUpdate: any = {};
-      if (medications !== undefined) userUpdate.medications = medications;
-      if (allergies !== undefined) userUpdate.allergies = allergies;
-
-      await User.findByIdAndUpdate(req.user._id, userUpdate);
-    }
-
     res.status(200).json({
       success: true,
       message: 'Medications and allergies updated successfully',
@@ -559,11 +550,24 @@ export const updatePatientInfo = async (req: AuthRequest, res: Response): Promis
     ];
 
     const updateData: any = {};
-    allowedFields.forEach(field => {
-      if (newInfo[field] !== undefined) {
-        updateData[field] = newInfo[field];
-      }
-    });
+
+    // Mapping frontend fields to backend model fields
+    if (newInfo.blood_type !== undefined) updateData.blood_type = newInfo.blood_type;
+    if (newInfo.bloodType !== undefined) updateData.blood_type = newInfo.bloodType;
+
+    if (newInfo.allergist !== undefined) updateData.allergist = newInfo.allergist;
+    if (newInfo.allergies !== undefined) updateData.allergist = newInfo.allergies;
+
+    if (newInfo.current_medications !== undefined) updateData.current_medications = newInfo.current_medications;
+    if (newInfo.medications !== undefined) updateData.current_medications = newInfo.medications;
+
+    if (newInfo.emergency_contact !== undefined) updateData.emergency_contact = newInfo.emergency_contact;
+    if (newInfo.emergencyContact !== undefined) updateData.emergency_contact = newInfo.emergencyContact;
+
+    if (newInfo.height !== undefined) updateData.height = Number(newInfo.height);
+    if (newInfo.weight !== undefined) updateData.weight = Number(newInfo.weight);
+    if (newInfo.BMI !== undefined) updateData.BMI = Number(newInfo.BMI);
+    if (newInfo.chronic_diseases !== undefined) updateData.chronic_diseases = newInfo.chronic_diseases;
 
     let userInfo = await UserInfo.findOne({ user_id: req.user._id });
 
@@ -652,11 +656,19 @@ export const editInfoPatient = async (req: AuthRequest, res: Response): Promise<
 
     // Update existing
     if (emergency_contact !== undefined) userInfo.emergency_contact = emergency_contact;
+    if (req.body.emergencyContact !== undefined) userInfo.emergency_contact = req.body.emergencyContact;
+
     if (blood_type !== undefined) userInfo.blood_type = blood_type;
+    if (req.body.bloodType !== undefined) userInfo.blood_type = req.body.bloodType;
+
     if (allergist !== undefined) userInfo.allergist = allergist;
+    if (req.body.allergies !== undefined) userInfo.allergist = req.body.allergies;
+
     if (current_medications !== undefined) userInfo.current_medications = current_medications;
-    if (height !== undefined) userInfo.height = height;
-    if (weight !== undefined) userInfo.weight = weight;
+    if (req.body.medications !== undefined) userInfo.current_medications = req.body.medications;
+
+    if (height !== undefined) userInfo.height = Number(height);
+    if (weight !== undefined) userInfo.weight = Number(weight);
     if (chronic_diseases !== undefined) userInfo.chronic_diseases = chronic_diseases;
 
     userInfo.calculateBMI();
@@ -787,16 +799,7 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
     const user_email = req.user?.email;
     const user_phone = req.user?.phoneNumber;
 
-    console.log('=== BOOK APPOINTMENT ===');
-    console.log('Request from user:', { user_id, user_name, user_email });
-    console.log('Appointment details:', {
-      doctor_id,
-      appointment_date,
-      time_slot,
-      reason
-    });
-
-    // Validate required fields
+    // ── 1. Validate required fields ──────────────────────────────────────────
     if (!doctor_id || !appointment_date || !time_slot) {
       res.status(400).json({
         success: false,
@@ -806,41 +809,27 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
       return;
     }
 
-    // Validate date format
     const appointmentDate = new Date(appointment_date);
     if (isNaN(appointmentDate.getTime())) {
-      res.status(400).json({
-        success: false,
-        message: 'Invalid appointment date format'
-      });
+      res.status(400).json({ success: false, message: 'Invalid appointment date format' });
       return;
     }
 
-    // Check if appointment date is in the future
-    const now = new Date();
-    if (appointmentDate <= now) {
-      res.status(400).json({
-        success: false,
-        message: 'Appointment date must be in the future'
-      });
+    if (appointmentDate <= new Date()) {
+      res.status(400).json({ success: false, message: 'Appointment date must be in the future' });
       return;
     }
 
-    // Check if doctor exists and is available
+    // ── 2. Validate doctor ───────────────────────────────────────────────────
     const doctor = await Doctor.findById(doctor_id)
       .populate<{ user_id: { _id: Types.ObjectId; name: string; email: string; status: string } }>('user_id', 'name email phoneNumber status')
-      .populate<{ specialty_id: { _id: Types.ObjectId; name: string; description: string } }>('specialty_id', 'name description')
-      .populate('specialty_id', 'name description');
+      .populate<{ specialty_id: { _id: Types.ObjectId; name: string } }>('specialty_id', 'name description');
 
     if (!doctor) {
-      res.status(404).json({
-        success: false,
-        message: 'Doctor not found'
-      });
+      res.status(404).json({ success: false, message: 'Doctor not found' });
       return;
     }
 
-    // Check if doctor is available (status working)
     if (doctor.user_id?.status !== 'working') {
       res.status(400).json({
         success: false,
@@ -849,7 +838,6 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
       return;
     }
 
-    // Check if doctor is available for appointments
     if (doctor.isAvailable === false) {
       res.status(400).json({
         success: false,
@@ -857,6 +845,8 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
       });
       return;
     }
+
+    // ── 3. Check slot conflict ───────────────────────────────────────────────
     const existingAppointment = await Appointment.findOne({
       doctor_id,
       appointment_date: appointmentDate,
@@ -876,10 +866,9 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
       return;
     }
 
-    // Calculate appointment end time (default 30 minutes)
+    // ── 4. Create appointment ────────────────────────────────────────────────
     const appointmentEndTime = calculateEndTime(time_slot, 30);
 
-    // Create new appointment
     const appointment = new Appointment({
       doctor_id,
       user_id,
@@ -904,211 +893,9 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
       }
     });
 
-
     await appointment.save();
 
-    // Populate appointment data
-    const populatedAppointment = await Appointment.findById(appointment._id)
-      .populate('doctor_id', 'name email phoneNumber specialty_id consultation_fee')
-      .populate('user_id', 'name email phoneNumber dateOfBirth gender')
-      .populate('specialty_id', 'name description');
-
-
-    // ========== GỬI THÔNG BÁO CHO BỆNH NHÂN ==========
-    try {
-      await notificationService.sendNotification({
-        user_id: user_id.toString(),
-        template_key: 'appointment_booked',
-        variables: {
-          doctor_name: doctor.user_id?.name || 'Doctor',
-          appointment_date: appointmentDate.toLocaleDateString(),
-          appointment_time: time_slot,
-          specialty: doctor.specialty_id?.name || 'General Medicine'
-        },
-        type: 'appointment',
-        category: 'success',
-        priority: 'medium',
-        related_record: (appointment._id as Types.ObjectId).toString(),
-        related_record_type: 'appointment',
-        data: {
-          appointment: {
-            id: (appointment._id as Types.ObjectId).toString(),
-            date: appointmentDate.toISOString(),
-            time: time_slot,
-            reason: reason,
-            status: 'pending'
-          },
-          doctor: {
-            name: doctor.user_id?.name,
-            specialty: doctor.specialty_id?.name,
-            consultation_fee: doctor.consultation_fee
-          },
-          patient: {
-            name: user_name,
-            email: user_email
-          }
-        },
-        channels: ['in_app', 'email', 'sms'],
-        action_url: `/appointments/${appointment._id}`,
-        action_label: 'View Appointment Details'
-      });
-
-      console.log('✅ Appointment booking notification sent to patient');
-    } catch (patientNotifError) {
-      console.error('❌ Error sending patient notification:', patientNotifError);
-    }
-
-    // ========== GỬI THÔNG BÁO CHO BÁC SĨ ==========
-    try {
-      const doctorUserId = doctor.user_id?._id;
-      if (doctorUserId) {
-        await notificationService.sendNotification({
-          user_id: doctorUserId.toString(),
-          template_key: 'new_appointment_request',
-          variables: {
-            patient_name: user_name || 'Patient',
-            appointment_date: appointmentDate.toLocaleDateString(),
-            appointment_time: time_slot,
-            reason: reason || 'General consultation'
-          },
-          type: 'appointment',
-          category: 'info',
-          priority: 'medium',
-          related_record: (appointment._id as Types.ObjectId).toString(),
-          related_record_type: 'appointment',
-          data: {
-            appointment: {
-              id: (appointment._id as Types.ObjectId).toString(),
-              date: appointmentDate.toISOString(),
-              time: time_slot,
-              reason: reason,
-              symptoms: symptoms
-            },
-            patient: {
-              name: user_name,
-              email: user_email,
-              phone: user_phone
-            },
-            urgency: determineUrgency(symptoms, reason)
-          },
-          channels: ['in_app', 'email'],
-          action_url: `/doctor/appointments/${appointment._id}`,
-          action_label: 'Review Appointment'
-        });
-
-        console.log('✅ Appointment request notification sent to doctor');
-      }
-    } catch (doctorNotifError) {
-      console.error('❌ Error sending doctor notification:', doctorNotifError);
-    }
-
-    // ========== GỬI EMAIL XÁC NHẬN ==========
-    if (user_email) {
-      try {
-        await emailService.sendAppointmentConfirmationEmail(
-          user_email,
-          user_name || 'Patient',
-          reason || 'null',
-          {
-            appointment_id: (appointment._id as Types.ObjectId).toString(),
-            doctor_name: doctor.user_id?.name || 'Doctor',
-            doctor_specialty: doctor.specialty_id?.name || 'General Medicine',
-            appointment_date: appointmentDate.toLocaleDateString(),
-            appointment_time: time_slot,
-            appointment_end_time: appointmentEndTime,
-            location: 'Main Hospital - Room 101',
-            consultation_fee: doctor.consultation_fee,
-            preparation_instructions: getPreparationInstructions(specialty_id),
-            cancellation_policy: 'Cancel at least 24 hours in advance to avoid fees.',
-            contact_info: 'Call 123-456-7890 for assistance'
-          }
-        );
-
-        console.log(`✅ Appointment confirmation email sent to ${user_email}`);
-      } catch (emailError) {
-        console.error('❌ Error sending confirmation email:', emailError);
-      }
-    }
-
-    // ========== GỬI SMS REMINDER (nếu có số điện thoại) ==========
-    if (user_phone && smsService.isAvailable()) {
-      try {
-        // Schedule reminder for 1 day before appointment
-        const reminderDate = new Date(appointmentDate);
-        reminderDate.setDate(reminderDate.getDate() - 1);
-
-        await notificationService.sendNotification({
-          user_id: user_id.toString(),
-          title: 'Appointment Reminder',
-          message: `Reminder: Your appointment with Dr. ${doctor.user_id?.name} is tomorrow at ${time_slot}.`,
-          type: 'reminder',
-          category: 'info',
-          priority: 'medium',
-          scheduled_time: reminderDate,
-          channels: ['sms', 'push'],
-          data: {
-            appointment_id: (appointment._id as Types.ObjectId).toString(),
-            appointment_time: time_slot,
-            doctor_name: doctor.user_id?.name
-          }
-        });
-
-        console.log('✅ SMS reminder scheduled');
-      } catch (smsError) {
-        console.error('❌ Error scheduling SMS reminder:', smsError);
-      }
-    }
-
-    // ========== TẠO MEDICAL RECORD PLACEHOLDER ==========
-    try {
-      const medicalRecord = new MedicalRecord({
-        appointment_id: appointment._id,
-        user_id: user_id,
-        doctor_id: doctor_id,
-        consultation_status: 'scheduled',
-        status: 'pending',
-        symptoms: symptoms || [],
-        reason: reason,
-        notes: `Appointment scheduled for ${appointmentDate.toLocaleDateString()} at ${time_slot}`,
-        priority: determinePriority(symptoms, reason),
-        created_at: new Date()
-      });
-
-      await medicalRecord.save();
-      console.log('✅ Medical record placeholder created');
-    } catch (recordError) {
-      console.error('❌ Error creating medical record:', recordError);
-    }
-
-    // ========== UPDATE DOCTOR'S SCHEDULE ==========
-    try {
-      console.log(`📅 Doctor ${doctor.user_id?.name} now has appointment at ${time_slot} on ${appointmentDate.toLocaleDateString()}`);
-    } catch (scheduleError) {
-      console.error('❌ Error updating doctor schedule:', scheduleError);
-    }
-
-    // ========== LOG ACTIVITY ==========
-    try {
-      const activityLog = {
-        action: 'appointment_booked',
-        user_id: user_id,
-        description: `Appointment booked with Dr. ${doctor.user_id?.name} for ${appointmentDate.toLocaleDateString()} at ${time_slot}`,
-        metadata: {
-          appointment_id: (appointment._id as Types.ObjectId).toString(),
-          doctor_id: doctor_id,
-          time_slot: time_slot,
-          reason: reason
-        },
-        timestamp: new Date()
-      };
-
-      // Save to activity log collection or database
-      console.log('📝 Activity logged:', activityLog);
-    } catch (logError) {
-      console.error('❌ Error logging activity:', logError);
-    }
-
-    // ========== PREPARE RESPONSE ==========
+    // ── 5. Trả response NGAY, không chờ các tác vụ phụ ──────────────────────
     const responseData = {
       success: true,
       message: 'Appointment booked successfully',
@@ -1132,12 +919,6 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
           name: user_name,
           email: user_email
         },
-        notifications: {
-          patient_notified: true,
-          doctor_notified: true,
-          email_sent: !!user_email,
-          sms_reminder_scheduled: !!user_phone
-        },
         next_steps: [
           'Wait for doctor confirmation',
           'Arrive 15 minutes before appointment time',
@@ -1147,45 +928,162 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
       }
     };
 
+    // Trả về client TRƯỚC
     res.status(201).json(responseData);
+
+    // ── 6. Fire-and-forget: tất cả tác vụ phụ chạy ngầm sau khi response đã gửi ──
+    const appointmentIdStr = (appointment._id as Types.ObjectId).toString();
+
+    Promise.allSettled([
+
+      // Notification cho bệnh nhân
+      notificationService.sendNotification({
+        user_id: user_id.toString(),
+        template_key: 'appointment_booked',
+        variables: {
+          doctor_name: doctor.user_id?.name || 'Doctor',
+          appointment_date: appointmentDate.toLocaleDateString(),
+          appointment_time: time_slot,
+          specialty: doctor.specialty_id?.name || 'General Medicine'
+        },
+        type: 'appointment',
+        category: 'success',
+        priority: 'medium',
+        related_record: appointmentIdStr,
+        related_record_type: 'appointment',
+        data: {
+          appointment: {
+            id: appointmentIdStr,
+            date: appointmentDate.toISOString(),
+            time: time_slot,
+            reason,
+            status: 'pending'
+          },
+          doctor: {
+            name: doctor.user_id?.name,
+            specialty: doctor.specialty_id?.name,
+            consultation_fee: doctor.consultation_fee
+          },
+          patient: { name: user_name, email: user_email }
+        },
+        channels: ['in_app', 'email', 'sms'],
+        action_url: `/appointments/${appointmentIdStr}`,
+        action_label: 'View Appointment Details'
+      }),
+
+      // Notification cho bác sĩ
+      doctor.user_id?._id
+        ? notificationService.sendNotification({
+          user_id: doctor.user_id._id.toString(),
+          template_key: 'new_appointment_request',
+          variables: {
+            patient_name: user_name || 'Patient',
+            appointment_date: appointmentDate.toLocaleDateString(),
+            appointment_time: time_slot,
+            reason: reason || 'General consultation'
+          },
+          type: 'appointment',
+          category: 'info',
+          priority: 'medium',
+          related_record: appointmentIdStr,
+          related_record_type: 'appointment',
+          data: {
+            appointment: {
+              id: appointmentIdStr,
+              date: appointmentDate.toISOString(),
+              time: time_slot,
+              reason,
+              symptoms
+            },
+            patient: { name: user_name, email: user_email, phone: user_phone },
+            urgency: determineUrgency(symptoms, reason)
+          },
+          channels: ['in_app', 'email'],
+          action_url: `/doctor/appointments/${appointmentIdStr}`,
+          action_label: 'Review Appointment'
+        })
+        : Promise.resolve(),
+
+      // Email xác nhận cho bệnh nhân
+      user_email
+        ? emailService.sendAppointmentConfirmationEmail(
+          user_email,
+          user_name || 'Patient',
+          reason || null,
+          {
+            appointment_id: appointmentIdStr,
+            doctor_name: doctor.user_id?.name || 'Doctor',
+            doctor_specialty: doctor.specialty_id?.name || 'General Medicine',
+            appointment_date: appointmentDate.toLocaleDateString(),
+            appointment_time: time_slot,
+            appointment_end_time: appointmentEndTime,
+            location: 'Main Hospital - Room 101',
+            consultation_fee: doctor.consultation_fee,
+            preparation_instructions: getPreparationInstructions(specialty_id),
+            cancellation_policy: 'Cancel at least 24 hours in advance to avoid fees.',
+            contact_info: 'Call 123-456-7890 for assistance'
+          }
+        )
+        : Promise.resolve(),
+
+      // SMS reminder (lên lịch trước 1 ngày)
+      user_phone && smsService.isAvailable()
+        ? notificationService.sendNotification({
+          user_id: user_id.toString(),
+          title: 'Appointment Reminder',
+          message: `Reminder: Your appointment with Dr. ${doctor.user_id?.name} is tomorrow at ${time_slot}.`,
+          type: 'reminder',
+          category: 'info',
+          priority: 'medium',
+          scheduled_time: (() => {
+            const d = new Date(appointmentDate);
+            d.setDate(d.getDate() - 1);
+            return d;
+          })(),
+          channels: ['sms', 'push'],
+          data: {
+            appointment_id: appointmentIdStr,
+            appointment_time: time_slot,
+            doctor_name: doctor.user_id?.name
+          }
+        })
+        : Promise.resolve(),
+
+      new MedicalRecord({
+        appointment_id: appointment._id,
+        user_id,
+        doctor_id,
+        consultation_status: 'scheduled',
+        status: 'pending',
+        symptoms: symptoms || [],
+        reason,
+        diagnosis: 'Pending - To be filled by doctor',
+        notes: `Appointment scheduled for ${appointmentDate.toLocaleDateString()} at ${time_slot}`,
+        priority: determinePriority(symptoms, reason),
+        created_at: new Date()
+      }).save()
+
+    ]).then(results => {
+      results.forEach((result, index) => {
+        const labels = ['patient_notification', 'doctor_notification', 'email', 'sms_reminder', 'medical_record'];
+        if (result.status === 'rejected') {
+          console.error(`❌ Background task [${labels[index]}] failed:`, result.reason);
+        } else {
+          console.log(`✅ Background task [${labels[index]}] completed`);
+        }
+      });
+    });
 
   } catch (error: any) {
     console.error('❌ Error booking appointment:', error);
 
-    // Send error notification to admin
-    try {
-      await notificationService.sendNotification({
-        user_id: 'admin',
-        title: 'Error Booking Appointment',
-        message: `Error booking appointment: ${error.message}`,
-        type: 'system',
-        category: 'error',
-        priority: 'high',
-        data: {
-          error: error.message,
-          user_id: req.user?._id,
-          timestamp: new Date().toISOString()
-        }
-      });
-    } catch (notifError) {
-      console.error('❌ Error sending error notification:', notifError);
-    }
-
-    // Handle specific error types
     if (error instanceof mongoose.Error.ValidationError) {
-      res.status(400).json({
-        success: false,
-        message: 'Validation error',
-        errors: error.errors
-      });
+      res.status(400).json({ success: false, message: 'Validation error', errors: error.errors });
       return;
     }
 
     if (error.code === 11000) {
-      res.status(409).json({
-        success: false,
-        message: 'Duplicate appointment detected'
-      });
+      res.status(409).json({ success: false, message: 'Duplicate appointment detected' });
       return;
     }
 
@@ -1196,7 +1094,6 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
     });
   }
 };
-
 // Fixed Edit Reviews
 export const updateReview = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
@@ -1481,8 +1378,7 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
     const updates: any = {};
 
     const allowedFields = [
-      'name', 'phoneNumber', 'dateOfBirth', 'gender', 'address',
-      'emergencyContact', 'bloodType', 'allergies', 'medications', 'avatar'
+      'name', 'phoneNumber', 'dateOfBirth', 'gender', 'address', 'avatar'
     ];
 
     allowedFields.forEach(field => {
@@ -1490,6 +1386,15 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
         updates[field] = body[field];
       }
     });
+
+    // Special handling for medical fields if they are sent here
+    const medicalUpdates: any = {};
+    if (body.bloodType !== undefined || body.blood_type !== undefined) {
+      medicalUpdates.blood_type = body.bloodType || body.blood_type;
+    }
+    if (body.allergies !== undefined || body.allergist !== undefined) {
+      medicalUpdates.allergist = body.allergies || body.allergist;
+    }
 
     const updatedUser = await User.findByIdAndUpdate(
       req.user._id,
@@ -1500,6 +1405,15 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
     if (!updatedUser) {
       res.status(404).json({ success: false, message: 'User not found' });
       return;
+    }
+
+    // Update medical info if needed
+    if (Object.keys(medicalUpdates).length > 0) {
+      await UserInfo.findOneAndUpdate(
+        { user_id: req.user._id },
+        { $set: medicalUpdates },
+        { upsert: true }
+      );
     }
 
     res.status(200).json({
@@ -1513,7 +1427,8 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
         phoneNumber: updatedUser.phoneNumber || '',
         dateOfBirth: updatedUser.dateOfBirth || '',
         gender: updatedUser.gender || '',
-        address: updatedUser.address || ''
+        address: updatedUser.address || '',
+        avatar: updatedUser.avatar || ''
       }
     });
   } catch (error) {

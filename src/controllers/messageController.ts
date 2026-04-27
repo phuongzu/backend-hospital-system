@@ -500,51 +500,36 @@ export const markMessagesAsRead = async (req: AuthRequest, res: ExpressResponse)
 /* =======================
    SEND MESSAGE WITH MEDIA
 ======================= */
+// ==================== SEND MESSAGE WITH MEDIA ====================
 export const sendMessageWithMedia = async (req: AuthRequest, res: ExpressResponse) => {
   try {
-    const {
-      receiver_id,
-      message,
-      medical_record_id,
-      appointment_id
-    } = req.body;
-
+    const { receiver_id, message, medical_record_id, appointment_id } = req.body;
     const senderId = req.user?._id;
     const file = req.file;
 
     if (!receiver_id || !file) {
-      return res.status(400).json({
-        success: false,
-        message: 'Receiver and media file are required'
-      });
+      return res.status(400).json({ success: false, message: 'Receiver and media file are required' });
     }
 
     const participantIds = [senderId.toString(), receiver_id.toString()]
       .sort()
       .map(id => new mongoose.Types.ObjectId(id));
 
-    const conversation = await Conversation.findOneAndUpdate(
-      {
-        'participant_ids.0': participantIds[0],
-        'participant_ids.1': participantIds[1],
-        medical_record_id: medical_record_id || null
-      },
-      {
-        $setOnInsert: {
-          participant_ids: participantIds,
-          medical_record_id: medical_record_id || null,
-          appointment_id: appointment_id || null,
-          unread_count: 0,
-          last_message_at: new Date()
-        }
-      },
-      {
-        upsert: true,
-        new: true,
-        setDefaultsOnInsert: true
-      }
-    );
+    // Tìm conversation hiện có giữa 2 người này (không quan tâm medical_record_id nếu không bắt buộc)
+    let conversation = await Conversation.findOne({
+      participant_ids: { $all: participantIds },
+      medical_record_id: medical_record_id || null
+    });
 
+    if (!conversation) {
+      conversation = await Conversation.create({
+        participant_ids: participantIds,
+        medical_record_id: medical_record_id || null,
+        appointment_id: appointment_id || null,
+        unread_count: 0,
+        last_message_at: new Date()
+      });
+    }
 
     const newMessage = await Message.create({
       sender_id: senderId,
@@ -555,47 +540,119 @@ export const sendMessageWithMedia = async (req: AuthRequest, res: ExpressRespons
       media_name: file.originalname,
       media_size: file.size,
       media_mime: file.mimetype,
-      medical_record_id,
-      appointment_id,
+      medical_record_id: medical_record_id || null,
+      appointment_id: appointment_id || null,
       conversation_id: conversation._id,
       read: false
     });
 
     await Conversation.findByIdAndUpdate(conversation._id, {
-      $set: {
-        last_message: newMessage._id,
-        last_message_at: new Date()
-      },
+      $set: { last_message: newMessage._id, last_message_at: new Date() },
       $inc: { unread_count: 1 }
     });
 
+    // ✅ Populate TRƯỚC khi emit socket
     await newMessage.populate('sender_id', 'name avatar role');
     await newMessage.populate('receiver_id', 'name avatar role');
 
     const { clientTempId } = req.body;
 
-    socketService.emitNewMessage(
-      conversation._id.toString(),
-      newMessage,
-      clientTempId
-    );
+    // ✅ FIX: Emit với conversationId rõ ràng ở top-level
+    socketService.emitNewMessage(conversation._id.toString(), newMessage, clientTempId);
 
     res.status(201).json({
       success: true,
       data: {
         ...newMessage.toObject(),
-        clientTempId: req.body.clientTempId // ✅ Return clientTempId to sync frontend
+        conversationId: conversation._id.toString(), // ✅ thêm field này
+        clientTempId: clientTempId
       }
     });
   } catch (err) {
     console.error(err);
-    res.status(500).json({
-      success: false,
-      message: 'Send media failed'
-    });
+    res.status(500).json({ success: false, message: 'Send media failed' });
   }
 };
 
+// ==================== ADD REACTION ====================
+export const addReaction = async (req: AuthRequest, res: ExpressResponse) => {
+  try {
+    const { messageId } = req.params;
+    const { reaction } = req.body;
+    const userId = req.user?._id;
+
+    if (!messageId || !mongoose.Types.ObjectId.isValid(messageId)) {
+      return res.status(400).json({ success: false, message: 'Invalid message ID' });
+    }
+
+    const message = await Message.findById(messageId);
+    if (!message) {
+      return res.status(404).json({ success: false, message: 'Message not found' });
+    }
+
+    const conversation = await Conversation.findById(message.conversation_id);
+    if (!conversation) {
+      return res.status(404).json({ success: false, message: 'Conversation not found' });
+    }
+
+    const isParticipant = conversation.participant_ids.some(
+      (participant: any) => participant.toString() === userId.toString()
+    );
+    if (!isParticipant) {
+      return res.status(403).json({ success: false, message: 'You are not part of this conversation' });
+    }
+
+    const existingReactionIndex = message.reactions.findIndex(
+      (r: any) => r.user_id.toString() === userId.toString() && r.emoji === reaction
+    );
+
+    if (existingReactionIndex !== -1) {
+      message.reactions.splice(existingReactionIndex, 1);
+      message.reactions_count = Math.max(0, message.reactions_count - 1);
+    } else {
+      message.reactions.push({ user_id: userId, emoji: reaction, createdAt: new Date() });
+      message.reactions_count = message.reactions.length;
+    }
+
+    const updatedMessage = await message.save();
+    await updatedMessage.populate('reactions.user_id', 'name avatar');
+
+    // ✅ Fix 2: messageController.ts — addReaction
+    // Emit reaction đến user: rooms, không chỉ conversation room
+    const conversationId = conversation._id.toString();
+    const eventName = existingReactionIndex !== -1 ? 'reaction_removed' : 'reaction_added';
+
+    const reactPayload = {
+      messageId: message._id.toString(),      // ✅ string
+      conversationId,                          // ✅ string
+      userId: userId.toString(),               // ✅ string
+      reaction,
+      message: updatedMessage.toObject(),
+      timestamp: new Date()
+    };
+
+    // ✅ Emit đến conversation room (ai đang mở chat)
+    socketService.emitToRoom(`conversation:${conversationId}`, eventName, reactPayload);
+
+    // ✅ Emit thêm đến từng user room để đảm bảo nhận được
+    const senderIdStr = (updatedMessage.sender_id?._id || updatedMessage.sender_id)?.toString();
+    const receiverIdStr = (updatedMessage.receiver_id?._id || updatedMessage.receiver_id)?.toString();
+    if (senderIdStr) socketService.emitToUser(senderIdStr, eventName, reactPayload);
+    if (receiverIdStr && receiverIdStr !== senderIdStr) socketService.emitToUser(receiverIdStr, eventName, reactPayload);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        message: updatedMessage,
+        reaction,
+        action: existingReactionIndex !== -1 ? 'removed' : 'added'
+      }
+    });
+  } catch (error) {
+    console.error('Error adding reaction:', error);
+    res.status(500).json({ success: false, message: 'Error processing reaction' });
+  }
+};
 /* =======================
    EDIT MESSAGE
 ======================= */
@@ -834,106 +891,6 @@ export const deleteMessage = async (req: AuthRequest, res: ExpressResponse) => {
   }
 };
 
-
-/* =======================
-   ADD REACTION
-======================= */
-export const addReaction = async (req: AuthRequest, res: ExpressResponse) => {
-  try {
-    const { messageId } = req.params;
-    const { reaction } = req.body;
-    const userId = req.user?._id;
-
-    if (!messageId || !mongoose.Types.ObjectId.isValid(messageId)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid message ID'
-      });
-    }
-
-    const message = await Message.findById(messageId);
-
-    if (!message) {
-      return res.status(404).json({
-        success: false,
-        message: 'Message not found'
-      });
-    }
-
-    // Fix 403: Check participation manually instead of using query
-    const conversation = await Conversation.findById(message.conversation_id);
-
-    if (!conversation) {
-      return res.status(404).json({
-        success: false,
-        message: 'Conversation not found'
-      });
-    }
-
-    const isParticipant = conversation.participant_ids.some(
-      (participant: any) => participant.toString() === userId.toString()
-    );
-
-    if (!isParticipant) {
-      return res.status(403).json({
-        success: false,
-        message: 'You are not part of this conversation'
-      });
-    }
-
-    // Toggle Reaction
-    const existingReactionIndex = message.reactions.findIndex(
-      (r: any) => r.user_id.toString() === userId.toString() && r.emoji === reaction
-    );
-
-    if (existingReactionIndex !== -1) {
-      message.reactions.splice(existingReactionIndex, 1);
-      message.reactions_count = Math.max(0, message.reactions_count - 1);
-    } else {
-      message.reactions.push({
-        user_id: userId,
-        emoji: reaction,
-        createdAt: new Date()
-      });
-      message.reactions_count = message.reactions.length;
-    }
-
-    const updatedMessage = await message.save();
-
-    // Populate before emitting
-    await updatedMessage.populate('reactions.user_id', 'name avatar');
-
-    // EMIT EVENT
-    socketService.emitToRoom(
-      `conversation:${message.conversation_id}`,
-      existingReactionIndex !== -1 ? 'reaction_removed' : 'reaction_added',
-      {
-        messageId: message._id,
-        conversationId: message.conversation_id,
-        userId,
-        reaction,
-        message: updatedMessage.toObject(), // Send full updated object
-        timestamp: new Date()
-      }
-    );
-
-    res.status(200).json({
-      success: true,
-      data: {
-        message: updatedMessage,
-        reaction,
-        action: existingReactionIndex !== -1 ? 'removed' : 'added'
-      }
-    });
-
-  } catch (error) {
-    console.error('Error adding reaction:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error processing reaction'
-    });
-  }
-};
 
 /* =======================
    GET MESSAGE REACTIONS

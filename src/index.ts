@@ -14,6 +14,8 @@ import fs from 'fs';
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import jwt from 'jsonwebtoken';
 
+import socketService from './utils/socketService';
+
 import { connectDB } from './config/db';
 import Message from './models/message';
 import Conversation from './models/conversation';
@@ -60,437 +62,13 @@ const io = new SocketIOServer(server, {
   maxHttpBufferSize: 1e8 // 100MB
 });
 
-// Store user-socket mappings
-const userSocketMap = new Map<string, string>(); // userId -> socketId
-const socketUserMap = new Map<string, string>(); // socketId -> userId
+// Socket service will handle socket mappings internally
 
 /* =====================================================
-   SOCKET.IO AUTHENTICATION MIDDLEWARE
+   SOCKET.IO SETUP
 ===================================================== */
-const socketAuthMiddleware = (socket: Socket, next: (err?: Error) => void) => {
-  let token: string | undefined;
-  try {
-    const token = socket.handshake.auth.token || socket.handshake.headers.authorization?.replace('Bearer ', '');
-
-    logger.debug('🔐 Socket auth attempt:', {
-      hasToken: !!token,
-      tokenLength: token?.length,
-      tokenPreview: token ? token.substring(0, 50) + '...' : 'none',
-      auth: socket.handshake.auth,
-      headers: socket.handshake.headers
-    });
-
-    if (!token) {
-      return next(new Error('Authentication error: No token provided'));
-    }
-
-    // Verify token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as any;
-    logger.debug('🔐 Decoded token:', decoded);
-    const userId = decoded.userId || decoded.id;
-    if (!userId) {
-      logger.error('❌ No userId or id found in token:', decoded);
-      return next(new Error('Authentication error: No user ID in token'));
-    }
-
-    // Attach user info to socket
-    socket.data.userId = userId;
-    socket.data.userRole = decoded.role || 'user';
-    socket.data.userName = decoded.name || decoded.email || 'User';
-
-    logger.info(` Socket authenticated: ${socket.data.userName} (${userId})`);
-    next();
-  } catch (error: any) {
-    logger.error('❌ Socket authentication error:', {
-      message: error.message,
-      token: token?.substring(0, 20) + '...'
-    });
-    next(new Error('Authentication error: Invalid token'));
-  }
-};
-
-io.use(socketAuthMiddleware);
-/* =====================================================
-   SOCKET.IO EVENT HANDLERS
-===================================================== */
-io.on('connection', (socket: Socket) => {
-  const userId = socket.data.userId;
-  const userName = socket.data.userName;
-  const userRole = socket.data.userRole;
-
-  logger.info(`🟢 User connected: ${userName} (${userId}) [${userRole}] - Socket: ${socket.id}`);
-
-  // Store user-socket mapping
-  userSocketMap.set(userId, socket.id);
-  socketUserMap.set(socket.id, userId);
-
-  // Join user's personal room
-  socket.join(`user:${userId}`);
-
-  // Join all conversations that user is part of
-  socket.join(`conversations:${userId}`);
-
-  /* =====================================================
-     CHAT-RELATED EVENTS
-  ===================================================== */
-
-  // Send message event
-  socket.on('send_message', async (data, callback) => {
-    try {
-      const {
-        conversationId,
-        receiverId,
-        message,
-        messageType = 'text',
-        medicalRecordId
-      } = data;
-
-      logger.debug(`📤 Message from ${userId} to ${receiverId}:`, message.substring(0, 50) + '...');
-
-      // Validate required fields
-      if (!receiverId || !message) {
-        socket.emit('message_error', { error: 'Missing required fields' });
-        return;
-      }
-
-      // Create or get conversation
-      let conversation;
-      if (conversationId) {
-        conversation = await Conversation.findById(conversationId);
-      } else {
-        // Find existing conversation or create new one
-        conversation = await Conversation.findOne({
-          participants: { $all: [userId, receiverId] }
-        });
-
-        if (!conversation) {
-          conversation = await Conversation.create({
-            participants: [userId, receiverId],
-            last_message: null,
-            last_message_at: new Date()
-          });
-        }
-      }
-
-      if (!conversation) {
-        socket.emit('message_error', { error: 'Conversation not found' });
-        return;
-      }
-
-      // Create message in database
-      const newMessage = await Message.create({
-        conversation_id: conversation._id,
-        sender_id: userId,
-        receiver_id: receiverId,
-        message,
-        message_type: messageType,
-        medical_record_id: medicalRecordId || null,
-        read: false,
-        timestamp: new Date()
-      });
-
-      // Populate sender and receiver info
-      await newMessage.populate([
-        { path: 'sender_id', select: '_id name avatar role' },
-        { path: 'receiver_id', select: '_id name avatar role' }
-      ]);
-
-      // Update conversation's last message
-      conversation.last_message = newMessage._id;
-      conversation.last_message_at = new Date();
-      await conversation.save();
-
-      // Prepare response data
-      const messageData = {
-        _id: newMessage._id,
-        conversationId: conversation._id,
-        sender_id: newMessage.sender_id,
-        receiver_id: newMessage.receiver_id,
-        message: newMessage.message,
-        message_type: newMessage.message_type,
-        read: newMessage.read,
-        timestamp: newMessage.timestamp,
-        medical_record_id: newMessage.medical_record_id
-      };
-
-      // Emit to sender (confirmation)
-      callback({
-        success: true,
-        message: messageData
-      });
-
-      // Emit to receiver if online
-      const receiverSocketId = userSocketMap.get(receiverId);
-      if (receiverSocketId) {
-        io.to(receiverSocketId).emit('receive_message', {
-          conversationId: conversation._id,
-          message: messageData,
-          senderId: userId,
-          senderName: userName
-        });
-
-        // Also emit to receiver's conversation room
-        io.to(`user:${receiverId}`).emit('new_message', messageData);
-      }
-
-      // Update conversation list for both users
-      const conversationUpdate = {
-        _id: conversation._id,
-        last_message: messageData,
-        last_message_at: newMessage.timestamp,
-        unread_count: 0 // Reset for sender, increment for receiver
-      };
-
-      // Emit to sender's conversation list
-      io.to(`user:${userId}`).emit('conversation_updated', conversationUpdate);
-
-      // Emit to receiver's conversation list with unread count
-      if (receiverSocketId) {
-        io.to(`user:${receiverId}`).emit('conversation_updated', {
-          ...conversationUpdate,
-          unread_count: 1
-        });
-      }
-
-      logger.info(`✅ Message sent successfully from ${userId} to ${receiverId}`);
-
-    } catch (error: any) {
-      if (callback) {
-        callback({
-          success: false,
-          error: 'Failed to send message'
-        });
-      }
-    }
-  });
-
-  // Typing indicator event
-  socket.on('typing', (data) => {
-    try {
-      const { conversationId, receiverId } = data;
-
-      if (!conversationId || !receiverId) return;
-
-      const receiverSocketId = userSocketMap.get(receiverId);
-      if (receiverSocketId) {
-        io.to(receiverSocketId).emit('user_typing', {
-          conversationId,
-          senderId: userId,
-          senderName: userName,
-          isTyping: true
-        });
-      }
-    } catch (error) {
-      logger.error('Error handling typing event:', {
-        errorMessage: (error as any).message,
-        userId,
-        stack: (error as any).stack
-      });
-    }
-  });
-
-  // Stop typing event
-  socket.on('stop_typing', (data) => {
-    try {
-      const { conversationId, receiverId } = data;
-
-      if (!conversationId || !receiverId) return;
-
-      const receiverSocketId = userSocketMap.get(receiverId);
-      if (receiverSocketId) {
-        io.to(receiverSocketId).emit('user_typing', {
-          conversationId,
-          senderId: userId,
-          senderName: userName,
-          isTyping: false
-        });
-      }
-    } catch (error) {
-      logger.error('Error handling stop typing event:', {
-        errorMessage: (error as any).message,
-        userId,
-        stack: (error as any).stack
-      });
-    }
-  });
-
-  // Mark messages as read event
-  socket.on('mark_as_read', async (data) => {
-    const { conversationId } = data;
-    try {
-      if (!conversationId) return;
-
-      // Update messages in database
-      await Message.updateMany(
-        {
-          conversation_id: conversationId,
-          receiver_id: userId,
-          read: false
-        },
-        { $set: { read: true, read_at: new Date() } }
-      );
-
-      // Find conversation participants
-      const conversation = await Conversation.findById(conversationId);
-      if (!conversation) return;
-
-      // Notify other participant that messages were read
-      const otherParticipant = conversation.participant_ids.find(
-        (p: any) => p.toString() !== userId.toString()
-      );
-      if (otherParticipant) {
-        const otherSocketId = userSocketMap.get(otherParticipant.toString());
-        if (otherSocketId) {
-          io.to(otherSocketId).emit('messages_read', {
-            conversationId,
-            readerId: userId,
-            readerName: userName
-          });
-        }
-      }
-
-      // Update conversation unread count for current user
-      socket.emit('conversation_updated', {
-        _id: conversationId,
-        unread_count: 0
-      });
-
-      logger.debug(`📖 Messages marked as read by ${userId} in conversation ${conversationId}`);
-
-    } catch (error) {
-      logger.error('Error marking messages as read:', {
-        conversationId,
-        userId,
-        errorMessage: (error as any).message
-      });
-    }
-  });
-
-  // Join conversation room
-  socket.on('join_conversation', (conversationId) => {
-    socket.join(`conversation:${conversationId}`);
-    logger.debug(`User ${userId} joined conversation ${conversationId}`);
-  });
-
-  // Leave conversation room
-  socket.on('leave_conversation', (conversationId) => {
-    socket.leave(`conversation:${conversationId}`);
-    logger.debug(`User ${userId} left conversation ${conversationId}`);
-  });
-
-  // Get online status
-  socket.on('get_online_status', (targetUserId) => {
-    const isOnline = userSocketMap.has(targetUserId);
-    socket.emit('online_status', {
-      userId: targetUserId,
-      isOnline,
-      lastSeen: isOnline ? new Date() : null
-    });
-  });
-
-  /* =====================================================
-     NOTIFICATION EVENTS
-  ===================================================== */
-
-  socket.on('notification:send', (data) => {
-    try {
-      const { userId: targetUserId, notification } = data;
-
-      if (targetUserId) {
-        // Send to specific user
-        const targetSocketId = userSocketMap.get(targetUserId);
-        if (targetSocketId) {
-          io.to(targetSocketId).emit('notification:receive', notification);
-        }
-      } else {
-        // Broadcast to all
-        io.emit('notification:receive', notification);
-      }
-    } catch (error) {
-      logger.error('Error sending notification:', {
-        errorMessage: (error as any).message,
-        stack: (error as any).stack
-      });
-    }
-  });
-
-  /* =====================================================
-     DISCONNECTION HANDLER
-  ===================================================== */
-
-  socket.on('disconnect', (reason) => {
-    logger.info(`🔴 User disconnected: ${userName} (${userId}) - Reason: ${reason}`);
-
-    // Clean up mappings
-    userSocketMap.delete(userId);
-    socketUserMap.delete(socket.id);
-
-    // Broadcast user offline status to relevant users
-    // (You might want to implement this based on your requirements)
-  });
-
-  // Handle client errors
-  socket.on('error', (error) => {
-    logger.error(`Socket error for user ${userId}:`, {
-      errorMessage: (error as any).message || error,
-      userId,
-      socketId: socket.id
-    });
-  });
-});
-
-/* =====================================================
-   HELPER FUNCTIONS FOR SOCKET.IO
-===================================================== */
-
-// Function to send message via socket (can be used from routes)
-export const sendMessageViaSocket = async (data: {
-  senderId: string;
-  receiverId: string;
-  message: string;
-  messageType?: string;
-  medicalRecordId?: string;
-}) => {
-  try {
-    const receiverSocketId = userSocketMap.get(data.receiverId);
-    if (receiverSocketId) {
-      io.to(receiverSocketId).emit('receive_message', {
-        message: data.message,
-        senderId: data.senderId,
-        timestamp: new Date()
-      });
-      return true;
-    }
-    return false;
-  } catch (error) {
-    logger.error('Error sending message via socket:', {
-      senderId: data.senderId,
-      receiverId: data.receiverId,
-      errorMessage: (error as any).message
-    });
-    return false;
-  }
-};
-
-// Function to check if user is online
-export const isUserOnline = (userId: string): boolean => {
-  return userSocketMap.has(userId);
-};
-
-// Function to get user's socket ID
-export const getUserSocketId = (userId: string): string | undefined => {
-  return userSocketMap.get(userId);
-};
-
-// Function to emit to specific user
-export const emitToUser = (userId: string, event: string, data: any): boolean => {
-  const socketId = userSocketMap.get(userId);
-  if (socketId) {
-    io.to(socketId).emit(event, data);
-    return true;
-  }
-  return false;
-};
+// Initialize Socket Service with the IO instance
+socketService.initialize(server, io);
 
 /* =====================================================
    ENV VALIDATION
@@ -657,7 +235,7 @@ app.get('/', (_req: Request, res: Response) => {
     ],
     socket: {
       status: 'active',
-      connectedUsers: userSocketMap.size,
+      connectedUsers: socketService.getConnectedUserCount(),
       events: ['send_message', 'typing', 'mark_as_read', 'join_conversation']
     }
   });
@@ -672,7 +250,7 @@ app.get('/health', (req: Request, res: Response) => {
       port: PORT,
       environment: process.env.NODE_ENV || 'development',
       socket: {
-        connectedUsers: userSocketMap.size,
+        connectedUsers: socketService.getConnectedUserCount(),
         uptime: process.uptime()
       }
     },
@@ -868,11 +446,7 @@ app.get('/api/avatar/:filename', (req: Request, res: Response) => {
 ===================================================== */
 app.get('/api/socket/status', (_req: Request, res: Response) => {
   res.json({
-    connectedUsers: userSocketMap.size,
-    users: Array.from(userSocketMap.entries()).map(([userId, socketId]) => ({
-      userId,
-      socketId
-    })),
+    connectedUsers: socketService.getConnectedUserCount(),
     uptime: process.uptime()
   });
 });
@@ -907,7 +481,7 @@ const startServer = async () => {
       logger.info(`   Local: http://localhost:${PORT}`);
       logger.info(`   Socket.IO: ws://localhost:${PORT}`);
       logger.info(`   Health Check: http://localhost:${PORT}/health`);
-      logger.info(`   Connected users: ${userSocketMap.size}`);
+      logger.info(`   Connected users: ${socketService.getConnectedUserCount()}`);
     });
 
   } catch (error: any) {
