@@ -5,29 +5,27 @@ import mongoose from 'mongoose';
 import User, { IUser } from '../models/user';
 import Doctor from '../models/doctor';
 import MedicalRecord from '../models/medicalRecord';
-import Specialty from '../models/specialty';
 import { AuthRequest } from '../middlewares/authmiddleware';
 import { emailService } from '../utils/emailService';
 import UnlockRequest from '../models/unlockRequest';
 import DoctorRegistrationRequest from '../models/doctorRegistrationRequest';
 
 
-// Verification code storage
+// In-memory storage for email verification codes
 interface VerificationCode {
   code: string;
   email: string;
   expiresAt: Date;
 }
 
-// In-memory store for verification codes (consider using a persistent store in production)
 const verificationCodes = new Map<string, VerificationCode>();
 
-// Generate random 6-digit code
+// Generate random 6-digit verification code
 const generateVerificationCode = (): string => {
   return Math.floor(100000 + Math.random() * 900000).toString();
 };
 
-// Forgot password - send verification code
+// Send password reset verification code to email
 export const forgotPassword = async (req: Request, res: Response): Promise<void> => {
   try {
     const { email } = req.body;
@@ -200,7 +198,7 @@ export const verifyCodeAndResetPassword = async (req: Request, res: Response): P
   }
 };
 
-// Resend verification code
+// Resend verification code to email
 export const resendVerificationCode = async (req: Request, res: Response): Promise<void> => {
   try {
     const { email } = req.body;
@@ -268,6 +266,7 @@ export const resendVerificationCode = async (req: Request, res: Response): Promi
 
 
 
+// Generate JWT access token with user claims
 const generateToken = (id: string, role: string, name: string, email: string): string => {
   const secret = process.env.JWT_SECRET;
   if (!secret) {
@@ -288,6 +287,7 @@ const generateToken = (id: string, role: string, name: string, email: string): s
 };
 
 
+// Generate JWT refresh token (30-day expiration)
 const generateRefreshToken = (id: string): string => {
   const secret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
   if (!secret) {
@@ -299,6 +299,7 @@ const generateRefreshToken = (id: string): string => {
 
 
 
+// Register new user account
 export const registerUser = async (req: Request, res: Response): Promise<void> => {
   try {
     const { name, email, password, role, phoneNumber, doctorProfile } = req.body;
@@ -464,6 +465,7 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
 };
 
 
+// Authenticate user and return access token
 export const loginUser = async (req: Request, res: Response): Promise<void> => {
   try {
     console.log('🔐 Login request received:', {
@@ -668,6 +670,7 @@ export const loginUser = async (req: Request, res: Response): Promise<void> => {
   }
 };
 
+// Create or update doctor profile
 export const upsertDoctorProfile = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -742,7 +745,7 @@ export const upsertDoctorProfile = async (req: AuthRequest, res: Response): Prom
   }
 };
 
-// authcontroller.ts
+// Search medical records by patient name
 export const getRecordsByPatientName = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -783,6 +786,7 @@ export const getRecordsByPatientName = async (req: AuthRequest, res: Response): 
   }
 };
 
+// Search medical records by doctor name
 export const getRecordsByDoctorName = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -823,7 +827,7 @@ export const getRecordsByDoctorName = async (req: AuthRequest, res: Response): P
   }
 };
 
-// Refresh access token
+// Refresh expired access token
 export const refreshToken = async (req: Request, res: Response): Promise<void> => {
   try {
     const { refreshToken } = req.body;
@@ -892,7 +896,7 @@ export const refreshToken = async (req: Request, res: Response): Promise<void> =
   }
 };
 
-// Logout user with token invalidation
+// Invalidate user session and logout
 export const logoutUser = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -922,7 +926,7 @@ export const logoutUser = async (req: AuthRequest, res: Response): Promise<void>
   }
 };
 
-// Change password
+// Change user account password
 export const changePassword = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -993,7 +997,7 @@ export const changePassword = async (req: AuthRequest, res: Response): Promise<v
   }
 };
 
-// Unlock doctor account (Admin only)
+// Restore access to locked doctor account
 export const unlockDoctorAccount = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { doctorId } = req.params;
@@ -1047,7 +1051,7 @@ export const unlockDoctorAccount = async (req: AuthRequest, res: Response): Prom
   }
 };
 
-// Lock doctor account manually (Admin only)
+// Lock doctor account manually
 export const lockDoctorAccount = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { doctorId } = req.params;
@@ -1098,6 +1102,7 @@ export const lockDoctorAccount = async (req: AuthRequest, res: Response): Promis
     });
   }
 };
+// Retrieve list of locked doctor accounts
 export const getLockedDoctors = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (req.user?.role !== 'admin') {
@@ -1130,7 +1135,7 @@ export const getLockedDoctors = async (req: AuthRequest, res: Response): Promise
   }
 };
 
-// Submit unlock request from locked doctor
+// Submit doctor account unlock request
 export const submitUnlockRequest = async (req: Request, res: Response): Promise<void> => {
   try {
     const { email, reason } = req.body;
@@ -1260,7 +1265,7 @@ export const submitUnlockRequest = async (req: Request, res: Response): Promise<
   }
 };
 
-// Get all pending unlock requests (Admin only)
+// Fetch all pending doctor unlock requests
 export const getPendingUnlockRequests = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (req.user?.role !== 'admin') {
@@ -1291,7 +1296,7 @@ export const getPendingUnlockRequests = async (req: AuthRequest, res: Response):
   }
 };
 
-// Approve unlock request (Admin only)
+// Approve doctor unlock request
 export const approveUnlockRequest = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { requestId } = req.params;
@@ -1387,7 +1392,7 @@ export const approveUnlockRequest = async (req: AuthRequest, res: Response): Pro
   }
 };
 
-// Reject unlock request (Admin only)
+// Reject doctor unlock request
 export const rejectUnlockRequest = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { requestId } = req.params;
@@ -1443,7 +1448,7 @@ export const rejectUnlockRequest = async (req: AuthRequest, res: Response): Prom
 };
 
 
-// Submit doctor registration request
+// Submit new doctor registration request
 export const submitDoctorRegistration = async (req: Request, res: Response): Promise<void> => {
   try {
     const {

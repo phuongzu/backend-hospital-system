@@ -5,9 +5,7 @@ import { AuthRequest } from '../middlewares/authmiddleware';
 import { socketService } from '../utils/socketService';
 import User from '../models/user';
 import mongoose from 'mongoose';
-/* =======================
-   GET MESSAGES BY RECORD
-======================= */
+// Get messages from medical record conversation
 export const getMessagesByRecord = async (req: AuthRequest, res: ExpressResponse) => {
   try {
     const { recordId } = req.params;
@@ -40,8 +38,8 @@ export const getMessagesByRecord = async (req: AuthRequest, res: ExpressResponse
       }
     );
 
-    // ✅ Transform messages: handle deleted_for and deleted flags
-    const transformedMessages = messages.map(msg => {
+  // Transform messages: hide content for deleted messages
+  const transformedMessages = messages.map(msg => {
       const msgObj = msg.toObject();
       const currentUserIdStr = userId?.toString();
 
@@ -109,9 +107,7 @@ export const getMessagesByRecord = async (req: AuthRequest, res: ExpressResponse
   }
 };
 
-/* =======================
-   SEND MESSAGE (REST API)
-======================= */
+// Send text message via REST API
 export const sendMessage = async (req: AuthRequest, res: ExpressResponse) => {
   try {
     const {
@@ -135,8 +131,8 @@ export const sendMessage = async (req: AuthRequest, res: ExpressResponse) => {
       .sort()
       .map(id => new mongoose.Types.ObjectId(id));
 
-    // Find or create conversation
-    const conversation = await Conversation.findOneAndUpdate(
+  // Find or create conversation between participants
+  const conversation = await Conversation.findOneAndUpdate(
       {
         'participant_ids.0': participantIds[0],
         'participant_ids.1': participantIds[1],
@@ -159,8 +155,8 @@ export const sendMessage = async (req: AuthRequest, res: ExpressResponse) => {
     );
 
 
-    // Create message
-    const newMessage = new Message({
+  // Create new message record
+  const newMessage = new Message({
       sender_id: senderId,
       receiver_id,
       message,
@@ -174,8 +170,8 @@ export const sendMessage = async (req: AuthRequest, res: ExpressResponse) => {
 
     await newMessage.save();
 
-    // Update conversation
-    await Conversation.findByIdAndUpdate(
+  // Update conversation with new message
+  await Conversation.findByIdAndUpdate(
       conversation._id,
       {
         $set: {
@@ -188,14 +184,12 @@ export const sendMessage = async (req: AuthRequest, res: ExpressResponse) => {
       }
     );
 
-    // Populate
-    await newMessage.populate('sender_id', 'name avatar role');
-    await newMessage.populate('receiver_id', 'name avatar role');
+  // Populate sender and receiver details
+  await newMessage.populate('sender_id', 'name avatar role');
+  await newMessage.populate('receiver_id', 'name avatar role');
 
-    const { clientTempId } = req.body;
-
-    // Emit to Socket.IO
-    socketService.emitNewMessage(
+  // Emit real-time message notification via Socket.IO
+  socketService.emitNewMessage(
       conversation._id.toString(),
       newMessage,
       clientTempId
@@ -227,9 +221,7 @@ export const sendMessage = async (req: AuthRequest, res: ExpressResponse) => {
   }
 };
 
-/* =======================
-   GET CONVERSATIONS
-======================= */
+// Get user's conversations list
 export const getConversations = async (req: AuthRequest, res: ExpressResponse) => {
   try {
     const userId = req.user?._id;
@@ -338,9 +330,7 @@ export const getConversations = async (req: AuthRequest, res: ExpressResponse) =
   }
 };
 
-/* =======================
-   GET CONVERSATION MESSAGES
-======================= */
+// Get messages from specific conversation
 export const getConversationMessages = async (req: AuthRequest, res: ExpressResponse) => {
   try {
     const { conversationId } = req.params;
@@ -457,9 +447,7 @@ export const getConversationMessages = async (req: AuthRequest, res: ExpressResp
   }
 };
 
-/* =======================
-   MARK MESSAGES AS READ
-======================= */
+// Mark messages as read in conversation
 export const markMessagesAsRead = async (req: AuthRequest, res: ExpressResponse) => {
   try {
     const { conversationId } = req.params;
@@ -497,10 +485,7 @@ export const markMessagesAsRead = async (req: AuthRequest, res: ExpressResponse)
   }
 };
 
-/* =======================
-   SEND MESSAGE WITH MEDIA
-======================= */
-// ==================== SEND MESSAGE WITH MEDIA ====================
+// Send message with media attachment
 export const sendMessageWithMedia = async (req: AuthRequest, res: ExpressResponse) => {
   try {
     const { receiver_id, message, medical_record_id, appointment_id } = req.body;
@@ -574,7 +559,7 @@ export const sendMessageWithMedia = async (req: AuthRequest, res: ExpressRespons
   }
 };
 
-// ==================== ADD REACTION ====================
+// Add emoji reaction to message
 export const addReaction = async (req: AuthRequest, res: ExpressResponse) => {
   try {
     const { messageId } = req.params;
@@ -653,9 +638,7 @@ export const addReaction = async (req: AuthRequest, res: ExpressResponse) => {
     res.status(500).json({ success: false, message: 'Error processing reaction' });
   }
 };
-/* =======================
-   EDIT MESSAGE
-======================= */
+// Edit message content
 export const editMessage = async (req: AuthRequest, res: ExpressResponse) => {
   try {
     const { messageId } = req.params;
@@ -725,9 +708,7 @@ export const editMessage = async (req: AuthRequest, res: ExpressResponse) => {
   }
 };
 
-/* =======================
-   DELETE MESSAGE
-======================= */
+// Delete message (soft or hard delete)
 export const deleteMessage = async (req: AuthRequest, res: ExpressResponse) => {
   try {
     const { messageId } = req.params;
@@ -892,9 +873,7 @@ export const deleteMessage = async (req: AuthRequest, res: ExpressResponse) => {
 };
 
 
-/* =======================
-   GET MESSAGE REACTIONS
-======================= */
+// Get all reactions on message
 export const getMessageReactions = async (req: AuthRequest, res: ExpressResponse) => {
   try {
     const { messageId } = req.params;
@@ -967,9 +946,7 @@ export const getMessageReactions = async (req: AuthRequest, res: ExpressResponse
   }
 };
 
-/* =======================
-   REMOVE ALL MY REACTIONS
-======================= */
+// Remove all user's reactions from message
 export const removeMyReactions = async (req: AuthRequest, res: ExpressResponse) => {
   try {
     const { messageId } = req.params;
@@ -1034,6 +1011,7 @@ export const removeMyReactions = async (req: AuthRequest, res: ExpressResponse) 
   }
 };
 
+// Search user by phone number
 export const searchUserByPhone = async (req: AuthRequest, res: ExpressResponse) => {
   try {
     const { phone } = req.query;
@@ -1095,6 +1073,7 @@ export const searchUserByPhone = async (req: AuthRequest, res: ExpressResponse) 
 };
 
 
+// Search doctor by phone number
 export const searchDoctorByPhone = async (req: AuthRequest, res: ExpressResponse) => {
   try {
     const { phone } = req.query;
@@ -1144,6 +1123,7 @@ export const searchDoctorByPhone = async (req: AuthRequest, res: ExpressResponse
   }
 };
 
+// Find existing or create new conversation
 export const findOrCreateConversation = async (req: AuthRequest, res: ExpressResponse) => {
   try {
     const { participantId } = req.body;

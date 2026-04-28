@@ -14,6 +14,7 @@ import { socketService } from '../utils/socketService';
 import UserInformation from '../models/UserInfor';
 
 
+// Get active consultations for doctor
 export const getActiveConsultation = async (req: Request, res: Response) => {
   try {
     const { doctorId } = req.params;
@@ -50,7 +51,7 @@ export const getActiveConsultation = async (req: Request, res: Response) => {
   }
 };
 
-// Create new consultation
+// Create new medical consultation
 export const createConsultation = async (req: Request, res: Response) => {
   try {
     const {
@@ -107,6 +108,7 @@ export const createConsultation = async (req: Request, res: Response) => {
 };
 
 
+// Add treatment step to consultation
 export const addTreatmentStep = async (req: Request, res: Response) => {
   try {
     const { consultationId } = req.params;
@@ -165,6 +167,7 @@ export const addTreatmentStep = async (req: Request, res: Response) => {
   }
 };
 
+// Update treatment step details
 export const updateTreatmentStep = async (req: Request, res: Response) => {
   try {
     const { consultationId, stepNumber } = req.params;
@@ -215,6 +218,7 @@ export const updateTreatmentStep = async (req: Request, res: Response) => {
   }
 };
 
+// Approve treatment step execution
 export const approveTreatmentStep = async (req: Request, res: Response) => {
   try {
     const { consultationId, stepNumber } = req.params;
@@ -368,7 +372,7 @@ export const approveTreatmentStep = async (req: Request, res: Response) => {
 };
 
 
-// Complete consultation
+// Complete active consultation
 export const completeConsultation = async (req: Request, res: Response) => {
   try {
     const { consultationId } = req.params;
@@ -526,7 +530,7 @@ export const completeConsultation = async (req: Request, res: Response) => {
     res.status(500).json({ success: false, message: 'Error completing consultation' });
   }
 };
-// File upload setup
+// Configure multer storage for file uploads
 const uploadsDir = path.join(__dirname, '..', 'uploads', 'avatars');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
@@ -550,6 +554,7 @@ interface AuthRequest extends Request {
 }
 
 // Get all available doctors (user.status === 'working')
+// Get available doctors list
 export const getAvailableDoctors = async (req: Request, res: Response) => {
   try {
     const doctors = await Doctor.find({})
@@ -564,6 +569,7 @@ export const getAvailableDoctors = async (req: Request, res: Response) => {
 };
 
 // Get available doctors by specialty
+// Get doctors filtered by specialty
 export const getDoctorsBySpecialty = async (req: Request, res: Response) => {
   try {
     const { specialtyId } = req.params;
@@ -582,6 +588,7 @@ export const getDoctorsBySpecialty = async (req: Request, res: Response) => {
 };
 
 // Search doctors from user accounts
+// Get doctor list from user accounts
 export const getDoctorsFromUsers = async (req: Request, res: Response) => {
   try {
     const { search } = req.query;
@@ -609,6 +616,7 @@ export const getDoctorsFromUsers = async (req: Request, res: Response) => {
 };
 
 // Change status of doctor (user.status)
+// Update doctor account status
 export const changeDoctorStatus = async (req: Request, res: Response) => {
   try {
     const { doctorId } = req.params;
@@ -637,6 +645,7 @@ export const changeDoctorStatus = async (req: Request, res: Response) => {
 };
 
 // FIXED: Get appointments for a specific doctor
+// Get doctor's appointments
 export const getDoctorAppointments = async (req: Request, res: Response) => {
   try {
     const { doctorId } = req.params;
@@ -726,6 +735,7 @@ export const getDoctorAppointments = async (req: Request, res: Response) => {
   }
 };
 
+// Get doctor's patients list
 export const getDoctorPatients = async (req: Request, res: Response) => {
   try {
     const { doctorId } = req.params;
@@ -788,6 +798,7 @@ export const getDoctorPatients = async (req: Request, res: Response) => {
 
 
 // Get notifications for a specific doctor
+// Get doctor's notifications
 export const getDoctorNotifications = async (req: Request, res: Response) => {
   try {
     const { doctorId } = req.params;
@@ -806,6 +817,7 @@ export const getDoctorNotifications = async (req: Request, res: Response) => {
 };
 
 // FIXED: Get statistics for a specific doctor
+// Get doctor performance statistics
 export const getDoctorStats = async (req: Request, res: Response) => {
   try {
     const { doctorId } = req.params;
@@ -852,6 +864,7 @@ export const getDoctorStats = async (req: Request, res: Response) => {
 };
 
 // Update doctor availability (requires authentication)
+// Update doctor's availability schedule
 export const updateDoctorAvailability = async (req: AuthRequest, res: Response) => {
   try {
     if (!req.user?._id) {
@@ -884,6 +897,7 @@ export const updateDoctorAvailability = async (req: AuthRequest, res: Response) 
 };
 
 // Get profile for a specific doctor
+// Get doctor's profile information
 export const getDoctorProfile = async (req: Request, res: Response) => {
   try {
     const { doctorId } = req.params;
@@ -921,6 +935,7 @@ export const getDoctorProfile = async (req: Request, res: Response) => {
 };
 
 // FIXED: Appointment actions
+// Confirm appointment
 export const confirmAppointment = async (req: Request, res: Response) => {
   try {
     const { appointmentId } = req.params;
@@ -963,6 +978,7 @@ export const confirmAppointment = async (req: Request, res: Response) => {
   }
 };
 
+// Cancel appointment
 export const cancelAppointment = async (req: Request, res: Response) => {
   try {
     const { appointmentId } = req.params;
@@ -999,6 +1015,7 @@ export const cancelAppointment = async (req: Request, res: Response) => {
   }
 };
 
+// Mark appointment as completed
 export const completeAppointment = async (req: Request, res: Response) => {
   try {
     const { appointmentId } = req.params;
@@ -1036,6 +1053,7 @@ export const completeAppointment = async (req: Request, res: Response) => {
 };
 
 
+// Upload doctor avatar image
 export const uploadDoctorAvatar = async (req: Request, res: Response) => {
   try {
     console.log('=== AVATAR UPLOAD CONTROLLER ===');
@@ -1147,6 +1165,7 @@ export const uploadDoctorAvatar = async (req: Request, res: Response) => {
 };
 
 // Get doctor avatar
+// Get doctor's avatar image
 export const getDoctorAvatar = async (req: Request, res: Response) => {
   try {
     const { filename } = req.params;
@@ -1188,6 +1207,7 @@ export const getDoctorAvatar = async (req: Request, res: Response) => {
 };
 
 // Get all consultations for a doctor
+// Get doctor's consultations
 export const getDoctorConsultations = async (req: Request, res: Response) => {
   try {
     const { doctorId } = req.params;
@@ -1215,6 +1235,7 @@ export const getDoctorConsultations = async (req: Request, res: Response) => {
 };
 
 // Set active consultation
+// Set active consultation session
 export const setActiveConsultation = async (req: Request, res: Response) => {
   try {
     const { consultationId } = req.params;
@@ -1270,6 +1291,7 @@ export const setActiveConsultation = async (req: Request, res: Response) => {
 };
 
 // Clear active consultation
+// Clear active consultation session
 export const clearActiveConsultation = async (req: Request, res: Response) => {
   try {
     const { doctorId } = req.params;
@@ -1301,6 +1323,7 @@ export const clearActiveConsultation = async (req: Request, res: Response) => {
 };
 
 
+// Update consultation status
 // Update consultation status
 export const updateConsultationStatus = async (req: Request, res: Response) => {
   try {
@@ -1346,6 +1369,7 @@ export const updateConsultationStatus = async (req: Request, res: Response) => {
 };
 
 // Get all patients with search and pagination
+// Get all patients for doctor
 export const getAllPatients = async (req: Request, res: Response) => {
   try {
     const { doctorId } = req.params;
@@ -1425,6 +1449,7 @@ export const getAllPatients = async (req: Request, res: Response) => {
 
 
 
+// Complete treatment step
 export const completeTreatmentStep = async (req: Request, res: Response) => {
   try {
     const { consultationId, stepNumber } = req.params;
@@ -1476,6 +1501,7 @@ export const completeTreatmentStep = async (req: Request, res: Response) => {
 
 
 //Get Drug
+// Get all drugs/medications
 export const getAllDrugs = async (req: Request, res: Response) => {
   try {
     const drugs = await Drug.find({})
@@ -1489,6 +1515,7 @@ export const getAllDrugs = async (req: Request, res: Response) => {
 };
 
 
+// Update consultation details
 export const updateConsultationDetails = async (req: Request, res: Response) => {
   try {
     const { consultationId } = req.params;
@@ -1579,6 +1606,7 @@ const calculateQuantity = (dosage: string, duration: string): number => {
 };
 
 
+// Delete treatment step
 export const deleteTreatmentStep = async (req: Request, res: Response) => {
   try {
     const { consultationId, stepNumber } = req.params;
@@ -1646,6 +1674,7 @@ export const deleteTreatmentStep = async (req: Request, res: Response) => {
   }
 };
 
+// Start treatment step execution
 export const startTreatmentStep = async (req: Request, res: Response) => {
   try {
     const { consultationId, stepNumber } = req.params;
@@ -1686,6 +1715,7 @@ export const startTreatmentStep = async (req: Request, res: Response) => {
   }
 };
 
+// Reject treatment step
 export const rejectTreatmentStep = async (req: Request, res: Response) => {
   try {
     const { consultationId, stepNumber } = req.params;
@@ -1749,6 +1779,7 @@ export const rejectTreatmentStep = async (req: Request, res: Response) => {
 };
 
 
+// Make decision on treatment step
 export const doctorDecisionOnStep = async (req: Request, res: Response) => {
   try {
     const { consultationId, stepNumber } = req.params;
@@ -1873,6 +1904,7 @@ export const doctorDecisionOnStep = async (req: Request, res: Response) => {
   }
 };
 
+// Review and decide on treatment step
 export const reviewAndDecideStep = async (req: any, res: any): Promise<void> => {
   try {
     const { consultationId, stepNumber } = req.params;
@@ -2219,6 +2251,7 @@ export const reviewAndDecideStep = async (req: any, res: any): Promise<void> => 
   }
 };
 
+// Schedule re-examination appointment
 export const scheduleReExamination = async (req: any, res: any): Promise<void> => {
   try {
     const { consultationId, stepNumber } = req.params;
@@ -2670,6 +2703,7 @@ const getAlternativeTimeSlots = async (doctorId: string, date: Date): Promise<st
 };
 
 
+// Get available appointment slots
 export const getAvailableSlots = async (req: Request, res: Response) => {
   try {
     const { date } = req.query;
@@ -2692,6 +2726,7 @@ export const getAvailableSlots = async (req: Request, res: Response) => {
   }
 };
 
+// Cancel re-examination appointment
 export const cancelReExamination = async (req: AuthRequest, res: Response) => {
   try {
     const { consultationId, stepNumber } = req.params;
@@ -2757,6 +2792,7 @@ export const cancelReExamination = async (req: AuthRequest, res: Response) => {
   }
 };
 
+// Confirm patient arrival for re-examination
 export const confirmReExaminationArrival = async (
   req: AuthRequest,
   res: Response
@@ -2928,6 +2964,7 @@ export const confirmReExaminationArrival = async (
   }
 };
 
+// Complete re-examination step
 export const completeReExaminationStep = async (
   req: AuthRequest,
   res: Response
@@ -3095,6 +3132,7 @@ export const completeReExaminationStep = async (
 };
 
 
+// Get re-examination appointments
 export const getReExaminationAppointments = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const doctor_user_id = req.user?._id;
@@ -3184,6 +3222,7 @@ export const getReExaminationAppointments = async (req: AuthRequest, res: Respon
   }
 };
 
+// Get re-examination details
 export const getReExaminationDetail = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { appointmentId } = req.params;
@@ -3276,6 +3315,7 @@ export const getReExaminationDetail = async (req: AuthRequest, res: Response): P
 };
 
 
+// Update appointment status
 export const updateAppointmentStatus = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { appointmentId } = req.params;
@@ -3404,6 +3444,7 @@ export const updateAppointmentStatus = async (req: AuthRequest, res: Response): 
   }
 };
 
+// Mark appointment as completed
 export const markAppointmentCompleted = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { appointmentId } = req.params;
@@ -3471,6 +3512,7 @@ export const markAppointmentCompleted = async (req: AuthRequest, res: Response):
 };
 
 // Hoàn thành re-examination step và appointment
+// Complete re-examination process
 export const completeReExamination = async (req: AuthRequest, res: Response) => {
   try {
     const { consultationId, stepNumber } = req.params;
@@ -3606,6 +3648,7 @@ export const completeReExamination = async (req: AuthRequest, res: Response) => 
 };
 
 
+// Get treatment step appointment status
 export const getStepAppointmentStatus = async (
   req: AuthRequest,
   res: Response
@@ -3730,6 +3773,7 @@ export const getStepAppointmentStatus = async (
   }
 };
 
+// Check in patient for appointment
 export const patientCheckIn = async (
   req: AuthRequest,
   res: Response
@@ -3820,6 +3864,7 @@ export const patientCheckIn = async (
   }
 };
 
+// Check in appointment process
 export const checkInAppointment = async (req: Request, res: Response) => {
   try {
     const { appointmentId } = req.params;
@@ -3896,6 +3941,7 @@ export const checkInAppointment = async (req: Request, res: Response) => {
 };
 
 
+// Get patient context for consultation
 export const getPatientContext = async (req: Request, res: Response) => {
   try {
     const { patientId } = req.params;
@@ -3982,6 +4028,7 @@ export const getPatientContext = async (req: Request, res: Response) => {
     return res.status(500).json({ success: false, message: 'Error fetching patient context' });
   }
 };
+// Get patient's consultations
 export const getPatientConsultations = async (req: Request, res: Response) => {
   try {
     const { patientId } = req.params;
@@ -4029,6 +4076,7 @@ export const getPatientConsultations = async (req: Request, res: Response) => {
       .json({ success: false, message: 'Error fetching patient consultations' });
   }
 };
+// Save appointment notes
 export const saveDoctorAppointmentNote = async (req: Request, res: Response) => {
   try {
     const { appointmentId } = req.params;
@@ -4073,6 +4121,7 @@ export const saveDoctorAppointmentNote = async (req: Request, res: Response) => 
     return res.status(500).json({ success: false, message: 'Error saving doctor note' });
   }
 };
+// Schedule follow-up appointment
 export const scheduleFollowUpAppointment = async (req: Request, res: Response) => {
   try {
     const {

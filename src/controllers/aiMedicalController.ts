@@ -17,6 +17,7 @@ import { smsService } from '../utils/smsService';
 import { fetchDBContext } from '../utils/AIDecisionEngine';
 
 
+// Calculate appointment end time from start time and duration
 function calculateEndTime(startTime: string, durationMinutes: number): string {
   const [h, m] = startTime.split(':').map(Number);
   const totalMinutes = h * 60 + m + durationMinutes;
@@ -28,6 +29,7 @@ function calculateEndTime(startTime: string, durationMinutes: number): string {
 
 
 
+// Get pre-appointment preparation instructions based on specialty
 function getPreparationInstructions(specialtyId?: string): string {
   const map: Record<string, string> = {
   };
@@ -38,9 +40,7 @@ function getPreparationInstructions(specialtyId?: string): string {
   );
 }
 
-// ==================== IDEMPOTENCY STORE ====================
-// Prevent duplicate bookings from network retries
-
+// Prevent duplicate bookings from network retries using idempotency key
 interface IdempotencyRecord {
   result: object;
   expiresAt: number;
@@ -48,6 +48,7 @@ interface IdempotencyRecord {
 
 const idempotencyStore = new Map<string, IdempotencyRecord>();
 
+// Generate SHA256 hash key for idempotency check
 function getIdempotencyKey(
   userId: string,
   doctorId: string,
@@ -60,6 +61,7 @@ function getIdempotencyKey(
     .digest('hex');
 }
 
+// Remove expired idempotency records from in-memory store
 function cleanupIdempotencyStore(): void {
   const now = Date.now();
   for (const [key, record] of idempotencyStore) {
@@ -69,8 +71,7 @@ function cleanupIdempotencyStore(): void {
 
 setInterval(cleanupIdempotencyStore, 10 * 60 * 1000);
 
-// ==================== SESSION ====================
-
+// Get or create active chat session for patient
 export const getOrCreateChatSession = async (
   req: AuthRequest,
   res: Response
@@ -103,8 +104,7 @@ export const getOrCreateChatSession = async (
   }
 };
 
-// ==================== CONSENT ====================
-
+// Record patient consent for medical service
 export const recordConsent = async (
   req: AuthRequest,
   res: Response
@@ -146,8 +146,7 @@ export const recordConsent = async (
   }
 };
 
-// ==================== SEND MESSAGE ====================
-
+// Send message in chat session and process AI response
 export const sendMessage = async (
   req: AuthRequest,
   res: Response
@@ -251,7 +250,6 @@ export const sendMessage = async (
         emergencyAlert: aiResponse.emergencyAlert,
         category: aiResponse.category,
         relatedSpecialties: aiResponse.relatedSpecialties,
-        // FIX: always include appointmentRecommendation with actionType if set
         appointmentRecommendation: aiResponse.appointmentRecommendation,
         followUpQuestions: aiResponse.followUpQuestions,
         requiresMoreInfo: aiResponse.requiresMoreInfo,
@@ -268,16 +266,7 @@ export const sendMessage = async (
   }
 };
 
-// ============================================================
-// LOCAL intent detector (self-contained, no circular import)
-// ============================================================
-
-
-// Note: Local intent detection removed in favor of AI reasoning.
-
-
-// ==================== HISTORY ====================
-
+// Get patient chat history from all sessions
 export const getChatHistory = async (
   req: AuthRequest,
   res: Response
@@ -299,6 +288,7 @@ export const getChatHistory = async (
   }
 };
 
+// Fetch messages from specific chat session
 export const getSessionMessages = async (
   req: AuthRequest,
   res: Response
@@ -324,8 +314,7 @@ export const getSessionMessages = async (
   }
 };
 
-// ==================== CLOSE SESSION ====================
-
+// Close active chat session
 export const closeSession = async (
   req: AuthRequest,
   res: Response
@@ -350,8 +339,7 @@ export const closeSession = async (
   }
 };
 
-// ==================== CLEAR HISTORY ====================
-
+// Delete all chat history for user
 export const clearChatHistory = async (
   req: AuthRequest,
   res: Response
@@ -373,8 +361,7 @@ export const clearChatHistory = async (
   }
 };
 
-// ==================== CLEANUP ====================
-
+// Clean up expired chat sessions (cron job)
 export const cleanupExpiredSessions = async (
   req: Request,
   res: Response
@@ -388,8 +375,7 @@ export const cleanupExpiredSessions = async (
   }
 };
 
-// ==================== SPECIALTIES ====================
-
+// Retrieve all available medical specialties
 export const getAllSpecialties = async (
   req: AuthRequest,
   res: Response
@@ -419,8 +405,7 @@ export const getAllSpecialties = async (
 
 export const getSpecialties = getAllSpecialties;
 
-// ==================== DOCTORS BY SPECIALTY ====================
-
+// Get doctors filtered by specialty
 export const getDoctorsBySpecialty = async (
   req: AuthRequest,
   res: Response
@@ -442,9 +427,7 @@ export const getDoctorsBySpecialty = async (
 
     const doctors = await Doctor.find({ specialty_id, isAvailable: true })
       .populate('user_id', 'name email phoneNumber avatar')
-      .select(
-        'consultation_fee years_of_experience qualifications achievements education certifications available_hours'
-      );
+     ;
 
     const targetDate = date ? new Date(date as string) : new Date();
     if (targetDate <= new Date()) targetDate.setDate(targetDate.getDate() + 1);
@@ -486,8 +469,20 @@ export const getDoctorsBySpecialty = async (
     const { generateTimeSlotsFromSchedule } = await import('../utils/AIDecisionEngine');
 
     const result = doctors
+    .filter(doctor => {
+    const populatedUser = (doctor as any).user_id;
+    return populatedUser !== null && 
+           typeof populatedUser === 'object' && 
+           populatedUser?.name;
+  })
       .map(doctor => {
         const id = (doctor._id as Types.ObjectId).toString();
+            console.log('🔍 Doctor debug:', {
+      doctorId: id,
+      user_id_raw: doctor.user_id,
+      user_id_type: typeof doctor.user_id,
+      user_id_name: (doctor as any).user_id?.name,
+    });
         const booked = bookedByDoctor.get(id) || new Set();
 
         const allSlots = generateTimeSlotsFromSchedule(
@@ -499,7 +494,7 @@ export const getDoctorsBySpecialty = async (
         const rating = ratingMap.get(id) || { avg: 0, total: 0 };
         return {
           _id: doctor._id,
-          name: (doctor as any).user_id?.name || 'Doctor',
+          name: (doctor as any).user_id.name,
           avatar: (doctor as any).user_id?.avatar,
           specialty: {
             id: specialty._id,
@@ -545,8 +540,7 @@ export const getDoctorsBySpecialty = async (
   }
 };
 
-// ==================== FIND DOCTORS ====================
-
+// Find available doctors for appointment booking
 export const findDoctorsForAppointment = async (
   req: AuthRequest,
   res: Response
@@ -641,8 +635,7 @@ const GROQ_MODEL = 'llama-3.3-70b-versatile';
 const APPOINTMENT_DURATION_MINUTES = 30;
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 
-// ==================== VALIDATION ====================
-
+// Validate booking request parameters
 interface BookingRequestBody {
   doctor_id?: string;
   specialty_id?: string;
@@ -678,6 +671,7 @@ function validateBookingRequest(
 }
 
 
+// Book appointment from AI recommendation with idempotency
 export const bookAppointmentFromAI = async (
   req: AuthRequest,
   res: Response
@@ -1211,8 +1205,7 @@ export const bookAppointmentFromAI = async (
   }
 };
 
-// ==================== SYMPTOM TRENDS ====================
-
+// Analyze symptom trends and patterns for patient
 export const getSymptomTrends = async (
   req: AuthRequest,
   res: Response
@@ -1239,8 +1232,7 @@ export const getSymptomTrends = async (
   }
 };
 
-// ==================== AUDIT LOGS (Admin only) ====================
-
+// Get audit logs of medical decisions (admin only)
 export const getAuditLogs = async (
   req: AuthRequest,
   res: Response
@@ -1260,8 +1252,7 @@ export const getAuditLogs = async (
   }
 };
 
-// ==================== SESSIONS LIST & SEARCH ====================
-
+// Get paginated list of chat sessions
 export const getChatSessions = async (
   req: AuthRequest,
   res: Response
@@ -1313,6 +1304,7 @@ export const getChatSessions = async (
   }
 };
 
+// Search chat history by keywords
 export const searchChatHistory = async (
   req: AuthRequest,
   res: Response
@@ -1370,8 +1362,7 @@ export const searchChatHistory = async (
   }
 };
 
-// ==================== MEDICATION & TERMS ====================
-
+// Get medication information and details
 export const getMedicationInfo = async (
   req: AuthRequest,
   res: Response
@@ -1395,6 +1386,7 @@ export const getMedicationInfo = async (
   }
 };
 
+// Provide explanation for medical term
 export const getMedicalTermExplanation = async (
   req: AuthRequest,
   res: Response
@@ -1414,6 +1406,7 @@ export const getMedicalTermExplanation = async (
   }
 };
 
+// Create appointment from AI suggestion
 export const createAppointmentFromSuggestion = async (
   req: AuthRequest,
   res: Response
@@ -1444,6 +1437,7 @@ export const createAppointmentFromSuggestion = async (
   }
 };
 
+// Get personalized lifestyle and health advice
 export const getLifestyleAdvice = async (req: Request, res: Response) => {
   try {
     const { topic } = req.params;
@@ -1492,34 +1486,50 @@ export const getLifestyleAdvice = async (req: Request, res: Response) => {
   }
 };
 
-async function getUpcomingApptList(userId: string, language: Language = 'en') {
+// Get patient's upcoming appointments list
+async function getUpcomingApptList(userId: string) {
   const startOfToday = new Date();
   startOfToday.setHours(0, 0, 0, 0);
 
+  // Query 1: lấy appointments, chỉ populate specialty (flat, 1 level, an toàn)
   const upcoming = await Appointment.find({
     user_id: userId,
     appointment_date: { $gte: startOfToday },
     status: { $in: ['pending', 'confirmed'] },
   })
-    .populate({
-      path: 'doctor_id',
-      populate: { path: 'user_id', select: 'name' }
-    })
     .populate('specialty_id', 'name')
     .sort({ appointment_date: 1 })
     .limit(5)
     .lean();
 
+  if (!upcoming.length) return [];
+
+  const doctorIds = upcoming.map(a => a.doctor_id);
+  const doctors = await Doctor.find({ _id: { $in: doctorIds } })
+    .populate('user_id', 'name')
+    .lean();
+
+  const doctorNameMap = new Map<string, string>();
+  for (const doc of doctors) {
+    const name = (doc.user_id as any)?.name;
+    if (name) {
+      doctorNameMap.set((doc._id as any).toString(), name);
+    }
+  }
+
   return upcoming.map((a) => ({
     id: (a._id as Types.ObjectId).toString(),
-    date: new Date(a.appointment_date).toLocaleDateString(language === 'vi' ? 'vi-VN' : 'en-US'),
+    date: new Date(a.appointment_date).toLocaleDateString(
+    ),
     time: a.time_slot,
-    doctorName: ((a.doctor_id as any)?.user_id as any)?.name || 'Doctor',
+    doctorName: doctorNameMap.get(a.doctor_id.toString()) || 'Doctor',
     specialty: (a.specialty_id as any)?.name || 'General Medicine',
     status: a.status,
   }));
 }
 
+
+// Detect appointment-related user intent from message
 export const detectAppointmentIntent = (message: string): {
   intent: 'view_upcoming' | 'reschedule' | 'cancel' | 'none';
   confidence: number;
@@ -1557,6 +1567,7 @@ export const detectAppointmentIntent = (message: string): {
 }
 
 
+// Handle view upcoming appointments intent
 export async function handleViewUpcomingIntent(
   req: AuthRequest,
   res: Response,
@@ -1565,7 +1576,7 @@ export async function handleViewUpcomingIntent(
 ): Promise<void> {
   const userId = req.user!._id.toString();
   try {
-    const apptList = await getUpcomingApptList(userId, (req.query.lang as any) || 'en');
+    const apptList = await getUpcomingApptList(userId);
 
     const responseText = apptList.length === 0
       ? '📅 You have no upcoming appointments.\n\nWould you like to book a new one?'
@@ -1615,6 +1626,7 @@ export async function handleViewUpcomingIntent(
 }
 
 
+// Handle reschedule appointment intent
 export async function handleRescheduleIntent(
   req: AuthRequest,
   res: Response,
@@ -1623,7 +1635,7 @@ export async function handleRescheduleIntent(
 ): Promise<void> {
   const userId = req.user!._id.toString();
   try {
-    const apptList = await getUpcomingApptList(userId, (req.query.lang as any) || 'en');
+    const apptList = await getUpcomingApptList(userId);
 
     const responseText = apptList.length === 0
       ? '📅 You have no appointments to reschedule. Would you like to book a new one?'
@@ -1665,6 +1677,7 @@ export async function handleRescheduleIntent(
 }
 
 
+// Handle cancel appointment intent
 export async function handleCancelIntent(
   req: AuthRequest,
   res: Response,
@@ -1673,7 +1686,7 @@ export async function handleCancelIntent(
 ): Promise<void> {
   const userId = req.user!._id.toString();
   try {
-    const apptList = await getUpcomingApptList(userId, (req.query.lang as any) || 'en');
+    const apptList = await getUpcomingApptList(userId);
 
     if (apptList.length === 0) {
       res.status(200).json({
@@ -1728,6 +1741,7 @@ export async function handleCancelIntent(
 
 
 
+// Reschedule existing appointment to new date/time
 export const rescheduleAppointment = async (
   req: AuthRequest,
   res: Response
@@ -1833,6 +1847,7 @@ export const rescheduleAppointment = async (
   }
 };
 
+// Cancel appointment via chat interface
 export const cancelAppointmentByChat = async (
   req: AuthRequest,
   res: Response
@@ -1947,6 +1962,7 @@ export const cancelAppointmentByChat = async (
 };
 
 
+// Get available time slots for appointment rescheduling
 export const getAvailableSlotsForReschedule = async (
   req: AuthRequest,
   res: Response

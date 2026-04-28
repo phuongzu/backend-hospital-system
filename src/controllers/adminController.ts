@@ -15,6 +15,7 @@ import { emailService } from '../utils/emailService';
 
 
 
+// Fetch comprehensive admin dashboard with analytics and system metrics
 export const getAdminDashboard = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const [
@@ -197,10 +198,10 @@ export const getAdminDashboard = async (req: AuthRequest, res: Response): Promis
 
 
 
-// Get all doctors with pagination, search, and detailed info
+// Retrieve all doctors with pagination, search, and complete profile info
 export const getAllDoctors = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { page = 1, limit = 1000, search = '', status = '' } = req.query; // Tăng limit lên 1000
+    const { page = 1, limit = 1000, search = '', status = '' } = req.query;
 
     const query: any = { role: 'doctor' };
 
@@ -276,7 +277,7 @@ export const getAllDoctors = async (req: AuthRequest, res: Response): Promise<vo
   }
 };
 
-// Get all patients with pagination, search, and detailed info
+// Retrieve all patients with pagination, search, and profile information
 export const getAllPatients = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { page = 1, limit = 1000, search = '' } = req.query;
@@ -361,7 +362,7 @@ export const getAllPatients = async (req: AuthRequest, res: Response): Promise<v
   }
 };
 
-// Create new doctor (Admin only)
+// Create new doctor account with validation and profile setup
 export const createDoctor = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const {
@@ -440,7 +441,7 @@ export const createDoctor = async (req: AuthRequest, res: Response): Promise<voi
     });
   }
 };
-// Update user status (activate/deactivate)
+// Toggle user active/inactive status
 export const updateUserStatus = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { userId } = req.params;
@@ -482,7 +483,7 @@ export const updateUserStatus = async (req: AuthRequest, res: Response): Promise
   }
 };
 
-// Get user details
+// Fetch complete user profile and related information
 export const getUserDetails = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { userId } = req.params;
@@ -543,7 +544,7 @@ export const getUserDetails = async (req: AuthRequest, res: Response): Promise<v
 };
 
 
-// Get system analytics
+// Generate system statistics and analytics dashboard data
 export const getSystemAnalytics = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     // Monthly appointments trend
@@ -634,7 +635,7 @@ export const getSystemAnalytics = async (req: AuthRequest, res: Response): Promi
   }
 };
 
-// Get locked doctors
+// Retrieve list of locked doctor accounts
 export const getLockedDoctors = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const lockedDoctors = await User.find({
@@ -658,7 +659,7 @@ export const getLockedDoctors = async (req: AuthRequest, res: Response): Promise
   }
 };
 
-// Unlock doctor account
+// Restore access to locked doctor account
 export const unlockDoctorAccount = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { doctorId } = req.params;
@@ -704,7 +705,7 @@ export const unlockDoctorAccount = async (req: AuthRequest, res: Response): Prom
   }
 };
 
-// Lock doctor account manually
+// Manually lock doctor account (admin action)
 export const lockDoctorAccount = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { doctorId } = req.params;
@@ -749,7 +750,7 @@ export const lockDoctorAccount = async (req: AuthRequest, res: Response): Promis
   }
 };
 
-// Get pending unlock requests
+// Fetch pending doctor unlock requests from locked accounts
 export const getPendingUnlockRequests = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const pendingRequests = await UnlockRequest.find({
@@ -771,7 +772,7 @@ export const getPendingUnlockRequests = async (req: AuthRequest, res: Response):
   }
 };
 
-// Approve unlock request
+// Approve unlock request and restore doctor account access
 export const approveUnlockRequest = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { requestId } = req.params;
@@ -846,7 +847,7 @@ export const approveUnlockRequest = async (req: AuthRequest, res: Response): Pro
   }
 };
 
-// Reject unlock request
+// Reject unlock request with notification to doctor
 export const rejectUnlockRequest = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { requestId } = req.params;
@@ -892,7 +893,7 @@ export const rejectUnlockRequest = async (req: AuthRequest, res: Response): Prom
   }
 };
 
-// Get all doctor registration requests
+// Retrieve all pending doctor registration requests
 export const getDoctorRegistrationRequests = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { status = 'pending', page = 1, limit = 10 } = req.query;
@@ -929,7 +930,7 @@ export const getDoctorRegistrationRequests = async (req: AuthRequest, res: Respo
   }
 };
 
-// Approve doctor registration
+// Approve doctor registration and activate account
 export const approveDoctorRegistration = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { requestId } = req.params;
@@ -1107,7 +1108,7 @@ export const approveDoctorRegistration = async (req: AuthRequest, res: Response)
   }
 };
 
-// Reject doctor registration
+// Reject doctor registration with notification
 export const rejectDoctorRegistration = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { requestId } = req.params;
@@ -1172,7 +1173,7 @@ export const rejectDoctorRegistration = async (req: AuthRequest, res: Response):
   }
 };
 
-// controllers/adminController.ts - Thêm các hàm còn thiếu
+// Retrieve all appointments with pagination and filters
 export const getAllAppointments = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const appointments = await Appointment.find()
@@ -1194,6 +1195,7 @@ export const getAllAppointments = async (req: AuthRequest, res: Response): Promi
   }
 };
 
+// Fetch all medical records from system
 export const getAllMedicalRecords = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const medicalRecords = await MedicalRecord.find()
@@ -1214,6 +1216,7 @@ export const getAllMedicalRecords = async (req: AuthRequest, res: Response): Pro
   }
 };
 
+// Retrieve system audit and activity logs
 export const getSystemLogs = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const logs: any[] = [];
@@ -1231,6 +1234,7 @@ export const getSystemLogs = async (req: AuthRequest, res: Response): Promise<vo
 };
 
 
+// Get specific doctor registration request details
 export const getRegistrationRequestById = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { requestId } = req.params;
@@ -1261,6 +1265,7 @@ export const getRegistrationRequestById = async (req: AuthRequest, res: Response
 };
 
 
+// Lock user account (any role)
 export const lockUser = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { userId } = req.params;
@@ -1297,6 +1302,7 @@ export const lockUser = async (req: AuthRequest, res: Response): Promise<void> =
   }
 };
 
+// Unlock user account (any role)
 export const unlockUser = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { userId } = req.params;
@@ -1335,6 +1341,7 @@ export const unlockUser = async (req: AuthRequest, res: Response): Promise<void>
 };
 
 
+// Retrieve all drugs/medications from database
 export const getAllDrugs = async (req: Request, res: Response) => {
   try {
     const drugs = await Drug.find({})
@@ -1347,6 +1354,7 @@ export const getAllDrugs = async (req: Request, res: Response) => {
   }
 };
 
+// Get drug details by ID
 export const getDrugById = async (req: Request, res: Response) => {
   try {
     const drug = await Drug.findById(req.params.id).populate('category_id', 'name');
@@ -1359,6 +1367,7 @@ export const getDrugById = async (req: Request, res: Response) => {
   }
 };
 
+// Create new drug/medication record
 export const createDrug = async (req: Request, res: Response) => {
   try {
     const newDrug = new Drug(req.body);
@@ -1370,6 +1379,7 @@ export const createDrug = async (req: Request, res: Response) => {
   }
 };
 
+// Update drug information
 export const updateDrug = async (req: Request, res: Response) => {
   try {
     const updatedDrug = await Drug.findByIdAndUpdate(
@@ -1386,6 +1396,7 @@ export const updateDrug = async (req: Request, res: Response) => {
   }
 };
 
+// Delete drug record
 export const deleteDrug = async (req: Request, res: Response) => {
   try {
     const deletedDrug = await Drug.findByIdAndDelete(req.params.id);
@@ -1398,8 +1409,7 @@ export const deleteDrug = async (req: Request, res: Response) => {
   }
 };
 
-// --- Categories ---
-
+// Retrieve all drug categories
 export const getAllCategories = async (req: Request, res: Response) => {
   try {
     const categories = await DrugCategory.find({}).sort({ name: 1 });
@@ -1409,6 +1419,7 @@ export const getAllCategories = async (req: Request, res: Response) => {
   }
 };
 
+// Create new drug category
 export const createCategory = async (req: Request, res: Response) => {
   try {
     const newCategory = new DrugCategory(req.body);
@@ -1419,6 +1430,7 @@ export const createCategory = async (req: Request, res: Response) => {
   }
 };
 
+// Create new medical specialty
 export const createSpecialty = async (req: Request, res: Response) => {
   try {
     const newSpecialty = new Specialty(req.body);
@@ -1435,6 +1447,7 @@ export const createSpecialty = async (req: Request, res: Response) => {
 };
 
 
+// Fetch doctor weekly schedule
 export const getDoctorSchedule = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { doctorId } = req.params;
@@ -1486,6 +1499,7 @@ export const getDoctorSchedule = async (req: AuthRequest, res: Response): Promis
   }
 };
 
+// Update doctor weekly availability schedule
 export const updateDoctorSchedule = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { doctorId } = req.params;

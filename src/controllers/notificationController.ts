@@ -6,9 +6,7 @@ import NotificationDevice from '../models/notificationDevice';
 import User from '../models/user';
 import Doctor from '../models/doctor';
 
-// ================================
-// GET USER NOTIFICATIONS
-// ================================
+// Get paginated list of user notifications with filters
 export const getUserNotifications = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -36,9 +34,7 @@ export const getUserNotifications = async (req: AuthRequest, res: Response): Pro
   }
 };
 
-// ================================
-// GET NOTIFICATION BY ID
-// ================================
+// Retrieve notification details by ID
 export const getNotificationById = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -63,9 +59,7 @@ export const getNotificationById = async (req: AuthRequest, res: Response): Prom
   }
 };
 
-// ================================
-// GET UNREAD COUNT
-// ================================
+// Get count of unread notifications
 export const getUnreadCount = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -81,9 +75,7 @@ export const getUnreadCount = async (req: AuthRequest, res: Response): Promise<v
   }
 };
 
-// ================================
-// MARK AS READ
-// ================================
+// Mark notification as read
 export const markAsRead = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -107,6 +99,7 @@ export const markAsRead = async (req: AuthRequest, res: Response): Promise<void>
 };
 
 
+// Mark all notifications as read
 export const markAllAsRead = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const userId = req.user?._id;
@@ -206,6 +199,7 @@ export const markAllAsRead = async (req: AuthRequest, res: Response): Promise<vo
 };
 
 
+// Register push notification device
 export const registerDevice = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -228,9 +222,7 @@ export const registerDevice = async (req: AuthRequest, res: Response): Promise<v
   }
 };
 
-// ================================
-// UNREGISTER DEVICE
-// ================================
+// Unregister push notification device
 export const unregisterDevice = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { device_token } = req.body;
@@ -248,9 +240,7 @@ export const unregisterDevice = async (req: AuthRequest, res: Response): Promise
   }
 };
 
-// ================================
-// GET USER DEVICES
-// ================================
+// Get user's registered notification devices
 export const getUserDevices = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -266,9 +256,7 @@ export const getUserDevices = async (req: AuthRequest, res: Response): Promise<v
   }
 };
 
-// ================================
-// DELETE NOTIFICATION
-// ================================
+// Delete specific notification
 export const deleteNotification = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -291,9 +279,7 @@ export const deleteNotification = async (req: AuthRequest, res: Response): Promi
   }
 };
 
-// ================================
-// CLEAR ALL NOTIFICATIONS
-// ================================
+// Delete all notifications for user
 export const clearAllNotifications = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -309,9 +295,7 @@ export const clearAllNotifications = async (req: AuthRequest, res: Response): Pr
   }
 };
 
-// ================================
-// GET NOTIFICATION STATS
-// ================================
+// Get notification statistics and breakdown
 export const getNotificationStats = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -329,9 +313,7 @@ export const getNotificationStats = async (req: AuthRequest, res: Response): Pro
   }
 };
 
-// ================================
-// CREATE TEST NOTIFICATION
-// ================================
+// Create test notification (debug endpoint)
 export const createTestNotification = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user || req.user.role !== 'admin') {
@@ -359,9 +341,7 @@ export const createTestNotification = async (req: AuthRequest, res: Response): P
   }
 };
 
-// ================================
-// HANDLE CLICK ACTION
-// ================================
+// Handle notification action click event
 export const clickNotificationAction = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {

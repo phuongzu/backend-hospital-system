@@ -6,6 +6,7 @@ import mongoose, { Types } from 'mongoose';
 import { Response } from 'express';
 
 
+// Type definitions for medical record operations
 interface PopulatedUser {
   _id: Types.ObjectId;
   name: string;
@@ -69,6 +70,7 @@ interface StepAppointmentResult {
 
 // ============================================================
 
+// Get medical records for current user
 export const getMyRecords = async (req: AuthRequest, res: Response) => {
   try {
     if (!req.user) {
@@ -90,6 +92,7 @@ export const getMyRecords = async (req: AuthRequest, res: Response) => {
   }
 };
 
+// Start treatment plan for medical record
 export const startTreatment = async (req: AuthRequest, res: Response) => {
   const { id } = req.params;
   try {
@@ -124,6 +127,7 @@ export const startTreatment = async (req: AuthRequest, res: Response) => {
   }
 };
 
+// Mark treatment process as completed
 export const completeProcess = async (req: any, res: any) => {
   const { id, processId } = req.params;
   try {
@@ -150,6 +154,7 @@ export const completeProcess = async (req: any, res: any) => {
   }
 };
 
+// Confirm treatment process with doctor notes
 export const confirmProcess = async (req: any, res: any) => {
   const { id, processId } = req.params;
   const { notes } = req.body;
@@ -178,6 +183,7 @@ export const confirmProcess = async (req: any, res: any) => {
   }
 };
 
+// Request treatment step approval from patient
 export const requestStepApproval = async (req: AuthRequest, res: any): Promise<void> => {
   try {
     const { id, stepNumber } = req.params;
@@ -193,8 +199,8 @@ export const requestStepApproval = async (req: AuthRequest, res: any): Promise<v
       return;
     }
 
-    // populate generic → TypeScript biết chính xác type của doctor_id, user_id
-    const medicalRecord = await MedicalRecord.findById(id)
+  // Use generic populate for TypeScript type safety
+  const medicalRecord = await MedicalRecord.findById(id)
       .populate<{ doctor_id: PopulatedUser }>({ path: 'doctor_id', model: 'User', select: 'name email' })
       .populate<{ user_id: PopulatedUser }>({ path: 'user_id', model: 'User', select: 'name email' });
 
@@ -203,8 +209,8 @@ export const requestStepApproval = async (req: AuthRequest, res: any): Promise<v
       return;
     }
 
-    // Không cần 'as any' — TypeScript nhận ra ._id và .name
-    if (medicalRecord.user_id._id.toString() !== req.user._id.toString()) {
+  // Verify user is patient for this record
+  if (medicalRecord.user_id._id.toString() !== req.user._id.toString()) {
       res.status(403).json({ success: false, message: 'Access denied to this medical record' });
       return;
     }
@@ -266,6 +272,7 @@ export const requestStepApproval = async (req: AuthRequest, res: any): Promise<v
   }
 };
 
+// Get approval requests for treatment steps
 export const getApprovalRequests = async (req: AuthRequest, res: any): Promise<void> => {
   try {
     if (!req.user) {
@@ -316,6 +323,7 @@ export const getApprovalRequests = async (req: AuthRequest, res: any): Promise<v
   }
 };
 
+// Activate treatment step in patient plan
 export const activateTreatmentStep = async (req: AuthRequest, res: any): Promise<void> => {
   try {
     const { id, stepNumber } = req.params;
@@ -362,6 +370,7 @@ export const activateTreatmentStep = async (req: AuthRequest, res: any): Promise
   }
 };
 
+// Complete treatment step with outcomes
 export const completeTreatmentStep = async (req: AuthRequest, res: any): Promise<void> => {
   try {
     const { id, stepNumber } = req.params;
@@ -428,6 +437,7 @@ export const completeTreatmentStep = async (req: AuthRequest, res: any): Promise
   }
 };
 
+// Change treatment plan status
 export const changeTreatmentPlanStatus = async (req: AuthRequest, res: any): Promise<void> => {
   try {
     const { recordId, processId } = req.params;
@@ -501,6 +511,7 @@ export const changeTreatmentPlanStatus = async (req: AuthRequest, res: any): Pro
   }
 };
 
+// Complete treatment step with patient message
 export const completeTreatmentStepWithMessage = async (req: any, res: any): Promise<void> => {
   try {
     const { consultationId, stepNumber } = req.params;
@@ -547,6 +558,7 @@ export const completeTreatmentStepWithMessage = async (req: any, res: any): Prom
   }
 };
 
+// Get re-examination appointment details
 export const getReExaminationAppointment = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { recordId, stepNumber } = req.params;
@@ -802,6 +814,7 @@ export const getReExaminationAppointment = async (req: AuthRequest, res: Respons
   }
 };
 
+// Get appointments for medical record
 export const getMedicalRecordAppointments = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { recordId } = req.params;
@@ -894,6 +907,7 @@ export const getMedicalRecordAppointments = async (req: AuthRequest, res: Respon
   }
 };
 
+// Get all re-examination appointments for user
 export const getAllReExaminationAppointments = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { recordId } = req.params;

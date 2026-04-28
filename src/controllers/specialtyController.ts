@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import Specialty from '../models/specialty';
 
-// Fetch all specialties
+// Retrieve all specialties from database
 export const getAllSpecialties = async (req: Request, res: Response) => {
   try {
     const specialties = await Specialty.find({});
@@ -18,6 +18,7 @@ export const getAllSpecialties = async (req: Request, res: Response) => {
     });
   }
 };
+// Get specialty details by ID
 export const getSpecialtyById = async (req: Request, res: Response) => {
   try {
     const specialty = await Specialty.findById(req.params.id);
@@ -29,7 +30,7 @@ export const getSpecialtyById = async (req: Request, res: Response) => {
     res.status(500).json({ success: false, message: 'Error fetching specialty' });
   }
 };
-
+// Create new specialty with duplicate key validation
 export const createSpecialty = async (req: Request, res: Response) => {
   try {
     const newSpecialty = new Specialty(req.body);
@@ -37,14 +38,14 @@ export const createSpecialty = async (req: Request, res: Response) => {
     res.status(201).json({ success: true, message: 'Specialty created successfully', data: savedSpecialty });
   } catch (error: any) {
     console.error('Error creating specialty:', error);
-    // Handle duplicate key error
+    // Prevent duplicate specialty names
     if (error.code === 11000) {
       return res.status(400).json({ success: false, message: 'A specialty with this name already exists' });
     }
     res.status(400).json({ success: false, message: error.message || 'Error creating specialty' });
   }
 };
-
+// Update specialty details by ID
 export const updateSpecialty = async (req: Request, res: Response) => {
   try {
     const updatedSpecialty = await Specialty.findByIdAndUpdate(
@@ -60,7 +61,7 @@ export const updateSpecialty = async (req: Request, res: Response) => {
     res.status(400).json({ success: false, message: error.message || 'Error updating specialty' });
   }
 };
-
+// Delete specialty by ID
 export const deleteSpecialty = async (req: Request, res: Response) => {
   try {
     const deletedSpecialty = await Specialty.findByIdAndDelete(req.params.id);

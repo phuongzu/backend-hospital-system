@@ -5,9 +5,7 @@ import Doctor from '../models/doctor';
 import Appointment from '../models/appointment';
 import Review from '../models/review';
 import { PatientProfileService } from './PatientProfileService';
-import { SymptomTrackerService } from '../data/Symptomtracker';
 import { auditLogger } from '../middlewares/SecurityMiddleware';
-import { Types } from 'mongoose';
 import { fetchDBContext, AIDecision, DBContext } from './AIDecisionEngine';
 
 // ==================== CORE TYPES ====================
@@ -183,9 +181,11 @@ const EMERGENCY_PROTOCOLS: Record<string, string> = {
   general_emergency: `🚨 **CRITICAL: EMERGENCY**\n1. Call 911/115 IMMEDIATELY!\n🏥 GO TO NEAREST HOSPITAL.`,
 };
 
-const BOOKING_CONFIRM = ['yes', 'confirm', 'book', 'agree', 'vâng', 'đúng', 'đặt', 'chốt'];
-const BOOKING_DECLINE = ['no', 'cancel', 'decline', 'later', 'không', 'hủy', 'để sau'];
-const BOOKING_INQUIRY = ['appointment', 'upcoming', 'schedule', 'lịch', 'hẹn'];
+const BOOKING_CONFIRM = ['yes', 'confirm', 'agree', 'correct', 'book', 'close', 'schedule', 'ok', 'okay', 'sure', 'let\'s do it', 'sounds good', 'go ahead', 'do it', 'please do', 'i want to book'];
+
+const BOOKING_DECLINE = ['no', 'cancel', 'reject', 'water', 'later', 'not now', 'don\'t', 'do not', 'nope', 'negative', 'decline', 'refuse', 'deny', 'disagree', 'reschedule'];
+
+const BOOKING_INQUIRY = ['appointment', 'coming soon', 'schedule', 'upcoming', 'next week', 'next month'];
 
 // ==================== CUSTOM ERRORS ====================
 
@@ -489,14 +489,24 @@ export class AIMedicalService {
           followUpNeeded: true
         };
       }
+      const doctorIds = upcomingAppointments.map(apt => (apt as any).doctor_id?._id || apt.doctor_id);
+      const doctorDocs = await Doctor.find({ _id: { $in: doctorIds } })
+        .populate('user_id', 'name')
+        .lean();
+
+      const doctorNameMap = new Map<string, string>();
+      for (const doc of doctorDocs) {
+        const name = (doc.user_id as any)?.name;
+        if (name) doctorNameMap.set((doc._id as any).toString(), name);
+      }
 
       const appointmentList = upcomingAppointments.map((apt, index) => {
-        const doctorName = (apt as any).doctor_id?.name || 'Doctor';
+        const doctorId = ((apt as any).doctor_id?._id || apt.doctor_id)?.toString();
+        const doctorName = doctorNameMap.get(doctorId) || 'Doctor';
         const specialtyName = (apt as any).specialty_id?.name || 'Specialty';
         const date = new Date(apt.appointment_date).toLocaleDateString('en-US');
         return `${index + 1}. 📅 ${date} at ${apt.time_slot} - ${specialtyName} (Dr. ${doctorName})`;
       }).join('\n');
-
       return {
         response: `You have ${upcomingAppointments.length} upcoming appointments:\n\n${appointmentList}\n\nDo you need any other assistance?`,
         confidence: 0.95,
@@ -519,67 +529,69 @@ export class AIMedicalService {
 
   // ==================== DOCTOR AVAILABILITY ====================
 
-  private async findAvailableDoctors(
-    specialtyId: string,
-    targetDate: Date,
-    limit = 3
-  ): Promise<AppointmentSuggestion['suggestedDoctors']> {
-    try {
-      const doctors = await Doctor.find({ specialty_id: specialtyId, isActive: true })
-        .populate('user_id', 'name')
-        .lean();
+private async findAvailableDoctors(
+  specialtyId: string,
+  targetDate: Date,
+  limit = 3
+): Promise<AppointmentSuggestion['suggestedDoctors']> {
+  try {
+    const doctors = await Doctor.find({ specialty_id: specialtyId, isAvailable: true })
+      .populate('user_id', 'name');
 
-      if (!doctors.length) return [];
+    if (!doctors.length) return [];
 
-      const docIds = doctors.map(d => d._id);
-      const appointments = await Appointment.find({
-        doctor_id: { $in: docIds },
-        appointment_date: targetDate,
-        status: { $in: ['pending', 'confirmed', 'completed'] },
-      }).select('doctor_id time_slot');
+    const docIds = doctors.map(d => d._id);
+    const appointments = await Appointment.find({
+      doctor_id: { $in: docIds },
+      appointment_date: targetDate,
+      status: { $in: ['pending', 'confirmed', 'completed'] },
+    }).select('doctor_id time_slot');
 
-      const reviews = await Review.find({ doctor_id: { $in: docIds } });
-      const ratingMap = new Map<string, number>();
-      docIds.forEach(id => {
-        const r = reviews.filter(rev => rev.doctor_id.toString() === id.toString());
-        const avg = r.length ? r.reduce((sum, rev) => sum + rev.rating, 0) / r.length : 0;
-        ratingMap.set(id.toString(), avg);
-      });
+    const reviews = await Review.find({ doctor_id: { $in: docIds } });
+    const ratingMap = new Map<string, number>();
+    docIds.forEach(id => {
+      const r = reviews.filter(rev => rev.doctor_id.toString() === id);
+      const avg = r.length ? r.reduce((sum, rev) => sum + rev.rating, 0) / r.length : 0;
+      ratingMap.set(id, avg);
+    });
 
-      const dayOfWeek = targetDate.toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
-      const result: any[] = [];
+    const dayOfWeek = targetDate.toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
+    const result: any[] = [];
 
-      for (const doctor of doctors) {
-        if (result.length >= limit) break;
-        const docId = doctor._id.toString();
-        const bookedSlots = new Set(
-          appointments.filter(a => a.doctor_id.toString() === docId).map(a => a.time_slot)
-        );
+    for (const doctor of doctors) {
+      if (result.length >= limit) break;
+      const docId = (doctor._id as any).toString();
+      const bookedSlots = new Set(
+        appointments.filter(a => a.doctor_id.toString() === docId).map(a => a.time_slot)
+      );
 
-        let slotsForDay: string[] = [];
-        const daySchedule = (doctor.available_hours as any)?.[dayOfWeek];
-        if (daySchedule && daySchedule.isAvailable !== false && daySchedule.start && daySchedule.end) {
-          slotsForDay = ALL_TIME_SLOTS.filter(s => s >= daySchedule.start && s <= daySchedule.end);
-        }
-
-        const availableSlots = slotsForDay.filter(s => !bookedSlots.has(s));
-        if (availableSlots.length > 0) {
-          result.push({
-            id: docId,
-            name: (doctor as any).user_id?.name || 'Doctor',
-            availableSlots: availableSlots.slice(0, 3),
-            consultationFee: doctor.consultation_fee,
-            experience: doctor.years_of_experience,
-            rating: ratingMap.get(docId) ?? 0,
-          });
-        }
+      let slotsForDay: string[] = [];
+      const daySchedule = (doctor.available_hours as any)?.[dayOfWeek];
+      if (daySchedule && daySchedule.isAvailable !== false && daySchedule.start && daySchedule.end) {
+        slotsForDay = ALL_TIME_SLOTS.filter(s => s >= daySchedule.start && s <= daySchedule.end);
       }
-      return result.sort((a, b) => b.rating - a.rating);
-    } catch (error) {
-      console.error('Error finding available doctors:', error);
-      return [];
+
+      const availableSlots = slotsForDay.filter(s => !bookedSlots.has(s));
+      if (availableSlots.length > 0) {
+        const doctorName = (doctor as any).user_id?.name;
+        if (!doctorName) continue;
+
+        result.push({
+          id: docId,
+          name: doctorName,
+          availableSlots: availableSlots.slice(0, 3),
+          consultationFee: doctor.consultation_fee,
+          experience: doctor.years_of_experience,
+          rating: ratingMap.get(docId) ?? 0,
+        });
+      }
     }
+    return result.sort((a, b) => b.rating - a.rating);
+  } catch (error) {
+    console.error('Error finding available doctors:', error);
+    return [];
   }
+}
 
   public async findAvailableDoctorsForDate(specialtyId: string, targetDate: Date, limit = 3) {
     return this.findAvailableDoctors(specialtyId, targetDate, limit);
@@ -839,7 +851,7 @@ PART 2 — Natural reply in ENGLISH.`;
       })),
       awaitingBookingConfirmation: decision.userIntent === 'symptom_report' && decision.shouldBook,
       bookingQuestion: decision.userIntent === 'symptom_report' && decision.shouldBook
-        ? (language === 'en' ? 'Would you like to book an appointment with a specialist?' : 'Bạn có muốn đặt lịch hẹn với bác sĩ chuyên khoa không?')
+        ? (language === 'en' ? 'Would you like to book an appointment with a specialist?' : 'You want to book an appointment with a specialist?')
         : undefined
     };
   }

@@ -92,15 +92,12 @@ specialtySchema.index({ category: 1, isActive: 1 });
 specialtySchema.index({ keywords: 1 });
 specialtySchema.index({ createdAt: -1 });
 
-// ✅ Pre-save: tự động sinh keywords từ name + description nếu chưa có
 specialtySchema.pre('save', function (next) {
-  // Chuẩn hóa tên
   if (this.isModified('name')) {
     this.name =
       this.name.charAt(0).toUpperCase() + this.name.slice(1);
   }
 
-  // Tự động sinh keywords nếu chưa có hoặc rỗng
   if (
     this.isModified('name') ||
     this.isModified('description') ||

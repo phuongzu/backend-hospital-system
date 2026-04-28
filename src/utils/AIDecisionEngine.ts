@@ -6,8 +6,7 @@ import Review from '../models/review';
 import { PatientProfile, UrgencyLevel } from './aiMedicalService';
 import { Types } from 'mongoose';
 
-// ==================== TYPES ====================
-
+// AI clinical decision result with triage score and appointment recommendation
 export interface AIDecision {
   urgencyLevel: UrgencyLevel;
   triageScore: number;
@@ -29,6 +28,7 @@ export interface AIDecision {
 }
 
 
+// Real-time hospital database context: specialties, doctors, appointments, patient profile
 export interface DBContext {
   availableSpecialties: SpecialtyContext[];
   availableDoctors: DoctorContext[];
@@ -36,6 +36,7 @@ export interface DBContext {
   patientProfile?: PatientProfile | null;
 }
 
+// Medical specialty with doctor count and details
 interface SpecialtyContext {
   id: string;
   name: string;
@@ -43,6 +44,7 @@ interface SpecialtyContext {
   doctorCount: number;
 }
 
+// Doctor profile with availability, ratings, and consultation info
 interface DoctorContext {
   id: string;
   name: string;
@@ -55,6 +57,7 @@ interface DoctorContext {
   consultationFee: number;
 }
 
+// Patient appointment record with doctor and specialty details
 interface ExistingAppointment {
   id: string;
   date: string;
@@ -64,11 +67,13 @@ interface ExistingAppointment {
   status: string;
 }
 
+// Generate time slots for a specific date based on doctor's schedule
 export const generateTimeSlotsFromSchedule = (
   availableHours: IDoctor['available_hours'],
   date: Date,
   intervalMinutes = 30
 ): string[] => {
+  // Get weekday name and doctor's schedule for that day
   const days = [
     'sunday', 'monday', 'tuesday', 'wednesday',
     'thursday', 'friday', 'saturday',
@@ -79,6 +84,7 @@ export const generateTimeSlotsFromSchedule = (
 
   if (!schedule || !schedule.isAvailable) return [];
 
+  // Calculate available slots based on working hours and interval
   const [startH, startM] = schedule.start.split(':').map(Number);
   const [endH, endM] = schedule.end.split(':').map(Number);
 
@@ -96,14 +102,12 @@ export const generateTimeSlotsFromSchedule = (
   return slots;
 };
 
-// ==================== FETCH DB CONTEXT ====================
-
+// Fetch hospital data: specialties, doctors with availability, patient appointments
 export async function fetchDBContext(
   userId?: string,
   symptomText?: string
 ): Promise<DBContext> {
-
-  // 1. Fetch all active specialties
+  // Get all active specialties
   const specialties = await Specialty.find({ isActive: true })
     .select('_id name description doctorCount')
     .lean();
@@ -115,18 +119,16 @@ export async function fetchDBContext(
     doctorCount: s.doctorCount || 0,
   }));
 
-  // 2. Fetch doctors (up to 30 for performance)
+  // Get available doctors (max 30) with user and specialty info
   const doctors = await Doctor.find({ isAvailable: true })
     .populate('user_id', 'name')
     .populate('specialty_id', 'name _id')
-    .select('_id user_id specialty_id years_of_experience consultation_fee available_hours')
     .limit(30)
-    .lean();
 
   const doctorIds = doctors.map(d => d._id);
   const availableDoctors: DoctorContext[] = [];
 
-  // 3. Scan next 7 days to find availability for each doctor
+  // Find first available slot for each doctor in next 7 days
   const today = new Date();
   for (const doctor of doctors) {
     let foundDay: Date | null = null;
@@ -143,7 +145,7 @@ export async function fetchDBContext(
       );
 
       if (slots.length > 0) {
-        // Check if these slots are already booked
+        // Filter out already booked time slots
         const booked = await Appointment.find({
           doctor_id: doctor._id,
           appointment_date: {
@@ -165,32 +167,42 @@ export async function fetchDBContext(
     }
 
     if (foundDay) {
-      const docId = (doctor._id as Types.ObjectId).toString();
-      const specialtyId = (doctor.specialty_id as any)?._id?.toString() ?? '';
-      const specialtyName = (doctor.specialty_id as any)?.name ?? '';
+  const docId = (doctor._id as Types.ObjectId).toString();
+  const specialtyId = (doctor.specialty_id as any)?._id?.toString() ?? '';
+  const specialtyName = (doctor.specialty_id as any)?.name ?? '';
 
-      // Get rating for this doctor
-      const ratingData = await Review.aggregate([
-        { $match: { doctor_id: doctor._id } },
-        { $group: { _id: '$doctor_id', avg: { $avg: '$rating' } } },
-      ]);
-      const rating = ratingData[0]?.avg || 0;
+  // Get doctor's average rating from reviews
+  const ratingData = await Review.aggregate([
+    { $match: { doctor_id: doctor._id } },
+    { $group: { _id: null, avg: { $avg: '$rating' } } }
+  ]);
+  const rating = ratingData[0]?.avg || 0;
 
-      availableDoctors.push({
-        id: docId,
-        name: (doctor.user_id as any)?.name ?? 'Doctor',
-        specialtyId,
-        specialtyName,
-        availableSlots,
-        nextAvailableDate: foundDay.toISOString().split('T')[0],
-        rating,
-        experience: doctor.years_of_experience ?? 0,
-        consultationFee: doctor.consultation_fee ?? 0,
-      });
-    }
+  // Extract doctor name from populated relationship
+  const populatedUser = (doctor as any).user_id;
+  const doctorName =
+    (typeof populatedUser === 'object' && populatedUser !== null)
+      ? populatedUser.name
+      : null;
+
+  // Skip if no valid doctor name
+  if (!doctorName) continue;
+
+  availableDoctors.push({
+    id: docId,
+    name: doctorName,
+    specialtyId,
+    specialtyName,
+    availableSlots,
+    nextAvailableDate: foundDay.toISOString().split('T')[0],
+    rating,
+    experience: doctor.years_of_experience ?? 0,
+    consultationFee: doctor.consultation_fee ?? 0,
+  });
+}
   }
 
-  // 4. Fetch patient's upcoming appointments
+  // Get patient's upcoming appointments
   let patientExistingAppointments: ExistingAppointment[] = [];
 
   if (userId) {
@@ -223,13 +235,13 @@ export async function fetchDBContext(
   };
 }
 
-// ==================== BUILD DECISION PROMPT ====================
-
+// Build AI prompt with patient conversation, medical profile, and hospital data
 function buildDecisionPrompt(
   conversationText: string,
   dbContext: DBContext,
   patientProfile: PatientProfile | null,
 ): string {
+  // Format specialties, doctors, and appointments for AI prompt
   const specialtiesList = dbContext.availableSpecialties
     .map(s => `- ID: ${s.id} | Name: ${s.name} | Doctors: ${s.doctorCount}`)
     .join('\n');
@@ -249,6 +261,7 @@ function buildDecisionPrompt(
       .join('\n')
     : 'None';
 
+  // Add patient medical profile if available
   const profileBlock = patientProfile
     ? `
 PATIENT PROFILE:
@@ -316,8 +329,7 @@ IMPORTANT RULES:
 - Return ONLY the JSON object, no other text`;
 }
 
-// Call Models AI
-
+// Call Groq AI model to generate clinical decision with triage and booking recommendation
 export async function getAIDecision(
   groq: Groq,
   conversationText: string,
@@ -328,6 +340,7 @@ export async function getAIDecision(
   const prompt = buildDecisionPrompt(conversationText, dbContext, patientProfile);
 
   try {
+    // Call Groq API to get AI clinical decision
     const completion = await groq.chat.completions.create({
       model: groqModel,
       messages: [
@@ -342,12 +355,13 @@ export async function getAIDecision(
       response_format: { type: 'json_object' },
     });
 
+    // Parse and sanitize AI response
     const raw = completion.choices[0]?.message?.content ?? '{}';
     const parsed = JSON.parse(raw) as AIDecision;
-
     return sanitizeAIDecision(parsed, dbContext);
 
   } catch (error) {
+    // Return safe fallback on error
     console.error('❌ AI Decision failed, using safe fallback:', error);
     return {
       urgencyLevel: 'medium',
@@ -363,15 +377,13 @@ export async function getAIDecision(
   }
 }
 
-
-// Protect 
-
+// Validate AI decision: verify specialty, doctor, and time slot exist in database
 function sanitizeAIDecision(
   decision: Partial<AIDecision>,
   dbContext: DBContext
 ): AIDecision {
+  // Validate urgency and intent against allowed values
   const validUrgencies: UrgencyLevel[] = ['low', 'medium', 'high', 'critical'];
-
   const urgencyLevel = validUrgencies.includes(decision.urgencyLevel as UrgencyLevel)
     ? decision.urgencyLevel as UrgencyLevel
     : 'medium';
@@ -381,24 +393,20 @@ function sanitizeAIDecision(
     'decline_booking', 'appointment_inquiry', 'general_health_info',
     'medication_inquiry', 'emergency_report'
   ];
-
   const userIntent = validIntents.includes(decision.userIntent ?? '')
     ? decision.userIntent
     : 'symptom_report';
 
-  // Verify doctor exists in real DB context
+  // Verify doctor, time slot, and specialty exist in real database
   const doctor = dbContext.availableDoctors.find(
     d => d.id === decision.recommendedDoctorId
   ) ?? null;
-
-  // Verify slot exists in doctor's real available slots
   const slotValid = doctor?.availableSlots.includes(decision.recommendedTimeSlot ?? '') ?? false;
-
-  // Verify specialty exists in real DB context
   const specialty = dbContext.availableSpecialties.find(
     s => s.id === decision.recommendedSpecialtyId
   ) ?? null;
 
+  // Return verified decision with real database data
   return {
     urgencyLevel,
     triageScore: Math.min(100, Math.max(0, decision.triageScore ?? 50)),

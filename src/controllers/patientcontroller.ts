@@ -1,6 +1,5 @@
 import { Request, Response } from 'express';
 import mongoose, { Types } from 'mongoose';
-import Mongoose from 'mongoose';
 import Doctor from '../models/doctor';
 import Appointment from '../models/appointment';
 import User from '../models/user';
@@ -15,6 +14,7 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 
+// Configure multer storage for avatar uploads
 const uploadDir = path.join(__dirname, '..', 'uploads', 'avatars');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
@@ -34,7 +34,7 @@ const storage = multer.diskStorage({
   }
 });
 
-
+// Configure multer upload with file size and type validation
 const upload = multer({
   storage,
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
@@ -52,6 +52,7 @@ const upload = multer({
 });
 
 
+// Handle and log errors with consistent format
 const handleError = (res: Response, error: Error, message = 'Internal server error') => {
   console.error(`${message}:`, error);
   res.status(500).json({
@@ -94,7 +95,7 @@ const generateTimeSlotsFromSchedule = (
   return slots;
 };
 
-// Get alternative time slots
+// Get alternative time slots if primary slot is booked
 const getAlternativeTimeSlots = async (doctorId: string, date: Date): Promise<string[]> => {
   try {
     const startOfDay = new Date(date);
@@ -125,7 +126,7 @@ const getAlternativeTimeSlots = async (doctorId: string, date: Date): Promise<st
 };
 
 
-// Calculate end time based on start time and duration
+// Calculate appointment end time
 const calculateEndTime = (startTime: string, durationMinutes: number): string => {
   const [hours, minutes] = startTime.split(':').map(Number);
   const startDate = new Date();
@@ -139,7 +140,7 @@ const calculateEndTime = (startTime: string, durationMinutes: number): string =>
   return `${endHours}:${endMinutes}`;
 };
 
-// Determine urgency based on symptoms and reason
+// Determine urgency level from symptoms
 const determineUrgency = (symptoms: string[], reason: string): string => {
   const urgentKeywords = ['emergency', 'severe', 'pain', 'bleeding', 'fever', 'chest pain', 'shortness of breath'];
   const reasonLower = reason.toLowerCase();
@@ -158,7 +159,7 @@ const determineUrgency = (symptoms: string[], reason: string): string => {
   return 'low';
 };
 
-// Determine priority for medical record
+// Determine priority level for medical record
 const determinePriority = (symptoms: string[], reason: string): string => {
   const urgency = determineUrgency(symptoms, reason);
 
@@ -172,7 +173,7 @@ const determinePriority = (symptoms: string[], reason: string): string => {
   }
 };
 
-// Get preparation instructions based on specialty
+// Get preparation instructions by specialty
 const getPreparationInstructions = (specialtyId?: string): string => {
   const instructions: Record<string, string> = {
     'cardiology': 'Please bring any previous ECG or echocardiogram reports. Avoid caffeine 24 hours before appointment.',
@@ -189,7 +190,7 @@ const getPreparationInstructions = (specialtyId?: string): string => {
 
 // ========== CONTROLLER FUNCTIONS ==========
 
-// Fixed Emergency Contact Update
+// Update patient emergency contact info
 export const updateEmergencyContact = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -259,6 +260,7 @@ export const updateEmergencyContact = async (req: AuthRequest, res: Response): P
   }
 };
 
+// Create new emergency contact
 export const postEmergencyContact = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -309,7 +311,7 @@ export const postEmergencyContact = async (req: AuthRequest, res: Response): Pro
   }
 };
 
-// Fixed Medications Update
+// Update patient medication list
 export const updateMedications = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -366,7 +368,7 @@ export const updateMedications = async (req: AuthRequest, res: Response): Promis
   }
 };
 
-// Fixed Add Medication
+// Add new medication to patient profile
 export const addMedication = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -431,7 +433,7 @@ export const addMedication = async (req: AuthRequest, res: Response): Promise<vo
   }
 };
 
-// Fixed Remove Medication
+// Remove medication from patient profile
 export const removeMedication = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -487,7 +489,7 @@ export const removeMedication = async (req: AuthRequest, res: Response): Promise
   }
 };
 
-// Fixed Get Patient Info
+// Get patient profile information
 export const getPatientInfo = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -532,7 +534,7 @@ export const getPatientInfo = async (req: AuthRequest, res: Response): Promise<v
   }
 };
 
-// Fixed Update Patient Info
+// Update patient profile
 export const updatePatientInfo = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -609,7 +611,7 @@ export const updatePatientInfo = async (req: AuthRequest, res: Response): Promis
   }
 };
 
-// Fixed Edit Patient Info
+// Edit patient medical information
 export const editInfoPatient = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -684,7 +686,7 @@ export const editInfoPatient = async (req: AuthRequest, res: Response): Promise<
   }
 };
 
-// Utility function for BMI calculation
+// Calculate BMI from height and weight
 export const calculateBMI = (height: number, weight: number): number => {
   if (height > 0 && weight > 0) {
     const heightInMeters = height / 100;
@@ -693,6 +695,7 @@ export const calculateBMI = (height: number, weight: number): number => {
   return 0;
 };
 
+// Get real-time appointment availability for doctor
 export const getAppointmentAvailability = async (req: Request, res: Response) => {
   try {
     const { doctor_id, date } = req.query;
@@ -779,6 +782,7 @@ export const getAppointmentAvailability = async (req: Request, res: Response) =>
 };
 
 
+// Book appointment with doctor
 export const bookAppointment = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const {
@@ -1094,7 +1098,7 @@ export const bookAppointment = async (req: AuthRequest, res: Response): Promise<
     });
   }
 };
-// Fixed Edit Reviews
+// Update doctor review/rating
 export const updateReview = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const reviewId = req.params.review_id;
@@ -1157,6 +1161,7 @@ export const updateReview = async (req: AuthRequest, res: Response): Promise<voi
   }
 };
 
+// Get list of all doctors
 export const getAllDoctors = async (req: Request, res: Response) => {
   try {
     const doctors = await Doctor.find()
@@ -1170,6 +1175,7 @@ export const getAllDoctors = async (req: Request, res: Response) => {
   }
 };
 
+// Get all medical records for patient
 export const getAllMedicalRecordsForPatient = async (req: Request, res: Response) => {
   try {
     const userId = req.params.user_id;
@@ -1191,6 +1197,7 @@ export const getAllMedicalRecordsForPatient = async (req: Request, res: Response
   }
 };
 
+// Get all appointments for patient
 export const getAllAppointmentsForPatient = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -1212,6 +1219,7 @@ export const getAllAppointmentsForPatient = async (req: AuthRequest, res: Respon
   }
 };
 
+// Edit appointment details
 export const editAppointment = async (req: Request, res: Response) => {
   try {
     const appointmentId = req.params.appointment_id;
@@ -1249,6 +1257,7 @@ export const editAppointment = async (req: Request, res: Response) => {
   }
 };
 
+// Cancel appointment
 export const cancelAppointment = async (req: Request, res: Response) => {
   try {
     const appointmentId = req.params.appointment_id;
@@ -1277,6 +1286,7 @@ export const cancelAppointment = async (req: Request, res: Response) => {
   }
 };
 
+// Get patient's medical records
 export const getMyMedicalRecords = async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user?.id;
@@ -1311,6 +1321,7 @@ export const getMyMedicalRecords = async (req: AuthRequest, res: Response) => {
   }
 };
 
+// Get current user information
 export const getUser = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -1364,6 +1375,7 @@ export const getUser = async (req: AuthRequest, res: Response): Promise<void> =>
   }
 };
 
+// Update user profile information
 export const updateUser = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -1440,6 +1452,7 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
   }
 };
 
+// Create doctor review/rating
 export const postDoctorReview = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const doctor_id = req.params.doctor_id;
@@ -1553,6 +1566,7 @@ export const postDoctorReview = async (req: AuthRequest, res: Response): Promise
   }
 };
 
+// Get reviews for doctor
 export const getDoctorReviews = async (req: Request, res: Response): Promise<void> => {
   try {
     const doctor_id = req.params.doctor_id;
@@ -1573,6 +1587,7 @@ export const getDoctorReviews = async (req: Request, res: Response): Promise<voi
   }
 };
 
+// Get user's reviews
 export const getUserReviews = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -1607,6 +1622,7 @@ export const getUserReviews = async (req: AuthRequest, res: Response): Promise<v
   }
 };
 
+// Delete review
 export const deleteReview = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const reviewId = req.params.review_id;
@@ -1633,6 +1649,7 @@ export const deleteReview = async (req: AuthRequest, res: Response): Promise<voi
   }
 };
 
+// Upload user avatar
 export const uploadAvatar = [
   upload.single('avatar'),
 
@@ -1719,6 +1736,7 @@ export const uploadAvatar = [
   }
 ];
 
+// Delete uploaded avatar file
 const deleteAvatarFile = (filename: string): void => {
   try {
     if (!filename) return;
@@ -1734,7 +1752,7 @@ const deleteAvatarFile = (filename: string): void => {
 };
 
 
-// Thêm vào file controller của bạn
+// Delete user avatar
 export const deleteAvatar = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -1790,6 +1808,7 @@ export const deleteAvatar = async (req: AuthRequest, res: Response): Promise<voi
   }
 };
 
+// Extract base URL from request
 const getBaseUrlFromRequest = (req: Request): string => {
   if (process.env.SERVER_URL) {
     return process.env.SERVER_URL;
@@ -1807,6 +1826,7 @@ const getBaseUrlFromRequest = (req: Request): string => {
 };
 
 
+// Get user avatar image
 export const getAvatar = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -1861,7 +1881,7 @@ export const getAvatar = async (req: AuthRequest, res: Response): Promise<void> 
 };
 
 
-// Debug endpoint cho avatar
+// Debug endpoint for avatar troubleshooting
 export const debugAvatar = async (req: Request, res: Response): Promise<void> => {
   try {
     const avatarsDir = uploadDir;
@@ -1917,6 +1937,7 @@ export const debugAvatar = async (req: Request, res: Response): Promise<void> =>
   }
 };
 
+// Get next available appointment dates for doctor
 const getNextAvailableDates = async (doctorId: string, days: number = 7): Promise<any[]> => {
   const availableDates = [];
   const today = new Date();
@@ -1939,6 +1960,7 @@ const getNextAvailableDates = async (doctorId: string, days: number = 7): Promis
   return availableDates;
 };
 
+// Check real-time doctor availability
 export const checkRealTimeAvailability = async (req: Request, res: Response): Promise<void> => {
   try {
     const { doctor_id, date, time_slot } = req.query;
@@ -1988,6 +2010,7 @@ export const checkRealTimeAvailability = async (req: Request, res: Response): Pr
   }
 };
 
+// Check in for appointment
 export const checkInAppointment = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { appointment_id } = req.params;
